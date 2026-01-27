@@ -1,0 +1,363 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Ollama Copilot Setup</title>
+  <style>
+    body {
+      font-family: var(--vscode-font-family);
+      color: var(--vscode-foreground);
+      background-color: var(--vscode-editor-background);
+      padding: 20px;
+      max-width: 800px;
+      margin: 0 auto;
+    }
+
+    h1 {
+      color: var(--vscode-foreground);
+      border-bottom: 1px solid var(--vscode-panel-border);
+      padding-bottom: 10px;
+    }
+
+    .step {
+      margin: 30px 0;
+      padding: 20px;
+      background: var(--vscode-editor-inactiveSelectionBackground);
+      border-radius: 5px;
+    }
+
+    .step h2 {
+      margin-top: 0;
+      color: var(--vscode-textLink-foreground);
+    }
+
+    .step-number {
+      display: inline-block;
+      width: 30px;
+      height: 30px;
+      border-radius: 50%;
+      background: var(--vscode-button-background);
+      color: var(--vscode-button-foreground);
+      text-align: center;
+      line-height: 30px;
+      margin-right: 10px;
+      font-weight: bold;
+    }
+
+    input, select {
+      width: 100%;
+      padding: 8px;
+      margin: 10px 0;
+      background: var(--vscode-input-background);
+      color: var(--vscode-input-foreground);
+      border: 1px solid var(--vscode-input-border);
+      border-radius: 3px;
+      font-family: var(--vscode-font-family);
+      box-sizing: border-box;
+    }
+
+    button {
+      padding: 10px 20px;
+      background: var(--vscode-button-background);
+      color: var(--vscode-button-foreground);
+      border: none;
+      border-radius: 3px;
+      cursor: pointer;
+      font-family: var(--vscode-font-family);
+      margin-right: 10px;
+      margin-top: 10px;
+    }
+
+    button:hover {
+      background: var(--vscode-button-hoverBackground);
+    }
+
+    button.secondary {
+      background: var(--vscode-button-secondaryBackground);
+      color: var(--vscode-button-secondaryForeground);
+    }
+
+    button.secondary:hover {
+      background: var(--vscode-button-secondaryHoverBackground);
+    }
+
+    .status {
+      padding: 10px;
+      margin: 10px 0;
+      border-radius: 3px;
+      display: none;
+    }
+
+    .status.success {
+      background: var(--vscode-testing-iconPassed);
+      color: var(--vscode-editor-background);
+      display: block;
+    }
+
+    .status.error {
+      background: var(--vscode-testing-iconFailed);
+      color: var(--vscode-editor-background);
+      display: block;
+    }
+
+    .model-list {
+      max-height: 200px;
+      overflow-y: auto;
+      border: 1px solid var(--vscode-input-border);
+      border-radius: 3px;
+      padding: 10px;
+      margin: 10px 0;
+    }
+
+    .model-item {
+      padding: 8px;
+      margin: 5px 0;
+      background: var(--vscode-editor-background);
+      border-radius: 3px;
+      cursor: pointer;
+    }
+
+    .model-item:hover {
+      background: var(--vscode-list-hoverBackground);
+    }
+
+    .model-item.selected {
+      background: var(--vscode-list-activeSelectionBackground);
+      color: var(--vscode-list-activeSelectionForeground);
+    }
+
+    .info-box {
+      padding: 15px;
+      background: var(--vscode-textBlockQuote-background);
+      border-left: 4px solid var(--vscode-textLink-foreground);
+      margin: 15px 0;
+    }
+
+    code {
+      background: var(--vscode-textCodeBlock-background);
+      padding: 2px 6px;
+      border-radius: 3px;
+      font-family: var(--vscode-editor-font-family);
+    }
+
+    .hidden {
+      display: none;
+    }
+  </style>
+</head>
+<body>
+  <h1>🤖 Ollama Copilot Setup Wizard</h1>
+
+  <div class="step">
+    <h2><span class="step-number">1</span> Connection</h2>
+    <p>Configure your Ollama server connection:</p>
+    
+    <label for="baseUrl">Base URL:</label>
+    <input type="text" id="baseUrl" placeholder="http://localhost:11434" value="http://localhost:11434">
+
+    <label for="bearerToken">Bearer Token (optional for OpenWebUI):</label>
+    <input type="password" id="bearerToken" placeholder="sk-xxxxx">
+
+    <button onclick="testConnection()">Test Connection</button>
+    <div id="connectionStatus" class="status"></div>
+  </div>
+
+  <div class="step">
+    <h2><span class="step-number">2</span> Models</h2>
+    <p>Select models for each mode:</p>
+
+    <button onclick="fetchModels()">Fetch Available Models</button>
+    <div id="modelStatus" class="status"></div>
+
+    <div id="modelSelection" class="hidden">
+      <h3>Available Models:</h3>
+      <div id="modelList" class="model-list"></div>
+
+      <h3>Assign Models:</h3>
+      <label>Inline Completions:</label>
+      <select id="completionModel"></select>
+
+      <label>Ask Mode (Chat):</label>
+      <select id="askModel"></select>
+
+      <label>Edit Mode:</label>
+      <select id="editModel"></select>
+
+      <label>Plan Mode:</label>
+      <select id="planModel"></select>
+
+      <label>Agent Mode:</label>
+      <select id="agentModel"></select>
+    </div>
+  </div>
+
+  <div class="step">
+    <h2><span class="step-number">3</span> Preferences</h2>
+    <p>Configure behavior:</p>
+
+    <label>
+      <input type="checkbox" id="autoComplete" checked>
+      Enable automatic inline completions
+    </label><br>
+
+    <label>
+      <input type="checkbox" id="streamResponse" checked>
+      Stream responses in chat
+    </label><br>
+
+    <label for="temperature">Temperature (0-1):</label>
+    <input type="number" id="temperature" min="0" max="1" step="0.1" value="0.7">
+  </div>
+
+  <div class="step">
+    <h2><span class="step-number">4</span> Finish</h2>
+    <div class="info-box">
+      <strong>You're all set!</strong> Click "Save Configuration" to apply your settings.
+    </div>
+
+    <button onclick="saveConfig()">Save Configuration</button>
+    <button class="secondary" onclick="closeWizard()">Close</button>
+    <div id="saveStatus" class="status"></div>
+  </div>
+
+  <script>
+    const vscode = acquireVsCodeApi();
+    let availableModels = [];
+
+    // Test connection
+    async function testConnection() {
+      const baseUrl = document.getElementById('baseUrl').value;
+      const bearerToken = document.getElementById('bearerToken').value;
+
+      showStatus('connectionStatus', 'Testing connection...', 'info');
+
+      vscode.postMessage({
+        command: 'testConnection',
+        baseUrl,
+        bearerToken
+      });
+    }
+
+    // Fetch models
+    async function fetchModels() {
+      showStatus('modelStatus', 'Fetching models...', 'info');
+
+      vscode.postMessage({
+        command: 'fetchModels'
+      });
+    }
+
+    // Save configuration
+    function saveConfig() {
+      const config = {
+        baseUrl: document.getElementById('baseUrl').value,
+        bearerToken: document.getElementById('bearerToken').value,
+        completionModel: document.getElementById('completionModel').value,
+        askModel: document.getElementById('askModel').value,
+        editModel: document.getElementById('editModel').value,
+        planModel: document.getElementById('planModel').value,
+        agentModel: document.getElementById('agentModel').value,
+        autoComplete: document.getElementById('autoComplete').checked,
+        streamResponse: document.getElementById('streamResponse').checked,
+        temperature: parseFloat(document.getElementById('temperature').value)
+      };
+
+      vscode.postMessage({
+        command: 'saveConfig',
+        config
+      });
+
+      showStatus('saveStatus', 'Configuration saved!', 'success');
+    }
+
+    // Close wizard
+    function closeWizard() {
+      vscode.postMessage({ command: 'close' });
+    }
+
+    // Show status message
+    function showStatus(elementId, message, type) {
+      const element = document.getElementById(elementId);
+      element.textContent = message;
+      element.className = `status ${type}`;
+    }
+
+    // Populate model dropdowns
+    function populateModelDropdowns(models) {
+      const selects = [
+        'completionModel',
+        'askModel',
+        'editModel',
+        'planModel',
+        'agentModel'
+      ];
+
+      selects.forEach(id => {
+        const select = document.getElementById(id);
+        select.innerHTML = '<option value="">-- Select Model --</option>';
+        
+        models.forEach(model => {
+          const option = document.createElement('option');
+          option.value = model.name;
+          option.textContent = model.name;
+          select.appendChild(option);
+        });
+      });
+    }
+
+    // Display model list
+    function displayModelList(models) {
+      const listElement = document.getElementById('modelList');
+      listElement.innerHTML = '';
+
+      models.forEach(model => {
+        const item = document.createElement('div');
+        item.className = 'model-item';
+        item.textContent = `${model.name} (${model.size})`;
+        listElement.appendChild(item);
+      });
+    }
+
+    // Handle messages from extension
+    window.addEventListener('message', event => {
+      const message = event.data;
+
+      switch (message.command) {
+        case 'connectionResult':
+          if (message.success) {
+            showStatus('connectionStatus', '✓ Connected successfully', 'success');
+          } else {
+            showStatus('connectionStatus', `✗ Connection failed: ${message.error}`, 'error');
+          }
+          break;
+
+        case 'modelsResult':
+          if (message.success) {
+            availableModels = message.models;
+            displayModelList(message.models);
+            populateModelDropdowns(message.models);
+            document.getElementById('modelSelection').classList.remove('hidden');
+            showStatus('modelStatus', `✓ Found ${message.models.length} models`, 'success');
+          } else {
+            showStatus('modelStatus', `✗ Failed to fetch models: ${message.error}`, 'error');
+          }
+          break;
+
+        case 'loadConfig':
+          // Load existing configuration
+          if (message.config) {
+            document.getElementById('baseUrl').value = message.config.baseUrl || 'http://localhost:11434';
+            document.getElementById('temperature').value = message.config.temperature || 0.7;
+            document.getElementById('autoComplete').checked = message.config.autoComplete !== false;
+            document.getElementById('streamResponse').checked = message.config.streamResponse !== false;
+          }
+          break;
+      }
+    });
+
+    // Request initial config
+    vscode.postMessage({ command: 'loadConfig' });
+  </script>
+</body>
+</html>

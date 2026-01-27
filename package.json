@@ -1,0 +1,271 @@
+{
+  "name": "ollama-copilot",
+  "displayName": "Ollama Copilot",
+  "description": "AI-powered code completion and assistance using local Ollama or OpenWebUI",
+  "version": "0.1.0",
+  "publisher": "ollama-copilot",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/your-username/ollama-copilot"
+  },
+  "engines": {
+    "vscode": "^1.85.0"
+  },
+  "categories": [
+    "AI",
+    "Programming Languages",
+    "Snippets",
+    "Chat"
+  ],
+  "activationEvents": [
+    "onStartupFinished"
+  ],
+  "main": "./dist/extension.js",
+  "contributes": {
+    "commands": [
+      {
+        "command": "ollamaCopilot.selectModel",
+        "title": "Select Model",
+        "category": "Ollama Copilot"
+      },
+      {
+        "command": "ollamaCopilot.setBearerToken",
+        "title": "Set Bearer Token (OpenWebUI)",
+        "category": "Ollama Copilot"
+      },
+      {
+        "command": "ollamaCopilot.editWithInstructions",
+        "title": "Edit with Instructions",
+        "category": "Ollama Copilot"
+      },
+      {
+        "command": "ollamaCopilot.startAgentTask",
+        "title": "Start Agent Task",
+        "category": "Ollama Copilot"
+      },
+      {
+        "command": "ollamaCopilot.viewSessions",
+        "title": "View Agent Sessions",
+        "category": "Ollama Copilot"
+      },
+      {
+        "command": "ollamaCopilot.cancelSession",
+        "title": "Cancel Session",
+        "category": "Ollama Copilot"
+      },
+      {
+        "command": "ollamaCopilot.steerSession",
+        "title": "Steer Active Session",
+        "category": "Ollama Copilot"
+      },
+      {
+        "command": "ollamaCopilot.executeStep",
+        "title": "Execute Plan Step",
+        "category": "Ollama Copilot"
+      },
+      {
+        "command": "ollamaCopilot.openSetup",
+        "title": "Open Setup Wizard",
+        "category": "Ollama Copilot"
+      },
+      {
+        "command": "ollamaCopilot.openSessionDetails",
+        "title": "Open Session Details",
+        "category": "Ollama Copilot"
+      },
+      {
+        "command": "ollamaCopilot.refreshSessions",
+        "title": "Refresh Sessions",
+        "category": "Ollama Copilot",
+        "icon": "$(refresh)"
+      },
+      {
+        "command": "ollamaCopilot.deleteSession",
+        "title": "Delete Session",
+        "category": "Ollama Copilot"
+      },
+      {
+        "command": "ollamaCopilot.clearCompletedSessions",
+        "title": "Clear Completed Sessions",
+        "category": "Ollama Copilot"
+      },
+      {
+        "command": "ollamaCopilot.showSetup",
+        "title": "Setup Wizard",
+        "category": "Ollama Copilot"
+      }
+    ],
+    "configuration": {
+      "title": "Ollama Copilot",
+      "properties": {
+        "ollamaCopilot.baseUrl": {
+          "type": "string",
+          "default": "http://localhost:11434",
+          "markdownDescription": "Base URL for Ollama or OpenWebUI API. For OpenWebUI, set bearer token using command: `Ollama Copilot: Set Bearer Token`"
+        },
+        "ollamaCopilot.bearerTokenConfigured": {
+          "type": "boolean",
+          "default": false,
+          "markdownDescription": "⚠️ **Read-only**: Indicates if a bearer token is configured. Use command `Ollama Copilot: Set Bearer Token` to configure OpenWebUI authentication.",
+          "readOnly": true,
+          "deprecationMessage": "This is a read-only status indicator. Use the 'Ollama Copilot: Set Bearer Token' command to manage your token."
+        },
+        "ollamaCopilot.completionMode.model": {
+          "type": "string",
+          "default": "",
+          "description": "Model to use for inline code completions"
+        },
+        "ollamaCopilot.completionMode.temperature": {
+          "type": "number",
+          "default": 0.1,
+          "minimum": 0,
+          "maximum": 1,
+          "description": "Temperature for completion mode (lower = more deterministic)"
+        },
+        "ollamaCopilot.completionMode.maxTokens": {
+          "type": "number",
+          "default": 500,
+          "minimum": 50,
+          "maximum": 4096,
+          "description": "Maximum tokens for completions"
+        },
+        "ollamaCopilot.askMode.model": {
+          "type": "string",
+          "default": "",
+          "description": "Model to use for Ask mode (chat)"
+        },
+        "ollamaCopilot.askMode.temperature": {
+          "type": "number",
+          "default": 0.7,
+          "minimum": 0,
+          "maximum": 1,
+          "description": "Temperature for Ask mode"
+        },
+        "ollamaCopilot.askMode.maxTokens": {
+          "type": "number",
+          "default": 2048,
+          "minimum": 256,
+          "maximum": 8192,
+          "description": "Maximum tokens for Ask mode"
+        },
+        "ollamaCopilot.editMode.model": {
+          "type": "string",
+          "default": "",
+          "description": "Model to use for Edit mode"
+        },
+        "ollamaCopilot.editMode.temperature": {
+          "type": "number",
+          "default": 0.3,
+          "minimum": 0,
+          "maximum": 1,
+          "description": "Temperature for Edit mode (lower for focused edits)"
+        },
+        "ollamaCopilot.editMode.maxTokens": {
+          "type": "number",
+          "default": 4096,
+          "minimum": 256,
+          "maximum": 8192,
+          "description": "Maximum tokens for Edit mode"
+        },
+        "ollamaCopilot.planMode.model": {
+          "type": "string",
+          "default": "",
+          "description": "Model to use for Plan mode"
+        },
+        "ollamaCopilot.planMode.temperature": {
+          "type": "number",
+          "default": 0.5,
+          "minimum": 0,
+          "maximum": 1,
+          "description": "Temperature for Plan mode"
+        },
+        "ollamaCopilot.planMode.maxTokens": {
+          "type": "number",
+          "default": 4096,
+          "minimum": 256,
+          "maximum": 8192,
+          "description": "Maximum tokens for Plan mode"
+        },
+        "ollamaCopilot.agentMode.model": {
+          "type": "string",
+          "default": "",
+          "description": "Model to use for Agent mode"
+        },
+        "ollamaCopilot.agentMode.temperature": {
+          "type": "number",
+          "default": 0.4,
+          "minimum": 0,
+          "maximum": 1,
+          "description": "Temperature for Agent mode"
+        },
+        "ollamaCopilot.agentMode.maxTokens": {
+          "type": "number",
+          "default": 8192,
+          "minimum": 512,
+          "maximum": 32768,
+          "description": "Maximum tokens for Agent mode"
+        },
+        "ollamaCopilot.agent.maxIterations": {
+          "type": "number",
+          "default": 25,
+          "minimum": 5,
+          "maximum": 100,
+          "description": "Maximum iterations for Agent mode execution"
+        },
+        "ollamaCopilot.agent.toolTimeout": {
+          "type": "number",
+          "default": 30000,
+          "minimum": 5000,
+          "maximum": 300000,
+          "description": "Timeout for tool execution in milliseconds"
+        },
+        "ollamaCopilot.contextWindow": {
+          "type": "number",
+          "default": 16000,
+          "minimum": 4000,
+          "maximum": 128000,
+          "description": "Context window size in characters (approximately tokens * 4)"
+        },
+        "ollamaCopilot.enableAutoComplete": {
+          "type": "boolean",
+          "default": true,
+          "description": "Enable inline autocomplete suggestions"
+        }
+      }
+    },
+    "views": {
+      "ollama-copilot-sidebar": [
+        {
+          "id": "ollamaCopilot.chatView",
+          "name": "Copilot",
+          "type": "webview"
+        }
+      ]
+    },
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "ollama-copilot-sidebar",
+          "title": "Ollama Copilot",
+          "icon": "$(robot)"
+        }
+      ]
+    }
+  },
+  "scripts": {
+    "vscode:prepublish": "npm run compile",
+    "compile": "webpack --mode production",
+    "watch": "webpack --mode development --watch",
+    "package": "vsce package",
+    "lint": "eslint src --ext ts"
+  },
+  "devDependencies": {
+    "@types/node": "^20.10.0",
+    "@types/vscode": "^1.85.0",
+    "@vscode/vsce": "^2.22.0",
+    "ts-loader": "^9.5.0",
+    "typescript": "^5.3.0",
+    "webpack": "^5.89.0",
+    "webpack-cli": "^5.1.0"
+  }
+}

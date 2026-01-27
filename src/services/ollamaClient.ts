@@ -1,0 +1,180 @@
+import {
+    ChatRequest,
+    GenerateRequest,
+    Model,
+    ModelsResponse,
+    OllamaAuthError,
+    OllamaConnectionError,
+    OllamaError,
+    StreamChunk
+} from '../types/ollama';
+import { parseNDJSON } from '../utils/streamParser';
+
+export class OllamaClient {
+  private baseUrl: string;
+  private bearerToken?: string;
+  private retryAttempts = 3;
+  private retryDelays = [1000, 2000, 4000]; // Exponential backoff
+
+  constructor(baseUrl: string, bearerToken?: string) {
+    this.baseUrl = baseUrl.replace(/\/$/, ''); // Remove trailing slash
+    this.bearerToken = bearerToken;
+  }
+
+  /**
+   * Update bearer token (useful when token changes)
+   */
+  public setBearerToken(token: string | undefined): void {
+    this.bearerToken = token;
+  }
+
+  /**
+   * Get headers with optional bearer token
+   */
+  private getHeaders(): Record<string, string> {
+    const headers: Record<string, string> = {
+      'Content-Type': 'application/json'
+    };
+
+    if (this.bearerToken) {
+      headers['Authorization'] = `Bearer ${this.bearerToken}`;
+    }
+
+    return headers;
+  }
+
+  /**
+   * Retry logic wrapper
+   */
+  private async fetchWithRetry(
+    url: string,
+    options: RequestInit,
+    attempt = 0
+  ): Promise<Response> {
+    try {
+      const response = await fetch(url, options);
+
+      if (response.status === 401) {
+        throw new OllamaAuthError('Invalid bearer token. Please check your OpenWebUI credentials.');
+      }
+
+      if (!response.ok && response.status >= 500) {
+        throw new OllamaError(`Server error: ${response.status} ${response.statusText}`, response.status);
+      }
+
+      return response;
+    } catch (error: any) {
+      if (error instanceof OllamaAuthError) {
+        throw error;
+      }
+
+      if (attempt < this.retryAttempts - 1) {
+        const delay = this.retryDelays[attempt];
+        console.log(`Retry attempt ${attempt + 1}/${this.retryAttempts} after ${delay}ms`);
+        await new Promise(resolve => setTimeout(resolve, delay));
+        return this.fetchWithRetry(url, options, attempt + 1);
+      }
+
+      if (error.name === 'TypeError' && error.message.includes('fetch')) {
+        throw new OllamaConnectionError(`Failed to connect to Ollama at ${this.baseUrl}. Is it running?`);
+      }
+
+      throw error;
+    }
+  }
+
+  /**
+   * Stream chat completions
+   */
+  async *chat(request: ChatRequest): AsyncGenerator<StreamChunk> {
+    const url = `${this.baseUrl}/api/chat`;
+    const body = { ...request, stream: true };
+
+    const response = await this.fetchWithRetry(url, {
+      method: 'POST',
+      headers: this.getHeaders(),
+      body: JSON.stringify(body)
+    });
+
+    if (!response.ok) {
+      throw new OllamaError(`Chat request failed: ${response.statusText}`, response.status);
+    }
+
+    if (!response.body) {
+      throw new OllamaError('No response body received');
+    }
+
+    const reader = response.body.getReader();
+    
+    for await (const chunk of parseNDJSON(reader)) {
+      yield chunk as StreamChunk;
+    }
+  }
+
+  /**
+   * Stream generate completions
+   */
+  async *generate(request: GenerateRequest): AsyncGenerator<StreamChunk> {
+    const url = `${this.baseUrl}/api/generate`;
+    const body = { ...request, stream: true };
+
+    const response = await this.fetchWithRetry(url, {
+      method: 'POST',
+      headers: this.getHeaders(),
+      body: JSON.stringify(body)
+    });
+
+    if (!response.ok) {
+      throw new OllamaError(`Generate request failed: ${response.statusText}`, response.status);
+    }
+
+    if (!response.body) {
+      throw new OllamaError('No response body received');
+    }
+
+    const reader = response.body.getReader();
+    
+    for await (const chunk of parseNDJSON(reader)) {
+      yield chunk as StreamChunk;
+    }
+  }
+
+  /**
+   * List available models
+   */
+  async listModels(): Promise<Model[]> {
+    const url = `${this.baseUrl}/api/tags`;
+
+    const response = await this.fetchWithRetry(url, {
+      method: 'GET',
+      headers: this.getHeaders()
+    });
+
+    if (!response.ok) {
+      throw new OllamaError(`Failed to list models: ${response.statusText}`, response.status);
+    }
+
+    const data = await response.json() as ModelsResponse;
+    return data.models || [];
+  }
+
+  /**
+   * Test connection to Ollama/OpenWebUI
+   */
+  async testConnection(): Promise<boolean> {
+    try {
+      await this.listModels();
+      return true;
+    } catch (error) {
+      console.error('Connection test failed:', error);
+      return false;
+    }
+  }
+
+  /**
+   * Dispose resources
+   */
+  dispose(): void {
+    // Cleanup if needed
+  }
+}
