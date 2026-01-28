@@ -5,7 +5,10 @@
 }
 
 :root {
-  --bg: var(--vscode-editor-background);
+  --panel-bg: var(--vscode-sideBar-background, var(--vscode-editor-background));
+  --surface-bg: var(--vscode-editorWidget-background, var(--vscode-input-background));
+  --surface-border: var(--vscode-editorWidget-border, var(--vscode-panel-border));
+  --bg: var(--panel-bg);
   --fg: var(--vscode-foreground);
   --border: var(--vscode-panel-border);
   --input-bg: var(--vscode-input-background);

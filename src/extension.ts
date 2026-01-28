@@ -1,6 +1,5 @@
 import * as vscode from 'vscode';
 import { SessionManager } from './agent/sessionManager';
-import { registerSessionViewer } from './agent/sessionViewer';
 import { TaskTracker } from './agent/taskTracker';
 import { getConfig, getModeConfig } from './config/settings';
 import { registerAgentMode } from './modes/agentMode';
@@ -130,8 +129,6 @@ export async function activate(context: vscode.ExtensionContext) {
     // Register Agent mode
     registerAgentMode(context, client, sessionManager, outputChannel);
 
-    // Register session viewer
-    registerSessionViewer(context, sessionManager);
 
     // Register setup wizard
     registerSetupWizard(context, client, tokenManager);

@@ -20,6 +20,7 @@ export type ProgressItem = {
   status: 'running' | 'done' | 'error';
   collapsed: boolean;
   actions: ActionItem[];
+  lastActionStatus?: ActionItem['status'];
 };
 
 export type TimelineItem = MessageItem | ProgressItem;

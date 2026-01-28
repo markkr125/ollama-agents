@@ -8,17 +8,17 @@
 
       <template v-for="item in timeline" :key="item.id">
         <div v-if="item.type === 'message'" class="message" :class="item.role === 'user' ? 'message-user' : 'message-assistant'">
-          <div v-if="item.role === 'assistant'" v-html="formatMarkdown(item.content)"></div>
-          <div v-else>{{ item.content }}</div>
+          <div v-if="item.role === 'assistant'" class="markdown-body" v-html="formatMarkdown(item.content)"></div>
+          <div v-else class="message-text">{{ item.content }}</div>
         </div>
 
         <div v-else class="progress-group" :class="{ collapsed: item.collapsed }">
           <div class="progress-header" @click="toggleProgress(item)">
             <span class="progress-chevron">▼</span>
-            <span class="progress-status" :class="{ done: item.status === 'done' }">
-              <span v-if="item.status === 'running'" class="spinner"></span>
-              <span v-else-if="item.status === 'done'">✓</span>
-              <span v-else-if="item.status === 'error'">✗</span>
+            <span class="progress-status" :class="progressStatusClass(item)">
+              <span v-if="progressStatus(item) === 'running'" class="spinner"></span>
+              <span v-else-if="progressStatus(item) === 'success'">✓</span>
+              <span v-else-if="progressStatus(item) === 'error'">✗</span>
               <span v-else>○</span>
             </span>
             <span class="progress-title">{{ item.title }}</span>
@@ -86,7 +86,7 @@
 
 <script setup lang="ts">
 import type { PropType } from 'vue';
-import { onMounted, ref } from 'vue';
+import { onBeforeUnmount, onMounted, ref } from 'vue';
 import type { ActionItem, ProgressItem, TimelineItem } from '../scripts/core/types';
 
 type ThinkingState = {
@@ -201,9 +201,91 @@ const props = defineProps({
 const localMessagesEl = ref<HTMLDivElement | null>(null);
 const localInputEl = ref<HTMLTextAreaElement | null>(null);
 
+const progressStatus = (item: ProgressItem) => {
+  if (item.status === 'running') return 'running';
+  const hasRunning = item.actions.some(action => action.status === 'running' || action.status === 'pending');
+  if (hasRunning) return 'running';
+  if (item.actions.some(action => action.status === 'error')) return 'error';
+  if (item.lastActionStatus) return item.lastActionStatus;
+  if (item.status === 'error') return 'error';
+  if (item.status === 'done') return 'success';
+  return 'running';
+};
+
+const progressStatusClass = (item: ProgressItem) => {
+  const status = progressStatus(item);
+  return {
+    done: status === 'success',
+    running: status === 'running',
+    error: status === 'error',
+    pending: status === 'pending'
+  };
+};
+
+const copyText = async (text: string) => {
+  if (navigator.clipboard?.writeText) {
+    await navigator.clipboard.writeText(text);
+    return;
+  }
+
+  const textarea = document.createElement('textarea');
+  textarea.value = text;
+  textarea.style.position = 'fixed';
+  textarea.style.opacity = '0';
+  document.body.appendChild(textarea);
+  textarea.focus();
+  textarea.select();
+  document.execCommand('copy');
+  document.body.removeChild(textarea);
+};
+
+const onMessagesClick = async (event: MouseEvent) => {
+  const target = event.target as HTMLElement | null;
+  if (!target) return;
+
+  const button = target.closest('.code-copy-btn') as HTMLButtonElement | null;
+  if (!button) return;
+
+  const block = button.closest('.code-block');
+  const codeElement = block?.querySelector('code');
+  const codeText = codeElement?.textContent ?? '';
+  if (!codeText) return;
+
+  try {
+    await copyText(codeText);
+    const defaultLabel = button.getAttribute('data-copy-label') || 'Copy';
+    const copiedLabel = button.getAttribute('data-copied-label') || 'Copied';
+
+    const existingTimeout = button.dataset.copyTimeoutId;
+    if (existingTimeout) {
+      clearTimeout(Number(existingTimeout));
+    }
+
+    button.textContent = copiedLabel;
+    button.classList.add('copied');
+    const timeoutId = window.setTimeout(() => {
+      button.textContent = defaultLabel;
+      button.classList.remove('copied');
+      delete button.dataset.copyTimeoutId;
+    }, 2000);
+    button.dataset.copyTimeoutId = String(timeoutId);
+  } catch {
+    // ignore copy errors
+  }
+};
+
 onMounted(() => {
   props.setMessagesEl(localMessagesEl.value);
   props.setInputEl(localInputEl.value);
+  if (localMessagesEl.value) {
+    localMessagesEl.value.addEventListener('click', onMessagesClick);
+  }
+});
+
+onBeforeUnmount(() => {
+  if (localMessagesEl.value) {
+    localMessagesEl.value.removeEventListener('click', onMessagesClick);
+  }
 });
 
 const onInputText = (event: Event) => {

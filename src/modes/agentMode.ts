@@ -129,7 +129,7 @@ export class AgentModeHandler {
  * Register Agent mode
  */
 export function registerAgentMode(
-  context: vscode.ExtensionContext,
+  _context: vscode.ExtensionContext,
   client: OllamaClient,
   sessionManager: SessionManager,
   outputChannel: vscode.OutputChannel
@@ -139,14 +139,11 @@ export function registerAgentMode(
 
   const gitOps = new GitOperations();
   
-  const agentHandler = new AgentModeHandler(
+  new AgentModeHandler(
     client,
     toolRegistry,
     sessionManager,
     gitOps,
     outputChannel
   );
-
-  // Store handler for access from chat participant
-  (context as any).agentHandler = agentHandler;
 }

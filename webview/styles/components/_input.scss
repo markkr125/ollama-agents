@@ -1,8 +1,9 @@
 /* Input Area */
 .input-container {
-  border-top: 1px solid var(--border);
-  padding: 12px;
+  border-top: 1px solid var(--surface-border);
+  padding: 10px 12px 12px;
   margin-top: auto;
+  background: var(--panel-bg);
 }
 
 .context-chips {
@@ -21,8 +22,8 @@
   align-items: center;
   gap: 4px;
   padding: 4px 8px;
-  background: var(--input-bg);
-  border: 1px solid var(--border);
+  background: var(--surface-bg);
+  border: 1px solid var(--surface-border);
   border-radius: 4px;
   font-size: 11px;
 
@@ -33,10 +34,10 @@
 }
 
 .input-box {
-  background: var(--vscode-editor-background);
-  border: 1px solid var(--border);
-  border-radius: 8px;
-  padding: 10px;
+  background: var(--vscode-input-background);
+  border: 1px solid var(--vscode-input-border, transparent);
+  border-radius: 10px;
+  padding: 10px 12px 8px;
 }
 
 textarea {
@@ -45,7 +46,7 @@ textarea {
   border: none;
   color: var(--fg);
   font-family: var(--vscode-font-family);
-  font-size: 13px;
+  font-size: 12.5px;
   resize: none;
   outline: none;
   min-height: 20px;
@@ -56,7 +57,7 @@ textarea {
   display: flex;
   justify-content: space-between;
   align-items: center;
-  margin-top: 8px;
+  margin-top: 6px;
 
   &-left {
     display: flex;
@@ -66,21 +67,44 @@ textarea {
 }
 
 select {
-  background: var(--input-bg);
-  border: 1px solid var(--border);
-  color: var(--fg);
-  padding: 4px 8px;
-  border-radius: 4px;
+  background: var(--vscode-dropdown-background, var(--surface-bg));
+  border: 1px solid var(--vscode-dropdown-border, var(--surface-border));
+  color: var(--vscode-dropdown-foreground, var(--fg));
+  padding: 4px 28px 4px 10px;
+  border-radius: 8px;
   font-size: 12px;
+  line-height: 1.2;
+  min-height: 26px;
   cursor: pointer;
+  appearance: none;
+  background-image:
+    linear-gradient(45deg, transparent 50%, var(--muted) 50%),
+    linear-gradient(135deg, var(--muted) 50%, transparent 50%);
+  background-position:
+    calc(100% - 14px) 55%,
+    calc(100% - 9px) 55%;
+  background-size:
+    5px 5px,
+    5px 5px;
+  background-repeat: no-repeat;
+
+  &:hover {
+    border-color: var(--vscode-focusBorder);
+  }
+
+  &:focus {
+    outline: none;
+    box-shadow: 0 0 0 1px var(--vscode-focusBorder);
+    border-color: var(--vscode-focusBorder);
+  }
 }
 
 .send-btn {
   background: var(--btn-bg);
   color: var(--btn-fg);
   border: none;
-  padding: 6px 16px;
-  border-radius: 4px;
+  padding: 6px 14px;
+  border-radius: 6px;
   font-size: 12px;
   cursor: pointer;
 

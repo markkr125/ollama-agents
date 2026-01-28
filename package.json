@@ -262,6 +262,8 @@
     "lint": "eslint src --ext ts"
   },
   "devDependencies": {
+    "markdown-it": "^14.1.0",
+    "markdown-it-task-lists": "^2.1.1",
     "@types/node": "^20.10.0",
     "@types/vscode": "^1.85.0",
     "@vitejs/plugin-vue": "^5.0.0",

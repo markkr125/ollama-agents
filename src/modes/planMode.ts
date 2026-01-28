@@ -205,10 +205,7 @@ export async function registerPlanMode(
   client: OllamaClient,
   taskTracker: TaskTracker
 ): Promise<void> {
-  const planHandler = new PlanModeHandler(client, taskTracker);
-
-  // Store handler for access from chat participant
-  (context as any).planHandler = planHandler;
+  new PlanModeHandler(client, taskTracker);
 
   // Register execute step command
   const executeStepCommand = vscode.commands.registerCommand(

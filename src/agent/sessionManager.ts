@@ -126,15 +126,15 @@ export class SessionManager {
    */
   private checkSessionLimit(): void {
     if (this.sessions.size > this.maxSessions) {
-      vscode.window.showWarningMessage(
-        `⚠️ You have ${this.sessions.size} active sessions. Consider cleaning up old sessions to free memory.`,
-        'Clear Completed'
-      ).then(choice => {
-        if (choice === 'Clear Completed') {
-          this.clearCompleted();
-          vscode.window.showInformationMessage('Completed sessions cleared');
-        }
-      });
+      // vscode.window.showWarningMessage(
+      //   `⚠️ You have ${this.sessions.size} active sessions. Consider cleaning up old sessions to free memory.`,
+      //   'Clear Completed'
+      // ).then(choice => {
+      //   if (choice === 'Clear Completed') {
+      //     this.clearCompleted();
+      //     vscode.window.showInformationMessage('Completed sessions cleared');
+      //   }
+      // });
     }
   }
 
