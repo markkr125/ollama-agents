@@ -1,3 +1,4 @@
+import { readFile } from 'fs/promises';
 import * as vscode from 'vscode';
 import { ExecutorConfig } from '../agent/executor';
 import { GitOperations } from '../agent/gitOperations';
@@ -8,27 +9,7 @@ import { HistoryManager } from '../services/historyManager';
 import { ModelManager } from '../services/modelManager';
 import { OllamaClient } from '../services/ollamaClient';
 import { TokenManager } from '../services/tokenManager';
-
-interface ChatMessage {
-  role: 'user' | 'assistant' | 'tool';
-  content: string;
-  timestamp: number;
-  toolName?: string;
-}
-
-interface ChatSession {
-  id: string;
-  title: string;
-  messages: ChatMessage[];
-  mode: string;
-  model: string;
-  timestamp: number;
-}
-
-interface ContextItem {
-  fileName: string;
-  content: string;
-}
+import { ChatMessage, ChatSession, ContextItem } from './chatTypes';
 
 export class ChatViewProvider implements vscode.WebviewViewProvider {
   public static readonly viewType = 'ollamaCopilot.chatView';
@@ -39,6 +20,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
   private currentModel: string = '';
   private isGenerating = false;
   private cancellationTokenSource?: vscode.CancellationTokenSource;
+  private configChangeDisposable?: vscode.Disposable;
   
   private toolRegistry: ToolRegistry;
   private gitOps: GitOperations;
@@ -57,6 +39,11 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     this.toolRegistry.registerBuiltInTools();
     this.outputChannel = vscode.window.createOutputChannel('Ollama Copilot Agent');
     this.gitOps = new GitOperations();
+    this.configChangeDisposable = vscode.workspace.onDidChangeConfiguration(async e => {
+      if (e.affectsConfiguration('ollamaCopilot')) {
+        await this.sendSettingsUpdate();
+      }
+    });
   }
 
   private createNewSession(): string {
@@ -82,24 +69,38 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     vscode.commands.executeCommand('workbench.files.action.refreshFilesExplorer');
   }
 
-  public resolveWebviewView(
+  public async resolveWebviewView(
     webviewView: vscode.WebviewView,
     _context: vscode.WebviewViewResolveContext,
     _token: vscode.CancellationToken,
   ) {
     this.view = webviewView;
 
+    webviewView.onDidDispose(() => {
+      this.configChangeDisposable?.dispose();
+      this.configChangeDisposable = undefined;
+    });
+
+    webviewView.onDidChangeVisibility(() => {
+      if (webviewView.visible) {
+        this.sendSettingsUpdate();
+      }
+    });
+
     webviewView.webview.options = {
       enableScripts: true,
-      localResourceRoots: [this.extensionUri]
+      localResourceRoots: [vscode.Uri.joinPath(this.extensionUri, 'media')]
     };
 
-    webviewView.webview.html = this.getHtmlForWebview();
+    webviewView.webview.html = await this.getHtmlForWebview(webviewView.webview);
 
     webviewView.webview.onDidReceiveMessage(async data => {
+      console.log('[OllamaCopilot] Received message from webview:', data.type);
       switch (data.type) {
         case 'ready':
+          console.log('[OllamaCopilot] Webview ready, calling initialize()');
           await this.initialize();
+          await this.sendSettingsUpdate();
           break;
         case 'sendMessage':
           await this.handleMessage(data.text, data.context);
@@ -134,33 +135,23 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
           await this.testConnection();
           break;
         case 'saveBearerToken':
-          await this.saveBearerToken(data.token);
+          await this.saveBearerToken(data.token, data.testAfterSave);
           break;
       }
     });
   }
 
   private async initialize() {
+    // Always send settings first, even before trying to connect
+    const settings = this.getSettingsPayload();
+    const hasToken = await this.tokenManager.hasToken();
+    
+    console.log('[OllamaCopilot] initialize() - sending init message with settings:', JSON.stringify(settings));
+    
     try {
       const models = await this.client.listModels();
       const modeConfig = getModeConfig('agent');
       this.currentModel = modeConfig.model || (models.length > 0 ? models[0].name : '');
-      
-      // Use centralized config
-      const config = getConfig();
-      const settings = {
-        baseUrl: config.baseUrl,
-        enableAutoComplete: vscode.workspace.getConfiguration('ollamaCopilot').get('enableAutoComplete', true),
-        agentModel: config.agentMode.model,
-        askModel: config.askMode.model,
-        editModel: config.editMode.model,
-        completionModel: config.completionMode.model,
-        maxIterations: config.agent.maxIterations,
-        toolTimeout: config.agent.toolTimeout,
-        temperature: config.agentMode.temperature
-      };
-
-      const hasToken = await this.tokenManager.hasToken();
 
       this.view?.webview.postMessage({
         type: 'init',
@@ -172,11 +163,48 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
 
       this.sendSessionsList();
     } catch (error: any) {
+      // Still send init with settings even if connection fails
+      this.view?.webview.postMessage({
+        type: 'init',
+        models: [],
+        currentMode: this.currentMode,
+        settings,
+        hasToken
+      });
+      
       this.view?.webview.postMessage({
         type: 'connectionError',
         error: error.message
       });
     }
+  }
+
+  private getSettingsPayload() {
+    const config = getConfig();
+    console.log('[OllamaCopilot] getSettingsPayload - baseUrl from config:', config.baseUrl);
+    return {
+      baseUrl: config.baseUrl,
+      enableAutoComplete: vscode.workspace.getConfiguration('ollamaCopilot').get('enableAutoComplete', true),
+      agentModel: config.agentMode.model,
+      askModel: config.askMode.model,
+      editModel: config.editMode.model,
+      completionModel: config.completionMode.model,
+      maxIterations: config.agent.maxIterations,
+      toolTimeout: config.agent.toolTimeout,
+      temperature: config.agentMode.temperature
+    };
+  }
+
+  private async sendSettingsUpdate() {
+    if (!this.view) return;
+    const settings = this.getSettingsPayload();
+    this.client.setBaseUrl(settings.baseUrl);
+    const hasToken = await this.tokenManager.hasToken();
+    this.view.webview.postMessage({
+      type: 'settingsUpdate',
+      settings,
+      hasToken
+    });
   }
 
   private sendSessionsList() {
@@ -220,7 +248,16 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     const config = vscode.workspace.getConfiguration('ollamaCopilot');
     
     if (settings.baseUrl !== undefined) {
-      await config.update('baseUrl', settings.baseUrl, vscode.ConfigurationTarget.Global);
+      const inspect = config.inspect<string>('baseUrl');
+      console.log('[OllamaCopilot] saveSettings - baseUrl value:', settings.baseUrl);
+      console.log('[OllamaCopilot] saveSettings - inspect:', JSON.stringify(inspect));
+      const target = inspect?.workspaceValue !== undefined
+        ? vscode.ConfigurationTarget.Workspace
+        : vscode.ConfigurationTarget.Global;
+      console.log('[OllamaCopilot] saveSettings - target:', target === vscode.ConfigurationTarget.Workspace ? 'Workspace' : 'Global');
+      await config.update('baseUrl', settings.baseUrl, target);
+      console.log('[OllamaCopilot] saveSettings - update complete');
+      this.client.setBaseUrl(settings.baseUrl);
     }
     if (settings.enableAutoComplete !== undefined) {
       await config.update('enableAutoComplete', settings.enableAutoComplete, vscode.ConfigurationTarget.Global);
@@ -231,20 +268,25 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     if (settings.askModel !== undefined) {
       await config.update('askMode.model', settings.askModel, vscode.ConfigurationTarget.Global);
     }
+    if (settings.editModel !== undefined) {
+      await config.update('editMode.model', settings.editModel, vscode.ConfigurationTarget.Global);
+    }
     if (settings.completionModel !== undefined) {
       await config.update('completionMode.model', settings.completionModel, vscode.ConfigurationTarget.Global);
     }
     
     this.view?.webview.postMessage({ type: 'settingsSaved' });
+    await this.sendSettingsUpdate();
   }
 
   private async testConnection() {
     try {
-      const connected = await this.client.testConnection();
+      const models = await this.client.listModels();
       this.view?.webview.postMessage({
         type: 'connectionTestResult',
-        success: connected,
-        message: connected ? 'Connected successfully!' : 'Connection failed'
+        success: true,
+        message: 'Connected successfully!',
+        models
       });
     } catch (error: any) {
       this.view?.webview.postMessage({
@@ -255,7 +297,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     }
   }
 
-  private async saveBearerToken(token: string) {
+  private async saveBearerToken(token: string, testAfterSave?: boolean) {
     if (token) {
       await this.tokenManager.setToken(token);
       this.client.setBearerToken(token);
@@ -267,6 +309,11 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       type: 'bearerTokenSaved',
       hasToken: !!token
     });
+    
+    // Test connection after token is saved if requested
+    if (testAfterSave) {
+      await this.testConnection();
+    }
   }
 
   private async handleAddContext() {
@@ -741,1707 +788,23 @@ RULES:
       .update('agentMode.model', modelName, vscode.ConfigurationTarget.Global);
   }
 
-  private getHtmlForWebview(): string {
-    return `<!DOCTYPE html>
-<html lang="en">
-<head>
-  <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Copilot</title>
-  <style>
-    * { box-sizing: border-box; margin: 0; padding: 0; }
-    
-    :root {
-      --bg: var(--vscode-editor-background);
-      --fg: var(--vscode-foreground);
-      --border: var(--vscode-panel-border);
-      --input-bg: var(--vscode-input-background);
-      --input-fg: var(--vscode-input-foreground);
-      --btn-bg: var(--vscode-button-background);
-      --btn-fg: var(--vscode-button-foreground);
-      --hover: var(--vscode-list-hoverBackground);
-      --accent: var(--vscode-focusBorder);
-      --muted: var(--vscode-descriptionForeground);
-      --success: var(--vscode-charts-green);
-      --error: var(--vscode-errorForeground);
-    }
-    
-    body {
-      font-family: var(--vscode-font-family);
-      font-size: 13px;
-      color: var(--fg);
-      background: var(--bg);
-      height: 100vh;
-      display: flex;
-      flex-direction: column;
-      overflow: hidden;
-    }
-
-    /* Main Layout */
-    .app {
-      display: flex;
-      flex: 1;
-      overflow: hidden;
-    }
-
-    .main-panel {
-      flex: 1;
-      display: flex;
-      flex-direction: column;
-      overflow: hidden;
-    }
-
-    /* Sessions Sidebar */
-    .sessions-panel {
-      width: 0;
-      background: var(--input-bg);
-      border-left: 1px solid var(--border);
-      overflow: hidden;
-      transition: width 0.2s;
-      display: flex;
-      flex-direction: column;
-    }
-
-    .sessions-panel.open {
-      width: 220px;
-    }
-
-    .sessions-header {
-      padding: 12px;
-      font-weight: 600;
-      border-bottom: 1px solid var(--border);
-      display: flex;
-      justify-content: space-between;
-      align-items: center;
-    }
-
-    .sessions-list {
-      flex: 1;
-      overflow-y: auto;
-      padding: 8px;
-    }
-
-    .session-item {
-      padding: 8px 10px;
-      border-radius: 4px;
-      cursor: pointer;
-      margin-bottom: 4px;
-      display: flex;
-      justify-content: space-between;
-      align-items: center;
-    }
-
-    .session-item:hover { background: var(--hover); }
-    .session-item.active { background: var(--btn-bg); color: var(--btn-fg); }
-
-    .session-title {
-      flex: 1;
-      overflow: hidden;
-      text-overflow: ellipsis;
-      white-space: nowrap;
-      font-size: 12px;
-    }
-
-    .session-time {
-      font-size: 10px;
-      color: var(--muted);
-      margin-left: 8px;
-    }
-
-    .session-delete {
-      opacity: 0;
-      cursor: pointer;
-      padding: 2px 6px;
-      font-size: 10px;
-    }
-
-    .session-item:hover .session-delete { opacity: 0.6; }
-    .session-delete:hover { opacity: 1 !important; }
-
-    /* Header */
-    .header {
-      display: flex;
-      align-items: center;
-      justify-content: space-between;
-      padding: 8px 12px;
-      border-bottom: 1px solid var(--border);
-      min-height: 40px;
-    }
-
-    .header-left {
-      display: flex;
-      align-items: center;
-      gap: 8px;
-    }
-
-    .back-btn {
-      display: none;
-      background: transparent;
-      border: none;
-      color: var(--fg);
-      cursor: pointer;
-      padding: 4px 8px;
-      border-radius: 4px;
-      font-size: 14px;
-    }
-
-    .back-btn:hover { background: var(--hover); }
-    .back-btn.visible { display: block; }
-
-    .header-title {
-      font-weight: 600;
-      font-size: 13px;
-    }
-
-    .header-actions {
-      display: flex;
-      gap: 4px;
-    }
-
-    .icon-btn {
-      background: transparent;
-      border: none;
-      color: var(--fg);
-      width: 28px;
-      height: 28px;
-      border-radius: 4px;
-      cursor: pointer;
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      font-size: 14px;
-    }
-
-    .icon-btn:hover { background: var(--hover); }
-
-    /* Pages */
-    .page { display: none; flex-direction: column; flex: 1; overflow: hidden; }
-    .page.active { display: flex; }
-
-    /* Chat Page */
-    .messages {
-      flex: 1;
-      overflow-y: auto;
-      padding: 16px;
-    }
-
-    .empty-state {
-      display: flex;
-      flex-direction: column;
-      align-items: center;
-      justify-content: center;
-      height: 100%;
-      text-align: center;
-      color: var(--muted);
-    }
-
-    .empty-state h3 {
-      font-size: 14px;
-      font-weight: 500;
-      margin-bottom: 8px;
-      color: var(--fg);
-    }
-
-    .message {
-      margin-bottom: 16px;
-    }
-
-    .message-user {
-      background: var(--input-bg);
-      padding: 12px;
-      border-radius: 8px;
-    }
-
-    .message-assistant {
-      line-height: 1.6;
-    }
-
-    .message-assistant pre {
-      background: var(--input-bg);
-      padding: 12px;
-      border-radius: 6px;
-      overflow-x: auto;
-      margin: 8px 0;
-      font-family: var(--vscode-editor-font-family);
-      font-size: 12px;
-    }
-
-    .message-assistant code {
-      background: var(--input-bg);
-      padding: 2px 5px;
-      border-radius: 3px;
-      font-family: var(--vscode-editor-font-family);
-      font-size: 12px;
-    }
-
-    .message-assistant pre code {
-      background: none;
-      padding: 0;
-    }
-
-    /* Tool Actions - Copilot Style */
-    .progress-group {
-      margin: 12px 0;
-      border-radius: 6px;
-      overflow: hidden;
-    }
-
-    .progress-header {
-      display: flex;
-      align-items: center;
-      gap: 8px;
-      padding: 10px 12px;
-      background: var(--input-bg);
-      cursor: pointer;
-      user-select: none;
-      font-size: 13px;
-      font-weight: 500;
-    }
-
-    .progress-header:hover {
-      background: var(--vscode-list-hoverBackground);
-    }
-
-    .progress-chevron {
-      font-size: 10px;
-      transition: transform 0.2s;
-      color: var(--muted);
-    }
-
-    .progress-group.collapsed .progress-chevron {
-      transform: rotate(-90deg);
-    }
-
-    .progress-group.collapsed .progress-actions {
-      display: none;
-    }
-
-    .progress-status {
-      width: 14px;
-      height: 14px;
-      display: flex;
-      align-items: center;
-      justify-content: center;
-    }
-
-    .progress-status .spinner {
-      width: 12px;
-      height: 12px;
-    }
-
-    .progress-status.done {
-      color: var(--success);
-    }
-
-    .progress-title {
-      flex: 1;
-    }
-
-    .progress-actions {
-      padding-left: 20px;
-      border-left: 1px solid var(--border);
-      margin-left: 18px;
-    }
-
-    .action-item {
-      display: flex;
-      align-items: center;
-      gap: 8px;
-      padding: 6px 12px;
-      font-size: 12px;
-      color: var(--fg);
-    }
-
-    .action-item .action-status {
-      width: 14px;
-      height: 14px;
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      font-size: 11px;
-    }
-
-    .action-item .action-status.pending {
-      color: var(--muted);
-    }
-
-    .action-item .action-status.running {
-      color: var(--vscode-charts-yellow);
-    }
-
-    .action-item .action-status.done {
-      color: var(--success);
-    }
-
-    .action-item .action-status.error {
-      color: var(--error);
-    }
-
-    .action-item .file-icon {
-      font-size: 14px;
-    }
-
-    .action-item .action-text {
-      flex: 1;
-      color: var(--muted);
-    }
-
-    .action-item .action-text .filename {
-      color: var(--accent);
-    }
-
-    .action-item .action-text .detail {
-      color: var(--muted);
-      opacity: 0.8;
-    }
-
-    /* Thinking */
-    .thinking {
-      display: none;
-      align-items: center;
-      gap: 8px;
-      padding: 12px 16px;
-      color: var(--muted);
-      font-size: 12px;
-    }
-
-    .thinking.visible { display: flex; }
-
-    .spinner {
-      width: 12px;
-      height: 12px;
-      border: 2px solid var(--border);
-      border-top-color: var(--accent);
-      border-radius: 50%;
-      animation: spin 0.8s linear infinite;
-    }
-
-    @keyframes spin { to { transform: rotate(360deg); } }
-
-    /* Input Area */
-    .input-container {
-      border-top: 1px solid var(--border);
-      padding: 12px;
-    }
-
-    .context-chips {
-      display: none;
-      flex-wrap: wrap;
-      gap: 6px;
-      margin-bottom: 8px;
-    }
-
-    .context-chips.visible { display: flex; }
-
-    .context-chip {
-      display: flex;
-      align-items: center;
-      gap: 4px;
-      padding: 4px 8px;
-      background: var(--input-bg);
-      border: 1px solid var(--border);
-      border-radius: 4px;
-      font-size: 11px;
-    }
-
-    .context-chip-remove {
-      cursor: pointer;
-      opacity: 0.6;
-    }
-
-    .context-chip-remove:hover { opacity: 1; }
-
-    .input-box {
-      background: var(--input-bg);
-      border: 1px solid var(--border);
-      border-radius: 8px;
-      overflow: hidden;
-    }
-
-    .input-box:focus-within { border-color: var(--accent); }
-
-    textarea {
-      width: 100%;
-      padding: 12px;
-      background: transparent;
-      color: var(--input-fg);
-      border: none;
-      font-family: inherit;
-      font-size: 13px;
-      resize: none;
-      outline: none;
-      min-height: 44px;
-      max-height: 200px;
-    }
-
-    textarea::placeholder { color: var(--muted); }
-
-    .input-controls {
-      display: flex;
-      align-items: center;
-      justify-content: space-between;
-      padding: 8px 12px;
-      border-top: 1px solid var(--border);
-    }
-
-    .input-controls-left {
-      display: flex;
-      align-items: center;
-      gap: 8px;
-    }
-
-    select {
-      padding: 4px 8px;
-      background: transparent;
-      color: var(--fg);
-      border: none;
-      font-family: inherit;
-      font-size: 12px;
-      cursor: pointer;
-      outline: none;
-    }
-
-    select option {
-      background: var(--input-bg);
-      color: var(--fg);
-    }
-
-    .send-btn {
-      background: var(--btn-bg);
-      color: var(--btn-fg);
-      border: none;
-      padding: 6px 12px;
-      border-radius: 4px;
-      cursor: pointer;
-      font-size: 12px;
-    }
-
-    .send-btn:hover { opacity: 0.9; }
-    .send-btn:disabled { opacity: 0.5; cursor: not-allowed; }
-
-    /* Settings Layout */
-    .settings-layout {
-      display: flex;
-      height: 100%;
-      overflow: hidden;
-    }
-
-    .settings-nav {
-      width: 140px;
-      min-width: 140px;
-      background: var(--bg);
-      border-right: 1px solid var(--border);
-      padding: 8px 0;
-      overflow-y: auto;
-    }
-
-    .settings-nav-item {
-      display: flex;
-      align-items: center;
-      gap: 8px;
-      padding: 10px 12px;
-      cursor: pointer;
-      font-size: 12px;
-      color: var(--muted);
-      border-left: 3px solid transparent;
-      transition: all 0.15s;
-    }
-
-    .settings-nav-item:hover {
-      background: var(--input-bg);
-      color: var(--fg);
-    }
-
-    .settings-nav-item.active {
-      background: var(--input-bg);
-      color: var(--accent);
-      border-left-color: var(--accent);
-    }
-
-    .nav-icon {
-      font-size: 14px;
-    }
-
-    /* Settings Content */
-    .settings-content {
-      flex: 1;
-      overflow-y: auto;
-      padding: 16px 20px;
-    }
-
-    .settings-section {
-      display: none;
-    }
-
-    .settings-section.active {
-      display: block;
-    }
-
-    .settings-section h2 {
-      font-size: 16px;
-      font-weight: 600;
-      margin-bottom: 4px;
-      color: var(--fg);
-    }
-
-    .section-desc {
-      font-size: 12px;
-      color: var(--muted);
-      margin-bottom: 20px;
-    }
-
-    .setting-group {
-      margin-bottom: 24px;
-    }
-
-    .setting-group h3 {
-      font-size: 13px;
-      font-weight: 600;
-      margin-bottom: 12px;
-      color: var(--fg);
-      border-bottom: 1px solid var(--border);
-      padding-bottom: 6px;
-    }
-
-    .setting-row {
-      display: flex;
-      flex-direction: column;
-      margin-bottom: 16px;
-    }
-
-    .setting-row label {
-      font-size: 12px;
-      font-weight: 500;
-      margin-bottom: 6px;
-      color: var(--fg);
-    }
-
-    .setting-hint {
-      font-size: 11px;
-      color: var(--muted);
-      margin-top: 4px;
-    }
-
-    .setting-row input,
-    .setting-row select {
-      padding: 8px 10px;
-      background: var(--input-bg);
-      color: var(--input-fg);
-      border: 1px solid var(--border);
-      border-radius: 4px;
-      font-size: 12px;
-      width: 100%;
-    }
-
-    .setting-row input:focus,
-    .setting-row select:focus {
-      border-color: var(--accent);
-      outline: none;
-    }
-
-    .input-with-btn {
-      display: flex;
-      gap: 4px;
-    }
-
-    .input-with-btn input {
-      flex: 1;
-    }
-
-    .btn-small {
-      padding: 6px 8px;
-      font-size: 12px;
-    }
-
-    .token-status {
-      display: flex;
-      align-items: center;
-      gap: 6px;
-      padding: 8px 0;
-      font-size: 11px;
-    }
-
-    .status-dot {
-      width: 8px;
-      height: 8px;
-      border-radius: 50%;
-      background: var(--muted);
-    }
-
-    .token-status.configured .status-dot {
-      background: var(--success);
-    }
-
-    .setting-actions {
-      display: flex;
-      gap: 8px;
-      margin-top: 16px;
-    }
-
-    .slider-row {
-      display: flex;
-      align-items: center;
-      gap: 10px;
-    }
-
-    .slider-row input[type="range"] {
-      flex: 1;
-      -webkit-appearance: none;
-      height: 4px;
-      background: var(--border);
-      border-radius: 2px;
-    }
-
-    .slider-row input[type="range"]::-webkit-slider-thumb {
-      -webkit-appearance: none;
-      width: 14px;
-      height: 14px;
-      background: var(--accent);
-      border-radius: 50%;
-      cursor: pointer;
-    }
-
-    /* Toggle Row */
-    .toggle-row {
-      display: flex;
-      align-items: center;
-      justify-content: space-between;
-      padding: 12px 0;
-      border-bottom: 1px solid var(--border);
-    }
-
-    .toggle-row:last-child {
-      border-bottom: none;
-    }
-
-    .toggle-info {
-      display: flex;
-      flex-direction: column;
-      gap: 2px;
-    }
-
-    .toggle-label {
-      font-size: 12px;
-      font-weight: 500;
-      color: var(--fg);
-    }
-
-    .toggle-desc {
-      font-size: 11px;
-      color: var(--muted);
-    }
-
-    .toggle {
-      width: 36px;
-      height: 20px;
-      background: var(--border);
-      border-radius: 10px;
-      cursor: pointer;
-      position: relative;
-      transition: background 0.2s;
-      flex-shrink: 0;
-    }
-
-    .toggle.on { background: var(--btn-bg); }
-
-    .toggle::after {
-      content: '';
-      position: absolute;
-      width: 16px;
-      height: 16px;
-      background: white;
-      border-radius: 50%;
-      top: 2px;
-      left: 2px;
-      transition: left 0.2s;
-    }
-
-    .toggle.on::after { left: 18px; }
-
-    /* Tools Grid */
-    .tools-grid {
-      display: grid;
-      grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
-      gap: 12px;
-    }
-
-    .tool-card {
-      background: var(--input-bg);
-      border: 1px solid var(--border);
-      border-radius: 6px;
-      padding: 12px;
-    }
-
-    .tool-header {
-      display: flex;
-      align-items: center;
-      gap: 8px;
-      margin-bottom: 6px;
-    }
-
-    .tool-icon {
-      font-size: 16px;
-    }
-
-    .tool-name {
-      font-size: 12px;
-      font-weight: 500;
-      flex: 1;
-      color: var(--fg);
-      font-family: monospace;
-    }
-
-    .tool-desc {
-      font-size: 11px;
-      color: var(--muted);
-      margin: 0;
-    }
-
-    .btn {
-      padding: 8px 16px;
-      border-radius: 4px;
-      cursor: pointer;
-      font-size: 12px;
-      border: none;
-    }
-
-    .btn-primary {
-      background: var(--btn-bg);
-      color: var(--btn-fg);
-    }
-
-    .btn-secondary {
-      background: var(--input-bg);
-      color: var(--fg);
-      border: 1px solid var(--border);
-    }
-
-    .status-msg {
-      padding: 8px 12px;
-      border-radius: 4px;
-      font-size: 12px;
-      margin-top: 8px;
-      display: none;
-    }
-
-    .status-msg.visible { display: block; }
-    .status-msg.success { background: rgba(0, 200, 0, 0.1); color: var(--success); }
-    .status-msg.error { background: rgba(200, 0, 0, 0.1); color: var(--error); }
-
-    /* Scrollbar */
-    ::-webkit-scrollbar { width: 6px; }
-    ::-webkit-scrollbar-track { background: transparent; }
-    ::-webkit-scrollbar-thumb { background: var(--vscode-scrollbarSlider-background); border-radius: 3px; }
-  </style>
-</head>
-<body>
-  <div class="app">
-    <div class="main-panel">
-      <div class="header">
-        <div class="header-left">
-          <button class="back-btn" id="backBtn">←</button>
-          <span class="header-title" id="headerTitle">Copilot</span>
-        </div>
-        <div class="header-actions">
-          <button class="icon-btn" id="newChatBtn" title="New Chat">➕</button>
-          <button class="icon-btn" id="settingsBtn" title="Settings">⚙️</button>
-          <button class="icon-btn" id="sessionsBtn" title="Sessions">📋</button>
-        </div>
-      </div>
-
-      <!-- Chat Page -->
-      <div class="page active" id="chatPage">
-        <div class="messages" id="messages">
-          <div class="empty-state" id="emptyState">
-            <h3>How can I help you today?</h3>
-            <p>Ask me to write code, explain concepts, or help with your project.</p>
-          </div>
-        </div>
-
-        <div class="thinking" id="thinking">
-          <div class="spinner"></div>
-          <span id="thinkingText">Thinking...</span>
-        </div>
-
-        <div class="input-container">
-          <div class="context-chips" id="contextChips"></div>
-          <div class="input-box">
-            <textarea id="input" placeholder="Describe what to build next" rows="1"></textarea>
-            <div class="input-controls">
-              <div class="input-controls-left">
-                <button class="icon-btn" id="addContextBtn" title="Add context">📎</button>
-                <select id="modeSelect">
-                  <option value="agent">Agent</option>
-                  <option value="ask">Ask</option>
-                  <option value="edit">Edit</option>
-                </select>
-                <select id="modelSelect">
-                  <option value="">Loading...</option>
-                </select>
-              </div>
-              <button class="send-btn" id="sendBtn">Send</button>
-            </div>
-          </div>
-        </div>
-      </div>
-
-      <!-- Settings Page -->
-      <div class="page" id="settingsPage">
-        <div class="settings-layout">
-          <div class="settings-nav">
-            <div class="settings-nav-item active" data-section="connection">
-              <span class="nav-icon">🔌</span>
-              <span>Connection</span>
-            </div>
-            <div class="settings-nav-item" data-section="models">
-              <span class="nav-icon">🤖</span>
-              <span>Models</span>
-            </div>
-            <div class="settings-nav-item" data-section="chat">
-              <span class="nav-icon">💬</span>
-              <span>Chat</span>
-            </div>
-            <div class="settings-nav-item" data-section="autocomplete">
-              <span class="nav-icon">✨</span>
-              <span>Autocomplete</span>
-            </div>
-            <div class="settings-nav-item" data-section="tools">
-              <span class="nav-icon">🔧</span>
-              <span>Tools</span>
-            </div>
-            <div class="settings-nav-item" data-section="agent">
-              <span class="nav-icon">⚡</span>
-              <span>Agent</span>
-            </div>
-          </div>
-
-          <div class="settings-content">
-            <!-- Connection Section -->
-            <div class="settings-section active" id="section-connection">
-              <h2>Connection Settings</h2>
-              <p class="section-desc">Configure your Ollama or OpenWebUI server connection.</p>
-              
-              <div class="setting-group">
-                <div class="setting-row">
-                  <label>Server URL</label>
-                  <input type="text" id="baseUrlInput" placeholder="http://localhost:11434">
-                  <span class="setting-hint">The URL of your Ollama server or OpenWebUI instance</span>
-                </div>
-              </div>
-
-              <div class="setting-group">
-                <h3>Authentication</h3>
-                <div class="setting-row">
-                  <label>Bearer Token</label>
-                  <div class="input-with-btn">
-                    <input type="password" id="bearerTokenInput" placeholder="Enter token for OpenWebUI...">
-                    <button class="btn btn-small" id="showTokenBtn">👁</button>
-                  </div>
-                  <span class="setting-hint">Required for OpenWebUI authentication</span>
-                </div>
-                <div class="token-status" id="tokenStatus">
-                  <span class="status-dot"></span>
-                  <span id="tokenStatusText">No token configured</span>
-                </div>
-              </div>
-
-              <div class="setting-actions">
-                <button class="btn btn-secondary" id="testConnectionBtn">Test Connection</button>
-                <button class="btn btn-primary" id="saveTokenBtn">Save Token</button>
-              </div>
-              <div class="status-msg" id="connectionStatus"></div>
-            </div>
-
-            <!-- Models Section -->
-            <div class="settings-section" id="section-models">
-              <h2>Model Configuration</h2>
-              <p class="section-desc">Choose which models to use for each mode.</p>
-              
-              <div class="setting-group">
-                <div class="setting-row">
-                  <label>Agent Mode Model</label>
-                  <select id="agentModelSelect"></select>
-                  <span class="setting-hint">Model used for autonomous agent tasks</span>
-                </div>
-                
-                <div class="setting-row">
-                  <label>Ask Mode Model</label>
-                  <select id="askModelSelect"></select>
-                  <span class="setting-hint">Model used for chat conversations</span>
-                </div>
-                
-                <div class="setting-row">
-                  <label>Edit Mode Model</label>
-                  <select id="editModelSelect"></select>
-                  <span class="setting-hint">Model used for code editing</span>
-                </div>
-                
-                <div class="setting-row">
-                  <label>Completion Model</label>
-                  <select id="completionModelSelect"></select>
-                  <span class="setting-hint">Model used for inline code completions</span>
-                </div>
-              </div>
-
-              <button class="btn btn-primary" id="saveModelsBtn">Save Model Settings</button>
-              <div class="status-msg" id="modelsStatus"></div>
-            </div>
-
-            <!-- Chat Section -->
-            <div class="settings-section" id="section-chat">
-              <h2>Chat Settings</h2>
-              <p class="section-desc">Configure chat behavior and preferences.</p>
-              
-              <div class="setting-group">
-                <div class="toggle-row">
-                  <div class="toggle-info">
-                    <span class="toggle-label">Stream Responses</span>
-                    <span class="toggle-desc">Show responses as they are generated</span>
-                  </div>
-                  <div class="toggle on" id="streamToggle"></div>
-                </div>
-
-                <div class="toggle-row">
-                  <div class="toggle-info">
-                    <span class="toggle-label">Show Tool Actions</span>
-                    <span class="toggle-desc">Display tool execution details in chat</span>
-                  </div>
-                  <div class="toggle on" id="showToolsToggle"></div>
-                </div>
-              </div>
-
-              <div class="setting-group">
-                <div class="setting-row">
-                  <label>Temperature</label>
-                  <div class="slider-row">
-                    <input type="range" id="temperatureSlider" min="0" max="100" value="70">
-                    <span id="temperatureValue">0.7</span>
-                  </div>
-                  <span class="setting-hint">Higher = more creative, Lower = more focused</span>
-                </div>
-              </div>
-            </div>
-
-            <!-- Autocomplete Section -->
-            <div class="settings-section" id="section-autocomplete">
-              <h2>Autocomplete Settings</h2>
-              <p class="section-desc">Configure inline code completion behavior.</p>
-              
-              <div class="setting-group">
-                <div class="toggle-row">
-                  <div class="toggle-info">
-                    <span class="toggle-label">Enable Autocomplete</span>
-                    <span class="toggle-desc">Show inline code suggestions as you type</span>
-                  </div>
-                  <div class="toggle" id="autocompleteToggle"></div>
-                </div>
-
-                <div class="toggle-row">
-                  <div class="toggle-info">
-                    <span class="toggle-label">Auto-trigger</span>
-                    <span class="toggle-desc">Automatically trigger completions while typing</span>
-                  </div>
-                  <div class="toggle on" id="autoTriggerToggle"></div>
-                </div>
-              </div>
-
-              <div class="setting-group">
-                <div class="setting-row">
-                  <label>Trigger Delay (ms)</label>
-                  <input type="number" id="triggerDelayInput" value="300" min="100" max="2000">
-                  <span class="setting-hint">Delay before showing completions</span>
-                </div>
-
-                <div class="setting-row">
-                  <label>Max Tokens</label>
-                  <input type="number" id="maxTokensInput" value="500" min="50" max="2000">
-                  <span class="setting-hint">Maximum tokens per completion</span>
-                </div>
-              </div>
-            </div>
-
-            <!-- Tools Section -->
-            <div class="settings-section" id="section-tools">
-              <h2>Agent Tools</h2>
-              <p class="section-desc">Enable or disable tools available to the agent.</p>
-              
-              <div class="tools-grid">
-                <div class="tool-card">
-                  <div class="tool-header">
-                    <span class="tool-icon">📄</span>
-                    <span class="tool-name">read_file</span>
-                    <div class="toggle on" data-tool="read_file"></div>
-                  </div>
-                  <p class="tool-desc">Read contents of files in the workspace</p>
-                </div>
-
-                <div class="tool-card">
-                  <div class="tool-header">
-                    <span class="tool-icon">✏️</span>
-                    <span class="tool-name">write_file</span>
-                    <div class="toggle on" data-tool="write_file"></div>
-                  </div>
-                  <p class="tool-desc">Write content to files in the workspace</p>
-                </div>
-
-                <div class="tool-card">
-                  <div class="tool-header">
-                    <span class="tool-icon">📁</span>
-                    <span class="tool-name">create_file</span>
-                    <div class="toggle on" data-tool="create_file"></div>
-                  </div>
-                  <p class="tool-desc">Create new files in the workspace</p>
-                </div>
-
-                <div class="tool-card">
-                  <div class="tool-header">
-                    <span class="tool-icon">📋</span>
-                    <span class="tool-name">list_files</span>
-                    <div class="toggle on" data-tool="list_files"></div>
-                  </div>
-                  <p class="tool-desc">List files and directories</p>
-                </div>
-
-                <div class="tool-card">
-                  <div class="tool-header">
-                    <span class="tool-icon">🔍</span>
-                    <span class="tool-name">search_workspace</span>
-                    <div class="toggle on" data-tool="search_workspace"></div>
-                  </div>
-                  <p class="tool-desc">Search for text across the workspace</p>
-                </div>
-
-                <div class="tool-card">
-                  <div class="tool-header">
-                    <span class="tool-icon">⚡</span>
-                    <span class="tool-name">run_command</span>
-                    <div class="toggle on" data-tool="run_command"></div>
-                  </div>
-                  <p class="tool-desc">Execute terminal commands</p>
-                </div>
-              </div>
-            </div>
-
-            <!-- Agent Section -->
-            <div class="settings-section" id="section-agent">
-              <h2>Agent Settings</h2>
-              <p class="section-desc">Configure autonomous agent behavior.</p>
-              
-              <div class="setting-group">
-                <div class="setting-row">
-                  <label>Max Iterations</label>
-                  <input type="number" id="maxIterationsInput" value="25" min="5" max="100">
-                  <span class="setting-hint">Maximum tool execution cycles per task</span>
-                </div>
-
-                <div class="setting-row">
-                  <label>Tool Timeout (seconds)</label>
-                  <input type="number" id="toolTimeoutInput" value="30" min="5" max="300">
-                  <span class="setting-hint">Maximum time to wait for each tool</span>
-                </div>
-              </div>
-
-              <div class="setting-group">
-                <div class="toggle-row">
-                  <div class="toggle-info">
-                    <span class="toggle-label">Auto-create Git Branch</span>
-                    <span class="toggle-desc">Create a new branch for each agent task</span>
-                  </div>
-                  <div class="toggle on" id="gitBranchToggle"></div>
-                </div>
-
-                <div class="toggle-row">
-                  <div class="toggle-info">
-                    <span class="toggle-label">Auto-commit Changes</span>
-                    <span class="toggle-desc">Automatically commit changes when task completes</span>
-                  </div>
-                  <div class="toggle" id="autoCommitToggle"></div>
-                </div>
-              </div>
-
-              <button class="btn btn-primary" id="saveAgentBtn">Save Agent Settings</button>
-              <div class="status-msg" id="agentStatus"></div>
-            </div>
-          </div>
-        </div>
-      </div>
-    </div>
-
-    <!-- Sessions Sidebar -->
-    <div class="sessions-panel" id="sessionsPanel">
-      <div class="sessions-header">
-        <span>Sessions</span>
-        <button class="icon-btn" id="closeSessionsBtn">✕</button>
-      </div>
-      <div class="sessions-list" id="sessionsList"></div>
-    </div>
-  </div>
-
-  <script>
-    const vscode = acquireVsCodeApi();
-    const $ = sel => document.querySelector(sel);
-    const $$ = sel => document.querySelectorAll(sel);
-
-    const el = {
-      messages: $('#messages'),
-      emptyState: $('#emptyState'),
-      input: $('#input'),
-      sendBtn: $('#sendBtn'),
-      modelSelect: $('#modelSelect'),
-      modeSelect: $('#modeSelect'),
-      contextChips: $('#contextChips'),
-      addContextBtn: $('#addContextBtn'),
-      newChatBtn: $('#newChatBtn'),
-      settingsBtn: $('#settingsBtn'),
-      sessionsBtn: $('#sessionsBtn'),
-      thinking: $('#thinking'),
-      thinkingText: $('#thinkingText'),
-      chatPage: $('#chatPage'),
-      settingsPage: $('#settingsPage'),
-      sessionsPanel: $('#sessionsPanel'),
-      sessionsList: $('#sessionsList'),
-      backBtn: $('#backBtn'),
-      headerTitle: $('#headerTitle'),
-      closeSessionsBtn: $('#closeSessionsBtn'),
-      // Connection settings
-      baseUrlInput: $('#baseUrlInput'),
-      bearerTokenInput: $('#bearerTokenInput'),
-      showTokenBtn: $('#showTokenBtn'),
-      tokenStatus: $('#tokenStatus'),
-      tokenStatusText: $('#tokenStatusText'),
-      testConnectionBtn: $('#testConnectionBtn'),
-      saveTokenBtn: $('#saveTokenBtn'),
-      connectionStatus: $('#connectionStatus'),
-      // Models settings
-      agentModelSelect: $('#agentModelSelect'),
-      askModelSelect: $('#askModelSelect'),
-      editModelSelect: $('#editModelSelect'),
-      completionModelSelect: $('#completionModelSelect'),
-      saveModelsBtn: $('#saveModelsBtn'),
-      modelsStatus: $('#modelsStatus'),
-      // Chat settings
-      streamToggle: $('#streamToggle'),
-      showToolsToggle: $('#showToolsToggle'),
-      temperatureSlider: $('#temperatureSlider'),
-      temperatureValue: $('#temperatureValue'),
-      // Autocomplete settings
-      autocompleteToggle: $('#autocompleteToggle'),
-      autoTriggerToggle: $('#autoTriggerToggle'),
-      triggerDelayInput: $('#triggerDelayInput'),
-      maxTokensInput: $('#maxTokensInput'),
-      // Agent settings
-      maxIterationsInput: $('#maxIterationsInput'),
-      toolTimeoutInput: $('#toolTimeoutInput'),
-      gitBranchToggle: $('#gitBranchToggle'),
-      autoCommitToggle: $('#autoCommitToggle'),
-      saveAgentBtn: $('#saveAgentBtn'),
-      agentStatus: $('#agentStatus')
-    };
-
-    let isGenerating = false;
-    let contextList = [];
-    let currentStreamDiv = null;
-    let currentPage = 'chat';
-
-    // Settings Navigation
-    $$('.settings-nav-item').forEach(item => {
-      item.addEventListener('click', () => {
-        const section = item.dataset.section;
-        $$('.settings-nav-item').forEach(i => i.classList.remove('active'));
-        item.classList.add('active');
-        $$('.settings-section').forEach(s => s.classList.remove('active'));
-        $(\`#section-\${section}\`).classList.add('active');
-      });
-    });
-
-    // Toggle Buttons
-    $$('.toggle').forEach(toggle => {
-      toggle.addEventListener('click', function() {
-        this.classList.toggle('on');
-      });
-    });
-
-    // Temperature Slider
-    el.temperatureSlider?.addEventListener('input', function() {
-      el.temperatureValue.textContent = (this.value / 100).toFixed(1);
-    });
-
-    // Show/Hide Token
-    el.showTokenBtn?.addEventListener('click', () => {
-      const input = el.bearerTokenInput;
-      input.type = input.type === 'password' ? 'text' : 'password';
-      el.showTokenBtn.textContent = input.type === 'password' ? '👁' : '🙈';
-    });
-
-    // Page Navigation
-    function showPage(page) {
-      currentPage = page;
-      el.chatPage.classList.toggle('active', page === 'chat');
-      el.settingsPage.classList.toggle('active', page === 'settings');
-      el.backBtn.classList.toggle('visible', page !== 'chat');
-      el.headerTitle.textContent = page === 'settings' ? 'Settings' : 'Copilot';
-    }
-
-    el.settingsBtn.addEventListener('click', () => showPage('settings'));
-    el.backBtn.addEventListener('click', () => showPage('chat'));
-
-    // Sessions Panel
-    el.sessionsBtn.addEventListener('click', () => {
-      el.sessionsPanel.classList.toggle('open');
-    });
-
-    el.closeSessionsBtn.addEventListener('click', () => {
-      el.sessionsPanel.classList.remove('open');
-    });
-
-    // Auto-resize textarea
-    el.input.addEventListener('input', function() {
-      this.style.height = 'auto';
-      this.style.height = Math.min(this.scrollHeight, 200) + 'px';
-    });
-
-    // Send
-    function send() {
-      const text = el.input.value.trim();
-      if (!text || isGenerating) return;
-      vscode.postMessage({ type: 'sendMessage', text, context: contextList });
-      el.input.value = '';
-      el.input.style.height = 'auto';
-      contextList = [];
-      updateContextUI();
-    }
-
-    el.sendBtn.addEventListener('click', () => {
-      if (isGenerating) {
-        vscode.postMessage({ type: 'stopGeneration' });
-      } else {
-        send();
+  private async getHtmlForWebview(webview: vscode.Webview): Promise<string> {
+    const htmlPath = vscode.Uri.joinPath(this.extensionUri, 'media', 'index.html');
+    const html = await readFile(htmlPath.fsPath, 'utf8');
+    const mediaRoot = vscode.Uri.joinPath(this.extensionUri, 'media');
+    const cacheBuster = Date.now();
+
+    return html.replace(/(src|href)="([^"]+)"/g, (match, attr, value) => {
+      if (value.startsWith('http') || value.startsWith('data:') || value.startsWith('#')) {
+        return match;
       }
-    });
-
-    el.input.addEventListener('keydown', e => {
-      if (e.key === 'Enter' && !e.shiftKey) {
-        e.preventDefault();
-        if (!isGenerating) send();
+      const resourcePath = value.replace(/^\//, '');
+      const resourceUri = webview.asWebviewUri(vscode.Uri.joinPath(mediaRoot, resourcePath));
+      // Add cache buster to JS and CSS files
+      if (value.endsWith('.js') || value.endsWith('.css')) {
+        return `${attr}="${resourceUri.toString()}?v=${cacheBuster}"`;
       }
+      return `${attr}="${resourceUri.toString()}"`;
     });
-
-    el.modeSelect.addEventListener('change', e => {
-      vscode.postMessage({ type: 'selectMode', mode: e.target.value });
-    });
-
-    el.modelSelect.addEventListener('change', e => {
-      vscode.postMessage({ type: 'selectModel', model: e.target.value });
-    });
-
-    el.newChatBtn.addEventListener('click', () => vscode.postMessage({ type: 'newChat' }));
-    el.addContextBtn.addEventListener('click', () => vscode.postMessage({ type: 'addContext' }));
-
-    // Settings
-    el.testConnectionBtn.addEventListener('click', () => {
-      vscode.postMessage({ type: 'testConnection' });
-    });
-
-    el.saveTokenBtn?.addEventListener('click', () => {
-      const token = el.bearerTokenInput.value;
-      if (token) {
-        vscode.postMessage({ type: 'saveBearerToken', token });
-        el.tokenStatus.classList.add('configured');
-        el.tokenStatusText.textContent = 'Token configured';
-      }
-    });
-
-    el.saveModelsBtn?.addEventListener('click', () => {
-      vscode.postMessage({
-        type: 'saveSettings',
-        settings: {
-          agentModel: el.agentModelSelect.value,
-          askModel: el.askModelSelect.value,
-          editModel: el.editModelSelect?.value,
-          completionModel: el.completionModelSelect.value
-        }
-      });
-      showStatus(el.modelsStatus, 'Model settings saved!', true);
-    });
-
-    el.saveAgentBtn?.addEventListener('click', () => {
-      vscode.postMessage({
-        type: 'saveSettings',
-        settings: {
-          maxIterations: parseInt(el.maxIterationsInput.value),
-          toolTimeout: parseInt(el.toolTimeoutInput.value),
-          autoCreateBranch: el.gitBranchToggle.classList.contains('on'),
-          autoCommit: el.autoCommitToggle.classList.contains('on')
-        }
-      });
-      showStatus(el.agentStatus, 'Agent settings saved!', true);
-    });
-
-    el.autocompleteToggle.addEventListener('click', function() {
-      vscode.postMessage({
-        type: 'saveSettings',
-        settings: { enableAutoComplete: this.classList.contains('on') }
-      });
-    });
-
-    function updateContextUI() {
-      el.contextChips.innerHTML = '';
-      if (contextList.length === 0) {
-        el.contextChips.classList.remove('visible');
-        return;
-      }
-      el.contextChips.classList.add('visible');
-      contextList.forEach((c, i) => {
-        const chip = document.createElement('div');
-        chip.className = 'context-chip';
-        chip.innerHTML = \`<span>📄 \${c.fileName}</span><span class="context-chip-remove" data-i="\${i}">×</span>\`;
-        el.contextChips.appendChild(chip);
-      });
-      $$('.context-chip-remove').forEach(btn => {
-        btn.addEventListener('click', () => {
-          contextList.splice(parseInt(btn.dataset.i), 1);
-          updateContextUI();
-        });
-      });
-    }
-
-    function hideEmpty() {
-      if (el.emptyState) el.emptyState.style.display = 'none';
-    }
-
-    function showThinking(msg) {
-      el.thinkingText.textContent = msg || 'Thinking...';
-      el.thinking.classList.add('visible');
-    }
-
-    function hideThinking() {
-      el.thinking.classList.remove('visible');
-    }
-
-    function showStatus(element, msg, isSuccess) {
-      element.textContent = msg;
-      element.className = 'status-msg visible ' + (isSuccess ? 'success' : 'error');
-      setTimeout(() => element.classList.remove('visible'), 3000);
-    }
-
-    function addUserMessage(content) {
-      hideEmpty();
-      const div = document.createElement('div');
-      div.className = 'message message-user';
-      div.textContent = content;
-      el.messages.appendChild(div);
-      el.messages.scrollTop = el.messages.scrollHeight;
-    }
-
-    let currentProgressGroup = null;
-    let currentProgressActions = null;
-
-    function startProgressGroup(title) {
-      hideEmpty();
-      hideThinking();
-      
-      const group = document.createElement('div');
-      group.className = 'progress-group';
-      group.innerHTML = \`
-        <div class="progress-header">
-          <span class="progress-chevron">▼</span>
-          <span class="progress-status"><div class="spinner"></div></span>
-          <span class="progress-title">\${title}</span>
-        </div>
-        <div class="progress-actions"></div>
-      \`;
-      
-      group.querySelector('.progress-header').addEventListener('click', () => {
-        group.classList.toggle('collapsed');
-      });
-      
-      el.messages.appendChild(group);
-      currentProgressGroup = group;
-      currentProgressActions = group.querySelector('.progress-actions');
-      el.messages.scrollTop = el.messages.scrollHeight;
-    }
-
-    function addActionToGroup(status, icon, text, detail) {
-      if (!currentProgressActions) {
-        startProgressGroup('Working on task');
-      }
-      
-      const statusClass = status === 'running' ? 'running' : status === 'success' ? 'done' : status === 'error' ? 'error' : 'pending';
-      const statusIcon = status === 'running' ? '<div class="spinner"></div>' : 
-                         status === 'success' ? '✓' : 
-                         status === 'error' ? '✗' : '○';
-      
-      const item = document.createElement('div');
-      item.className = 'action-item';
-      item.dataset.actionId = Date.now().toString();
-      item.innerHTML = \`
-        <span class="action-status \${statusClass}">\${statusIcon}</span>
-        <span class="file-icon">\${icon}</span>
-        <span class="action-text"><span class="filename">\${text}</span>\${detail ? '<span class="detail">, ' + detail + '</span>' : ''}</span>
-      \`;
-      
-      currentProgressActions.appendChild(item);
-      el.messages.scrollTop = el.messages.scrollHeight;
-      return item.dataset.actionId;
-    }
-
-    function updateActionStatus(actionId, status) {
-      const item = currentProgressActions?.querySelector(\`[data-action-id="\${actionId}"]\`);
-      if (!item) return;
-      
-      const statusEl = item.querySelector('.action-status');
-      statusEl.className = 'action-status ' + (status === 'success' ? 'done' : status);
-      statusEl.innerHTML = status === 'running' ? '<div class="spinner"></div>' : 
-                           status === 'success' ? '✓' : 
-                           status === 'error' ? '✗' : '○';
-    }
-
-    function finishProgressGroup() {
-      if (currentProgressGroup) {
-        const statusEl = currentProgressGroup.querySelector('.progress-status');
-        statusEl.classList.add('done');
-        statusEl.innerHTML = '✓';
-      }
-      currentProgressGroup = null;
-      currentProgressActions = null;
-    }
-
-    // Legacy function for compatibility
-    function addToolAction(status, icon, text) {
-      hideThinking();
-      addActionToGroup(status, icon, text, null);
-    }
-
-    function startAssistantMessage() {
-      hideEmpty();
-      hideThinking();
-      const div = document.createElement('div');
-      div.className = 'message message-assistant';
-      el.messages.appendChild(div);
-      currentStreamDiv = div;
-      el.messages.scrollTop = el.messages.scrollHeight;
-    }
-
-    function updateStream(content) {
-      if (!currentStreamDiv) startAssistantMessage();
-      currentStreamDiv.innerHTML = formatMarkdown(content);
-      el.messages.scrollTop = el.messages.scrollHeight;
-    }
-
-    function finalizeMessage(content) {
-      hideThinking();
-      if (!currentStreamDiv) startAssistantMessage();
-      currentStreamDiv.innerHTML = formatMarkdown(content);
-      currentStreamDiv = null;
-    }
-
-    function formatMarkdown(text) {
-      if (!text) return '';
-      text = text.replace(/\`\`\`(\\w*)\\n([\\s\\S]*?)\`\`\`/g, '<pre><code>$2</code></pre>');
-      text = text.replace(/\`([^\`]+)\`/g, '<code>$1</code>');
-      text = text.replace(/\\*\\*([^*]+)\\*\\*/g, '<strong>$1</strong>');
-      text = text.replace(/\\*([^*]+)\\*/g, '<em>$1</em>');
-      text = text.replace(/\\n/g, '<br>');
-      return text;
-    }
-
-    function populateModelSelects(models) {
-      [el.modelSelect, el.agentModelSelect, el.askModelSelect, el.editModelSelect, el.completionModelSelect].forEach(select => {
-        if (!select) return;
-        select.innerHTML = '';
-        models.forEach(m => {
-          const opt = document.createElement('option');
-          opt.value = m.name;
-          opt.textContent = m.name;
-          if (m.selected) opt.selected = true;
-          select.appendChild(opt);
-        });
-      });
-    }
-
-    function renderSessions(sessions) {
-      el.sessionsList.innerHTML = '';
-      sessions.forEach(s => {
-        const div = document.createElement('div');
-        div.className = 'session-item' + (s.active ? ' active' : '');
-        const time = new Date(s.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
-        div.innerHTML = \`
-          <span class="session-title">\${s.title}</span>
-          <span class="session-time">\${time}</span>
-          <span class="session-delete" data-id="\${s.id}">✕</span>
-        \`;
-        div.addEventListener('click', e => {
-          if (!e.target.classList.contains('session-delete')) {
-            vscode.postMessage({ type: 'loadSession', sessionId: s.id });
-          }
-        });
-        el.sessionsList.appendChild(div);
-      });
-
-      $$('.session-delete').forEach(btn => {
-        btn.addEventListener('click', e => {
-          e.stopPropagation();
-          vscode.postMessage({ type: 'deleteSession', sessionId: btn.dataset.id });
-        });
-      });
-    }
-
-    window.addEventListener('message', e => {
-      const msg = e.data;
-      switch (msg.type) {
-        case 'init':
-          populateModelSelects(msg.models);
-          if (msg.currentMode) el.modeSelect.value = msg.currentMode;
-          if (msg.settings) {
-            // Connection settings
-            if (el.baseUrlInput) el.baseUrlInput.value = msg.settings.baseUrl || 'http://localhost:11434';
-            
-            // Model selections - set after a short delay to ensure options are populated
-            setTimeout(() => {
-              if (el.agentModelSelect && msg.settings.agentModel) {
-                el.agentModelSelect.value = msg.settings.agentModel;
-              }
-              if (el.askModelSelect && msg.settings.askModel) {
-                el.askModelSelect.value = msg.settings.askModel;
-              }
-              if (el.editModelSelect && msg.settings.editModel) {
-                el.editModelSelect.value = msg.settings.editModel;
-              }
-              if (el.completionModelSelect && msg.settings.completionModel) {
-                el.completionModelSelect.value = msg.settings.completionModel;
-              }
-            }, 50);
-            
-            // Feature toggles
-            if (el.autocompleteToggle) {
-              el.autocompleteToggle.classList.toggle('on', msg.settings.enableAutoComplete);
-            }
-            
-            // Agent settings
-            if (el.maxIterationsInput && msg.settings.maxIterations) {
-              el.maxIterationsInput.value = msg.settings.maxIterations;
-            }
-            if (el.toolTimeoutInput && msg.settings.toolTimeout) {
-              el.toolTimeoutInput.value = Math.floor(msg.settings.toolTimeout / 1000);
-            }
-            
-            // Temperature slider
-            if (el.temperatureSlider && msg.settings.temperature !== undefined) {
-              el.temperatureSlider.value = Math.round(msg.settings.temperature * 100);
-              if (el.temperatureValue) el.temperatureValue.textContent = msg.settings.temperature.toFixed(1);
-            }
-          }
-          
-          // Token status
-          if (msg.hasToken && el.tokenStatus) {
-            el.tokenStatus.classList.add('configured');
-            el.tokenStatusText.textContent = 'Token configured';
-          }
-          break;
-
-        case 'loadSessions':
-          renderSessions(msg.sessions);
-          break;
-
-        case 'loadSessionMessages':
-          el.messages.innerHTML = '';
-          msg.messages.forEach(m => {
-            if (m.role === 'user') addUserMessage(m.content);
-            else if (m.role === 'assistant') {
-              startAssistantMessage();
-              finalizeMessage(m.content);
-            }
-          });
-          if (msg.messages.length === 0) {
-            el.messages.appendChild(el.emptyState);
-            el.emptyState.style.display = 'flex';
-          }
-          break;
-
-        case 'addMessage':
-          if (msg.message.role === 'user') addUserMessage(msg.message.content);
-          break;
-
-        case 'showThinking':
-          showThinking(msg.message);
-          break;
-
-        case 'hideThinking':
-          hideThinking();
-          break;
-
-        case 'startProgressGroup':
-          startProgressGroup(msg.title);
-          break;
-
-        case 'showToolAction':
-          addActionToGroup(msg.status, msg.icon, msg.text, msg.detail);
-          break;
-
-        case 'finishProgressGroup':
-          finishProgressGroup();
-          break;
-
-        case 'streamChunk':
-          updateStream(msg.content);
-          break;
-
-        case 'finalMessage':
-          finishProgressGroup();
-          finalizeMessage(msg.content);
-          break;
-
-        case 'generationStarted':
-          isGenerating = true;
-          el.sendBtn.textContent = 'Stop';
-          break;
-
-        case 'generationStopped':
-          isGenerating = false;
-          el.sendBtn.textContent = 'Send';
-          hideThinking();
-          break;
-
-        case 'addContextItem':
-          contextList.push(msg.context);
-          updateContextUI();
-          break;
-
-        case 'showError':
-          hideThinking();
-          addActionToGroup('error', '✗', msg.message, null);
-          break;
-
-        case 'clearMessages':
-          el.messages.innerHTML = '';
-          el.messages.appendChild(el.emptyState);
-          el.emptyState.style.display = 'flex';
-          currentStreamDiv = null;
-          currentProgressGroup = null;
-          currentProgressActions = null;
-          break;
-
-        case 'connectionTestResult':
-          showStatus(el.connectionStatus, msg.message, msg.success);
-          break;
-
-        case 'settingsSaved':
-          // Settings are auto-saved per section
-          break;
-
-        case 'bearerTokenSaved':
-          el.bearerTokenInput.value = '';
-          break;
-
-        case 'connectionError':
-          showStatus(el.connectionStatus, 'Connection error: ' + msg.error, false);
-          break;
-      }
-    });
-
-    vscode.postMessage({ type: 'ready' });
-  </script>
-</body>
-</html>`;
   }
 }

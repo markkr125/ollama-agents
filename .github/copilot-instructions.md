@@ -31,7 +31,6 @@ src/
 │   └── settings.ts       # Configuration helpers
 ├── modes/                # Different interaction modes
 │   ├── agentMode.ts      # Autonomous agent commands
-│   ├── askMode.ts        # Q&A mode (deprecated, now in chatView)
 │   ├── editMode.ts       # Code editing with AI
 │   └── planMode.ts       # Multi-step planning
 ├── providers/
@@ -47,7 +46,30 @@ src/
 ├── views/
 │   └── chatView.ts       # Main chat sidebar (2400+ lines)
 ├── webview/
-│   └── setupWizard.ts    # First-run setup wizard
+│   ├── App.vue            # Vue root SFC (composes child components)
+│   ├── main.ts            # Webview bootstrap
+│   ├── index.html         # Webview HTML entry
+│   ├── components/        # Vue UI subcomponents
+│   │   ├── ChatPage.vue
+│   │   ├── HeaderBar.vue
+│   │   ├── SessionsPanel.vue
+│   │   └── SettingsPage.vue
+│   ├── scripts/           # Webview app logic split by concern
+│   │   ├── app/
+│   │   │   └── App.ts      # Entry/wiring for message handling
+│   │   └── core/
+│   │       ├── actions.ts  # UI actions + helpers
+│   │       ├── computed.ts # Derived state
+│   │       ├── state.ts    # Reactive state/refs
+│   │       └── types.ts    # Shared types
+│   ├── styles/            # SCSS entry + partials
+│   │   ├── styles.scss
+│   │   ├── base/
+│   │   ├── components/
+│   │   ├── layout/
+│   │   └── utils/
+│   ├── setupWizard.ts     # First-run setup wizard
+│   └── vite.config.ts     # Vite build for webview
 ├── templates/            # Prompt templates
 ├── types/                # TypeScript type definitions
 └── utils/                # Utility functions
@@ -75,6 +97,7 @@ The HTTP client for communicating with Ollama/OpenWebUI APIs.
 ### 2. ChatViewProvider (`src/views/chatView.ts`)
 
 The main sidebar chat interface - a WebviewViewProvider that renders a GitHub Copilot-style UI.
+The UI is built with Vue via Vite and emitted to `media/index.html`, `media/chatView.js`, and `media/chatView.css`.
 
 **Features:**
 - **Multiple Modes**: Agent, Ask, Edit (selectable via dropdown)
@@ -229,6 +252,22 @@ The chat UI uses VS Code's CSS variables for theming:
 
 ## Development Guidelines
 
+### Maintain Clean Structure (Important)
+
+Keep the current folder layout clean and consistent. Do not reintroduce flat, mixed files. Follow these rules:
+
+- Webview source stays directly under `webview/` (no extra `chatView/` folder).
+- UI markup goes in `webview/components/*.vue`.
+- App wiring and message handling live in `webview/scripts/app/App.ts`.
+- Shared logic lives in `webview/scripts/core/`:
+  - State/refs: `state.ts`
+  - Computed values: `computed.ts`
+  - Actions/helpers: `actions.ts`
+  - Types: `types.ts`
+- Styles use SCSS with an entry file at `webview/styles/styles.scss` and partials grouped under `webview/styles/` (base/layout/components/utils).
+
+If you add new functionality, place it in the appropriate folder above and keep files small and single-purpose. Avoid creating new “catch-all” files.
+
 ### Adding a New Tool
 
 1. Add to `toolRegistry.ts` in `registerBuiltInTools()`:
@@ -263,11 +302,15 @@ this.register({
 
 ### Modifying the Chat UI
 
-The entire chat UI is in `src/views/chatView.ts`:
-- HTML template: `getHtmlForWebview()` method (starts around line 700)
-- CSS: Inside `<style>` tag in the template
-- JavaScript: Inside `<script>` tag at end of template
-- Backend handlers: `onDidReceiveMessage` switch statement
+The chat UI is a Vue app under `webview/`:
+- `App.vue` composes UI subcomponents
+- `components/*.vue` holds UI sections (chat page, settings, header, sessions)
+- `scripts/app/App.ts` wires message handling and exports state/actions
+- `scripts/core/*` holds state, computed values, actions, and types
+- `styles/styles.scss` is the SCSS entry; partials live under `styles/`
+- `main.ts` bootstraps the Vue app
+
+Build output goes to `media/` and is loaded by `ChatViewProvider`.
 
 ---
 
@@ -277,8 +320,14 @@ The entire chat UI is in `src/views/chatView.ts`:
 # Install dependencies
 npm install
 
+# Build webview + extension
+npm run build:all
+
 # Compile (production)
 npm run compile
+
+# Webview only
+npm run build:webview
 
 # Watch mode (development)
 npm run watch

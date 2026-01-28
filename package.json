@@ -254,7 +254,9 @@
   },
   "scripts": {
     "vscode:prepublish": "npm run compile",
-    "compile": "webpack --mode production",
+    "build:webview": "vite build --config webview/vite.config.ts",
+    "build:all": "npm run compile",
+    "compile": "npm run build:webview && webpack --mode production",
     "watch": "webpack --mode development --watch",
     "package": "vsce package",
     "lint": "eslint src --ext ts"
@@ -262,9 +264,13 @@
   "devDependencies": {
     "@types/node": "^20.10.0",
     "@types/vscode": "^1.85.0",
+    "@vitejs/plugin-vue": "^5.0.0",
     "@vscode/vsce": "^2.22.0",
+    "sass": "^1.97.3",
     "ts-loader": "^9.5.0",
     "typescript": "^5.3.0",
+    "vite": "^5.0.0",
+    "vue": "^3.4.0",
     "webpack": "^5.89.0",
     "webpack-cli": "^5.1.0"
   }

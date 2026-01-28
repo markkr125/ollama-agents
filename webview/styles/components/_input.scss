@@ -1,0 +1,90 @@
+/* Input Area */
+.input-container {
+  border-top: 1px solid var(--border);
+  padding: 12px;
+  margin-top: auto;
+}
+
+.context-chips {
+  display: none;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-bottom: 8px;
+
+  &.visible {
+    display: flex;
+  }
+}
+
+.context-chip {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 4px 8px;
+  background: var(--input-bg);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  font-size: 11px;
+
+  &-remove {
+    cursor: pointer;
+    opacity: 0.6;
+  }
+}
+
+.input-box {
+  background: var(--vscode-editor-background);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 10px;
+}
+
+textarea {
+  width: 100%;
+  background: transparent;
+  border: none;
+  color: var(--fg);
+  font-family: var(--vscode-font-family);
+  font-size: 13px;
+  resize: none;
+  outline: none;
+  min-height: 20px;
+  line-height: 1.4;
+}
+
+.input-controls {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-top: 8px;
+
+  &-left {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+}
+
+select {
+  background: var(--input-bg);
+  border: 1px solid var(--border);
+  color: var(--fg);
+  padding: 4px 8px;
+  border-radius: 4px;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.send-btn {
+  background: var(--btn-bg);
+  color: var(--btn-fg);
+  border: none;
+  padding: 6px 16px;
+  border-radius: 4px;
+  font-size: 12px;
+  cursor: pointer;
+
+  &:hover {
+    opacity: 0.9;
+  }
+}

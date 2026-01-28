@@ -29,6 +29,13 @@ export class OllamaClient {
   }
 
   /**
+   * Update base URL (useful when settings change)
+   */
+  public setBaseUrl(baseUrl: string): void {
+    this.baseUrl = baseUrl.replace(/\/$/, '');
+  }
+
+  /**
    * Get headers with optional bearer token
    */
   private getHeaders(): Record<string, string> {

@@ -3,9 +3,13 @@ import { AgentConfig, ExtensionConfig, ModeConfig } from '../types/config';
 
 export function getConfig(): ExtensionConfig {
   const config = vscode.workspace.getConfiguration('ollamaCopilot');
+  const baseUrl = config.get('baseUrl', 'http://localhost:11434');
+  const inspect = config.inspect('baseUrl');
+  console.log('[OllamaCopilot] getConfig - baseUrl value:', baseUrl);
+  console.log('[OllamaCopilot] getConfig - inspect:', JSON.stringify(inspect));
 
   return {
-    baseUrl: config.get('baseUrl', 'http://localhost:11434'),
+    baseUrl: baseUrl as string,
     contextWindow: config.get('contextWindow', 16000),
     completionMode: {
       model: config.get('completionMode.model', ''),

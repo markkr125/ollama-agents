@@ -1,0 +1,38 @@
+/* Tools Grid */
+.tools-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: 12px;
+}
+
+.tool-card {
+  background: var(--input-bg);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 12px;
+}
+
+.tool-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 6px;
+}
+
+.tool-icon {
+  font-size: 16px;
+}
+
+.tool-name {
+  font-size: 12px;
+  font-weight: 500;
+  flex: 1;
+  color: var(--fg);
+  font-family: monospace;
+}
+
+.tool-desc {
+  font-size: 11px;
+  color: var(--muted);
+  margin: 0;
+}
