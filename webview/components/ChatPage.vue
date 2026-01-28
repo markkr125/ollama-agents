@@ -40,11 +40,11 @@
           </div>
         </div>
       </template>
-    </div>
 
-    <div class="thinking" :class="{ visible: thinking.visible }">
-      <div class="spinner"></div>
-      <span>{{ thinking.text }}</span>
+      <div class="thinking" :class="{ visible: thinking.visible }">
+        <div class="spinner"></div>
+        <span>{{ thinking.text }}</span>
+      </div>
     </div>
 
     <div class="input-container">
