@@ -145,7 +145,6 @@ import {
 
 // Initialize when mounted - send ready message to extension
 onMounted(() => {
-  console.log('[Webview] App mounted, sending ready message');
   vscode.postMessage({ type: 'ready' });
   resizeInput();
 });

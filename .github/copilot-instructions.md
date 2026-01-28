@@ -202,7 +202,8 @@ When user sends a message in Agent mode:
 
 | Message Type | Payload | Purpose |
 |--------------|---------|---------|
-| `init` | `{models, settings, hasToken}` | Initialize UI |
+| `init` | `{models, settings, hasToken}` | Initialize UI with settings |
+| `settingsUpdate` | `{settings, hasToken}` | Push updated settings to webview |
 | `showThinking` | `{message}` | Show loading state |
 | `hideThinking` | - | Hide loading state |
 | `startProgressGroup` | `{title}` | Start collapsible group |
@@ -212,12 +213,13 @@ When user sends a message in Agent mode:
 | `finalMessage` | `{content}` | Finalize response |
 | `loadSessions` | `{sessions}` | Update sessions list |
 | `connectionTestResult` | `{success, message}` | Connection test result |
+| `bearerTokenSaved` | `{hasToken}` | Token save confirmation |
 
 ### Frontend → Backend Messages
 
 | Message Type | Payload | Purpose |
 |--------------|---------|---------|
-| `ready` | - | UI initialized |
+| `ready` | - | UI initialized (triggers `init` response) |
 | `sendMessage` | `{text, context}` | User message |
 | `stopGeneration` | - | Cancel current generation |
 | `selectMode` | `{mode}` | Change mode |
@@ -227,7 +229,7 @@ When user sends a message in Agent mode:
 | `deleteSession` | `{sessionId}` | Delete session |
 | `saveSettings` | `{settings}` | Save settings |
 | `testConnection` | - | Test server connection |
-| `saveBearerToken` | `{token}` | Save bearer token |
+| `saveBearerToken` | `{token, testAfterSave?}` | Save bearer token (optionally test after) |
 
 ---
 
@@ -303,12 +305,14 @@ this.register({
 ### Modifying the Chat UI
 
 The chat UI is a Vue app under `webview/`:
-- `App.vue` composes UI subcomponents
+- `App.vue` composes UI subcomponents and contains the `onMounted` hook that sends the `ready` message
 - `components/*.vue` holds UI sections (chat page, settings, header, sessions)
 - `scripts/app/App.ts` wires message handling and exports state/actions
 - `scripts/core/*` holds state, computed values, actions, and types
 - `styles/styles.scss` is the SCSS entry; partials live under `styles/`
 - `main.ts` bootstraps the Vue app
+
+**Important**: Vue lifecycle hooks like `onMounted` must be called inside a Vue component's `<script setup>` block. Do NOT place them in plain `.ts` files - they won't execute!
 
 Build output goes to `media/` and is loaded by `ChatViewProvider`.
 

@@ -31,18 +31,11 @@ export * from '../core/state';
 
 window.addEventListener('message', e => {
   const msg = e.data;
-  console.log('[Webview] Received message:', msg.type, msg);
   switch (msg.type) {
     case 'init': {
-      console.log('[Webview] init - settings received:', msg.settings);
-      // TEMPORARY DEBUG: Show alert with baseUrl
-      if (msg.settings?.baseUrl) {
-        console.log('[Webview] INIT baseUrl =', msg.settings.baseUrl);
-      }
       modelOptions.value = updateInitState(msg);
       if (msg.currentMode) currentMode.value = msg.currentMode;
       applySettings(msg);
-      console.log('[Webview] init - settings.baseUrl after apply:', settings.baseUrl);
       temperatureSlider.value = Math.round(settings.temperature * 100);
       if (settings.agentModel) {
         currentModel.value = settings.agentModel;

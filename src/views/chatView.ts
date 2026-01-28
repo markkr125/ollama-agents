@@ -95,10 +95,8 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     webviewView.webview.html = await this.getHtmlForWebview(webviewView.webview);
 
     webviewView.webview.onDidReceiveMessage(async data => {
-      console.log('[OllamaCopilot] Received message from webview:', data.type);
       switch (data.type) {
         case 'ready':
-          console.log('[OllamaCopilot] Webview ready, calling initialize()');
           await this.initialize();
           await this.sendSettingsUpdate();
           break;
@@ -146,8 +144,6 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     const settings = this.getSettingsPayload();
     const hasToken = await this.tokenManager.hasToken();
     
-    console.log('[OllamaCopilot] initialize() - sending init message with settings:', JSON.stringify(settings));
-    
     try {
       const models = await this.client.listModels();
       const modeConfig = getModeConfig('agent');
@@ -181,7 +177,6 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
 
   private getSettingsPayload() {
     const config = getConfig();
-    console.log('[OllamaCopilot] getSettingsPayload - baseUrl from config:', config.baseUrl);
     return {
       baseUrl: config.baseUrl,
       enableAutoComplete: vscode.workspace.getConfiguration('ollamaCopilot').get('enableAutoComplete', true),

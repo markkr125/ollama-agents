@@ -258,14 +258,8 @@ export const updateInitState = (msg: any) => {
 };
 
 export const applySettings = (msg: any) => {
-  console.log('[Webview] applySettings called with:', msg);
-  if (!msg.settings) {
-    console.log('[Webview] applySettings - no settings in msg, returning');
-    return;
-  }
-  console.log('[Webview] applySettings - msg.settings.baseUrl:', msg.settings.baseUrl);
+  if (!msg.settings) return;
   settings.baseUrl = msg.settings.baseUrl || 'http://localhost:11434';
-  console.log('[Webview] applySettings - settings.baseUrl set to:', settings.baseUrl);
   settings.enableAutoComplete = !!msg.settings.enableAutoComplete;
   settings.agentModel = msg.settings.agentModel || '';
   settings.askModel = msg.settings.askModel || '';
