@@ -444,7 +444,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
 
         this.view?.webview.postMessage({
           type: 'showThinking',
-          message: iteration === 1 ? 'Analyzing request...' : 'Continuing...'
+          message: iteration === 1 ? 'Thinking...' : 'Working...'
         });
 
         // Collect the full response first - don't stream partial content
@@ -565,17 +565,68 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
 
     // Finish the progress group
     this.view?.webview.postMessage({ type: 'finishProgressGroup' });
-    this.view?.webview.postMessage({ type: 'hideThinking' });
     this.sessionManager.updateSession(agentSession.id, { status: 'completed' });
 
     const filesChanged = agentSession.filesChanged?.length || 0;
     let summary = filesChanged > 0 ? `**${filesChanged} file${filesChanged > 1 ? 's' : ''} modified**\n\n` : '';
+    const toolSummaryLines = (agentSession.toolCalls || [])
+      .slice(-6)
+      .map((tool: any) => {
+        const toolName = tool.tool || tool.name || 'tool';
+        const outputLine = (tool.output || '').toString().split('\n').filter(Boolean)[0] || '';
+        const detail = tool.error ? `Error: ${tool.error}` : outputLine;
+        return `- ${toolName}${detail ? `: ${detail}` : ''}`;
+      })
+      .filter(Boolean)
+      .join('\n');
+
+    if (!accumulatedExplanation.trim()) {
+      this.view?.webview.postMessage({ type: 'showThinking', message: 'Working...' });
+      const toolResults = (agentSession.toolCalls || [])
+        .slice(-6)
+        .map((tool: any) => `Tool: ${tool.tool || tool.name}\nOutput:\n${(tool.output || '').toString().slice(0, 2000)}`)
+        .join('\n\n');
+
+      try {
+        const finalStream = this.client.chat({
+          model: this.currentModel,
+          messages: [
+            {
+              role: 'system',
+              content: 'You are a helpful coding assistant. Provide a concise final answer to the user based on tool results. Do not call tools.'
+            },
+            {
+              role: 'user',
+              content: `User request: ${agentSession.task}\n\nRecent tool results:\n${toolResults}\n\nProvide the final response now.`
+            }
+          ]
+        });
+
+        let finalResponse = '';
+        for await (const chunk of finalStream) {
+          if (chunk.message?.content) {
+            finalResponse += chunk.message.content;
+          }
+        }
+
+        accumulatedExplanation = finalResponse.trim();
+      } catch {
+        // fall back to default message if summarization fails
+      }
+      this.view?.webview.postMessage({ type: 'hideThinking' });
+    }
+
+    if (!accumulatedExplanation.trim() && toolSummaryLines) {
+      accumulatedExplanation = `Summary of actions:\n${toolSummaryLines}`;
+    }
+
     summary += accumulatedExplanation || 'Task completed successfully.';
     
     const summaryMsg: ChatMessage = { role: 'assistant', content: summary, timestamp: Date.now() };
     chatSession.messages.push(summaryMsg);
     
     this.view?.webview.postMessage({ type: 'finalMessage', content: summary });
+    this.view?.webview.postMessage({ type: 'hideThinking' });
   }
 
   private getProgressGroupTitle(toolCalls: Array<{name: string, args: any}>): string {
