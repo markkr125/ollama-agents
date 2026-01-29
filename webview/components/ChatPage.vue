@@ -76,6 +76,7 @@
             <button class="icon-btn" title="Add context" @click="addContext">📎</button>
             <select :value="currentMode" @change="onModeChange">
               <option value="agent">Agent</option>
+              <option value="plan">Plan</option>
               <option value="ask">Ask</option>
               <option value="edit">Edit</option>
             </select>
