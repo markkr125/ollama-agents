@@ -480,7 +480,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
           accumulatedExplanation += cleanedText.trim();
           
           // Stream the cleaned response to the UI
-          this.view?.webview.postMessage({ type: 'streamChunk', content: accumulatedExplanation });
+          this.view?.webview.postMessage({ type: 'streamChunk', content: accumulatedExplanation, model: this.currentModel });
         }
 
         if (response.includes('[TASK_COMPLETE]') || response.toLowerCase().includes('task is complete')) {
@@ -622,10 +622,10 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
 
     summary += accumulatedExplanation || 'Task completed successfully.';
     
-    const summaryMsg: ChatMessage = { role: 'assistant', content: summary, timestamp: Date.now() };
+    const summaryMsg: ChatMessage = { role: 'assistant', content: summary, timestamp: Date.now(), model: this.currentModel };
     chatSession.messages.push(summaryMsg);
     
-    this.view?.webview.postMessage({ type: 'finalMessage', content: summary });
+    this.view?.webview.postMessage({ type: 'finalMessage', content: summary, model: this.currentModel });
     this.view?.webview.postMessage({ type: 'hideThinking' });
   }
 
@@ -817,14 +817,14 @@ RULES:
       if (token.isCancellationRequested) break;
       if (chunk.message?.content) {
         fullResponse += chunk.message.content;
-        this.view?.webview.postMessage({ type: 'streamChunk', content: fullResponse });
+        this.view?.webview.postMessage({ type: 'streamChunk', content: fullResponse, model: this.currentModel });
       }
     }
 
-    const assistantMessage: ChatMessage = { role: 'assistant', content: fullResponse, timestamp: Date.now() };
+    const assistantMessage: ChatMessage = { role: 'assistant', content: fullResponse, timestamp: Date.now(), model: this.currentModel };
     session.messages.push(assistantMessage);
     
-    this.view?.webview.postMessage({ type: 'finalMessage', content: fullResponse });
+    this.view?.webview.postMessage({ type: 'finalMessage', content: fullResponse, model: this.currentModel });
   }
 
   private async handleModelChange(modelName: string) {

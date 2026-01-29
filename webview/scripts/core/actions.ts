@@ -248,12 +248,13 @@ export const ensureProgressGroup = (title = 'Working on task') => {
   scrollToBottom();
 };
 
-export const startAssistantMessage = () => {
+export const startAssistantMessage = (model?: string) => {
   const message: MessageItem = {
     id: `msg_${Date.now()}`,
     type: 'message',
     role: 'assistant',
-    content: ''
+    content: '',
+    model
   };
   timeline.value.push(message);
   currentStreamIndex.value = timeline.value.length - 1;

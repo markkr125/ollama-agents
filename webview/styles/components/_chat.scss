@@ -43,11 +43,14 @@
 
   &-assistant {
     line-height: 1.55;
-    align-self: flex-start;
-    max-width: min(100%, 860px);
+    align-self: stretch;
+    max-width: 100%;
+    position: relative;
+    padding-bottom: 14px;
 
     .markdown-body {
       display: block;
+      max-width: min(100%, 860px);
     }
 
     .markdown-body > *:first-child {
@@ -200,6 +203,27 @@
       font-size: 12px;
     }
   }
+}
+
+.message-model {
+  position: absolute;
+  right: 0;
+  bottom: 0;
+  font-size: 11px;
+  color: var(--muted);
+  opacity: 0;
+  transition: opacity 0.15s ease;
+  pointer-events: none;
+}
+
+.message-assistant:hover .message-model {
+  opacity: 1;
+}
+
+.message-divider {
+  border-top: 1px dashed var(--vscode-chat-checkpointSeparator);
+  margin: 15px 0;
+  align-self: stretch;
 }
 
 .message-text {

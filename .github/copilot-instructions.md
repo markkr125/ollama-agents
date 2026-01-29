@@ -209,8 +209,8 @@ When user sends a message in Agent mode:
 | `startProgressGroup` | `{title}` | Start collapsible group |
 | `showToolAction` | `{status, icon, text, detail}` | Add action to group |
 | `finishProgressGroup` | - | Mark group complete |
-| `streamChunk` | `{content}` | Stream assistant response |
-| `finalMessage` | `{content}` | Finalize response |
+| `streamChunk` | `{content, model?}` | Stream assistant response (optional model name) |
+| `finalMessage` | `{content, model?}` | Finalize response (optional model name) |
 | `loadSessions` | `{sessions}` | Update sessions list |
 | `connectionTestResult` | `{success, message}` | Connection test result |
 | `bearerTokenSaved` | `{hasToken}` | Token save confirmation |
@@ -249,6 +249,15 @@ The chat UI uses VS Code's CSS variables for theming:
 --vscode-list-hoverBackground
 --vscode-scrollbarSlider-background
 ```
+
+---
+
+## UI Conventions (Chat)
+
+- Assistant responses expose the model name in the payload (`model`) and render it as a bottom-right hover label in the message container.
+- Assistant responses show a dashed divider after each assistant message, except for the very last timeline item. Divider style:
+  - `border-top: 1px dashed var(--vscode-chat-checkpointSeparator);`
+  - `margin: 15px 0;`
 
 ---
 
@@ -311,6 +320,10 @@ The chat UI is a Vue app under `webview/`:
 - `scripts/core/*` holds state, computed values, actions, and types
 - `styles/styles.scss` is the SCSS entry; partials live under `styles/`
 - `main.ts` bootstraps the Vue app
+
+### Meta: Keep Instructions Updated
+
+When you introduce new UI behavior, message payload fields, or architectural changes, update this file to reflect the new conventions and payload shapes.
 
 **Important**: Vue lifecycle hooks like `onMounted` must be called inside a Vue component's `<script setup>` block. Do NOT place them in plain `.ts` files - they won't execute!
 

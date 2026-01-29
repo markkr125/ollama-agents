@@ -3,6 +3,7 @@ export type MessageItem = {
   type: 'message';
   role: 'user' | 'assistant';
   content: string;
+  model?: string;
 };
 
 export type ActionItem = {

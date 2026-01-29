@@ -6,11 +6,18 @@
         <p>Ask me to write code, explain concepts, or help with your project.</p>
       </div>
 
-      <template v-for="item in timeline" :key="item.id">
-        <div v-if="item.type === 'message'" class="message" :class="item.role === 'user' ? 'message-user' : 'message-assistant'">
-          <div v-if="item.role === 'assistant'" class="markdown-body" v-html="formatMarkdown(item.content)"></div>
-          <div v-else class="message-text">{{ item.content }}</div>
-        </div>
+      <template v-for="(item, index) in timeline" :key="item.id">
+        <template v-if="item.type === 'message'">
+          <div class="message" :class="item.role === 'user' ? 'message-user' : 'message-assistant'">
+            <div v-if="item.role === 'assistant'" class="markdown-body" v-html="formatMarkdown(item.content)"></div>
+            <div v-else class="message-text">{{ item.content }}</div>
+            <div v-if="item.role === 'assistant' && item.model" class="message-model">{{ item.model }}</div>
+          </div>
+          <div
+            v-if="item.role === 'assistant' && index < timeline.length - 1"
+            class="message-divider"
+          ></div>
+        </template>
 
         <div v-else class="progress-group" :class="{ collapsed: item.collapsed }">
           <div class="progress-header" @click="toggleProgress(item)">

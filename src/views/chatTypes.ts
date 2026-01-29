@@ -3,6 +3,7 @@ export interface ChatMessage {
   content: string;
   timestamp: number;
   toolName?: string;
+  model?: string;
 }
 
 export interface ChatSession {
@@ -12,6 +13,7 @@ export interface ChatSession {
   mode: string;
   model: string;
   timestamp: number;
+  autoApproveCommands?: boolean;
 }
 
 export interface ContextItem {

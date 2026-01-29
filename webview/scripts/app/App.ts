@@ -65,7 +65,8 @@ window.addEventListener('message', e => {
         id: `msg_${Date.now()}_${Math.random()}`,
         type: 'message',
         role: m.role,
-        content: m.content
+        content: m.content,
+        model: m.model
       }));
       currentProgressIndex.value = null;
       currentStreamIndex.value = null;
@@ -148,22 +149,28 @@ window.addEventListener('message', e => {
 
     case 'streamChunk':
       if (currentStreamIndex.value === null) {
-        startAssistantMessage();
+        startAssistantMessage(msg.model);
       }
       if (currentStreamIndex.value !== null) {
         const message = timeline.value[currentStreamIndex.value] as MessageItem;
         message.content = msg.content || '';
+        if (msg.model) {
+          message.model = msg.model;
+        }
         scrollToBottom();
       }
       break;
 
     case 'finalMessage':
       if (currentStreamIndex.value === null) {
-        startAssistantMessage();
+        startAssistantMessage(msg.model);
       }
       if (currentStreamIndex.value !== null) {
         const message = timeline.value[currentStreamIndex.value] as MessageItem;
         message.content = msg.content || '';
+        if (msg.model) {
+          message.model = msg.model;
+        }
         currentStreamIndex.value = null;
         scrollToBottom();
       }
