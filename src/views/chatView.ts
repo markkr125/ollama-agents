@@ -5,17 +5,18 @@ import { GitOperations } from '../agent/gitOperations';
 import { SessionManager } from '../agent/sessionManager';
 import { ToolRegistry } from '../agent/toolRegistry';
 import { getConfig, getModeConfig } from '../config/settings';
-import { HistoryManager } from '../services/historyManager';
+import { DatabaseService, MessageRecord, SessionRecord } from '../services/databaseService';
 import { ModelManager } from '../services/modelManager';
 import { OllamaClient } from '../services/ollamaClient';
 import { TokenManager } from '../services/tokenManager';
-import { ChatMessage, ChatSession, ContextItem } from './chatTypes';
+import { ChatMessage, ContextItem } from './chatTypes';
 
 export class ChatViewProvider implements vscode.WebviewViewProvider {
   public static readonly viewType = 'ollamaCopilot.chatView';
   private view?: vscode.WebviewView;
-  private sessions: Map<string, ChatSession> = new Map();
   private currentSessionId: string = '';
+  private currentSession: SessionRecord | null = null;
+  private currentMessages: MessageRecord[] = [];
   private currentMode: string = 'agent';
   private currentModel: string = '';
   private isGenerating = false;
@@ -25,16 +26,17 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
   private toolRegistry: ToolRegistry;
   private gitOps: GitOperations;
   private outputChannel: vscode.OutputChannel;
+  private databaseService: DatabaseService;
 
   constructor(
     private readonly extensionUri: vscode.Uri,
     private readonly client: OllamaClient,
     _modelManager: ModelManager,
-    _historyManager: HistoryManager,
     private readonly tokenManager: TokenManager,
-    private readonly sessionManager: SessionManager
+    private readonly sessionManager: SessionManager,
+    databaseService: DatabaseService
   ) {
-    this.createNewSession();
+    this.databaseService = databaseService;
     this.toolRegistry = new ToolRegistry();
     this.toolRegistry.registerBuiltInTools();
     this.outputChannel = vscode.window.createOutputChannel('Ollama Copilot Agent');
@@ -46,23 +48,27 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     });
   }
 
-  private createNewSession(): string {
-    const id = `session_${Date.now()}`;
-    const session: ChatSession = {
-      id,
-      title: 'New Chat',
-      messages: [],
-      mode: this.currentMode,
-      model: this.currentModel,
-      timestamp: Date.now()
-    };
-    this.sessions.set(id, session);
-    this.currentSessionId = id;
-    return id;
+  private async createNewSession(): Promise<string> {
+    const session = await this.databaseService.createSession(
+      'New Chat',
+      this.currentMode,
+      this.currentModel
+    );
+    this.currentSessionId = session.id;
+    this.currentSession = session;
+    this.currentMessages = [];
+    return session.id;
   }
 
-  private getCurrentSession(): ChatSession | undefined {
-    return this.sessions.get(this.currentSessionId);
+  private async getCurrentSession(): Promise<SessionRecord | null> {
+    if (this.currentSession && this.currentSession.id === this.currentSessionId) {
+      return this.currentSession;
+    }
+    if (this.currentSessionId) {
+      this.currentSession = await this.databaseService.getSession(this.currentSessionId);
+      return this.currentSession;
+    }
+    return null;
   }
 
   private refreshExplorer() {
@@ -84,6 +90,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     webviewView.onDidChangeVisibility(() => {
       if (webviewView.visible) {
         this.sendSettingsUpdate();
+        this.sendSessionsList();
       }
     });
 
@@ -113,18 +120,18 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
           this.currentMode = data.mode;
           break;
         case 'newChat':
-          this.createNewSession();
+          await this.createNewSession();
           this.view?.webview.postMessage({ type: 'clearMessages' });
-          this.sendSessionsList();
+          await this.sendSessionsList();
           break;
         case 'addContext':
           await this.handleAddContext();
           break;
         case 'loadSession':
-          this.loadSession(data.sessionId);
+          await this.loadSession(data.sessionId);
           break;
         case 'deleteSession':
-          this.deleteSession(data.sessionId);
+          await this.deleteSession(data.sessionId);
           break;
         case 'saveSettings':
           await this.saveSettings(data.settings);
@@ -135,6 +142,9 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
         case 'saveBearerToken':
           await this.saveBearerToken(data.token, data.testAfterSave);
           break;
+        case 'searchSessions':
+          await this.handleSearchSessions(data.query);
+          break;
       }
     });
   }
@@ -143,6 +153,14 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     // Always send settings first, even before trying to connect
     const settings = this.getSettingsPayload();
     const hasToken = await this.tokenManager.hasToken();
+    
+    // Create initial session if none exists
+    if (!this.currentSessionId) {
+      await this.createNewSession();
+    }
+    
+    // Always send sessions list first - this doesn't depend on Ollama connection
+    await this.sendSessionsList();
     
     try {
       const models = await this.client.listModels();
@@ -156,8 +174,6 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
         settings,
         hasToken
       });
-
-      this.sendSessionsList();
     } catch (error: any) {
       // Still send init with settings even if connection fails
       this.view?.webview.postMessage({
@@ -202,15 +218,14 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     });
   }
 
-  private sendSessionsList() {
-    const sessionsList = Array.from(this.sessions.values())
-      .sort((a, b) => b.timestamp - a.timestamp)
-      .map(s => ({
-        id: s.id,
-        title: s.title,
-        timestamp: s.timestamp,
-        active: s.id === this.currentSessionId
-      }));
+  private async sendSessionsList() {
+    const sessions = await this.databaseService.listSessions();
+    const sessionsList = sessions.map(s => ({
+      id: s.id,
+      title: s.title,
+      timestamp: s.updated_at,
+      active: s.id === this.currentSessionId
+    }));
     
     this.view?.webview.postMessage({
       type: 'loadSessions',
@@ -218,25 +233,89 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     });
   }
 
-  private loadSession(sessionId: string) {
-    const session = this.sessions.get(sessionId);
+  private async loadSession(sessionId: string) {
+    const session = await this.databaseService.getSession(sessionId);
     if (session) {
       this.currentSessionId = sessionId;
+      this.currentSession = session;
+      this.currentMessages = await this.databaseService.getSessionMessages(sessionId);
+      
+      // Convert to ChatMessage format for frontend
+      const messages = this.currentMessages.map(m => ({
+        id: m.id,
+        role: m.role,
+        content: m.content,
+        timestamp: m.timestamp,
+        toolName: m.tool_name,
+        model: m.model
+      }));
+      
       this.view?.webview.postMessage({
         type: 'loadSessionMessages',
-        messages: session.messages
+        messages
       });
-      this.sendSessionsList();
+      await this.sendSessionsList();
     }
   }
 
-  private deleteSession(sessionId: string) {
-    this.sessions.delete(sessionId);
+  private async deleteSession(sessionId: string) {
+    await this.databaseService.deleteSession(sessionId);
     if (sessionId === this.currentSessionId) {
-      this.createNewSession();
+      await this.createNewSession();
       this.view?.webview.postMessage({ type: 'clearMessages' });
     }
-    this.sendSessionsList();
+    await this.sendSessionsList();
+  }
+
+  private async handleSearchSessions(query: string) {
+    if (!query.trim()) {
+      // Empty query - just show regular sessions list
+      await this.sendSessionsList();
+      return;
+    }
+
+    try {
+      const results = await this.databaseService.searchHybrid(query, 20);
+      
+      // Group results by session
+      const groupedResults: Map<string, {
+        session: { id: string; title: string; timestamp: number };
+        messages: Array<{ id: string; content: string; snippet: string; role: string }>;
+      }> = new Map();
+
+      for (const result of results) {
+        if (!groupedResults.has(result.session.id)) {
+          groupedResults.set(result.session.id, {
+            session: {
+              id: result.session.id,
+              title: result.session.title,
+              timestamp: result.session.updated_at
+            },
+            messages: []
+          });
+        }
+        groupedResults.get(result.session.id)!.messages.push({
+          id: result.message.id,
+          content: result.message.content,
+          snippet: result.snippet,
+          role: result.message.role
+        });
+      }
+
+      this.view?.webview.postMessage({
+        type: 'searchSessionsResult',
+        results: Array.from(groupedResults.values()),
+        query
+      });
+    } catch (error) {
+      console.error('Search failed:', error);
+      this.view?.webview.postMessage({
+        type: 'searchSessionsResult',
+        results: [],
+        query,
+        error: 'Search failed'
+      });
+    }
   }
 
   private async saveSettings(settings: any) {
@@ -341,7 +420,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
   private async handleMessage(text: string, contextItems?: ContextItem[]) {
     if (!text.trim() || this.isGenerating) return;
 
-    const session = this.getCurrentSession();
+    const session = await this.getCurrentSession();
     if (!session) return;
 
     this.cancellationTokenSource = new vscode.CancellationTokenSource();
@@ -355,15 +434,23 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
 
     const fullPrompt = contextStr ? `${contextStr}\n\n${text}` : text;
 
-    const userMessage: ChatMessage = { role: 'user', content: text, timestamp: Date.now() };
-    session.messages.push(userMessage);
+    // Add user message to database
+    const userMessage = await this.databaseService.addMessage(
+      this.currentSessionId,
+      'user',
+      text
+    );
+    this.currentMessages.push(userMessage);
     
-    if (session.messages.length === 1) {
-      session.title = text.substring(0, 40) + (text.length > 40 ? '...' : '');
-      this.sendSessionsList();
+    // Update session title if first message
+    if (this.currentMessages.length === 1) {
+      const newTitle = text.substring(0, 40) + (text.length > 40 ? '...' : '');
+      await this.databaseService.updateSession(this.currentSessionId, { title: newTitle });
+      await this.sendSessionsList();
     }
     
-    this.view?.webview.postMessage({ type: 'addMessage', message: userMessage });
+    const chatMessage: ChatMessage = { role: 'user', content: text, timestamp: userMessage.timestamp };
+    this.view?.webview.postMessage({ type: 'addMessage', message: chatMessage });
     this.view?.webview.postMessage({ type: 'generationStarted' });
 
     if (!this.currentModel) {
@@ -375,9 +462,9 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
 
     try {
       if (this.currentMode === 'agent') {
-        await this.handleAgentMode(session, fullPrompt, token);
+        await this.handleAgentMode(fullPrompt, token);
       } else {
-        await this.handleChatMode(session, fullPrompt, token);
+        await this.handleChatMode(fullPrompt, token);
       }
     } catch (error: any) {
       this.view?.webview.postMessage({ type: 'showError', message: error.message });
@@ -387,7 +474,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     }
   }
 
-  private async handleAgentMode(chatSession: ChatSession, prompt: string, token: vscode.CancellationToken) {
+  private async handleAgentMode(prompt: string, token: vscode.CancellationToken) {
     const workspace = vscode.workspace.workspaceFolders?.[0];
     if (!workspace) {
       this.view?.webview.postMessage({ type: 'showError', message: 'No workspace folder open' });
@@ -416,14 +503,13 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     }
 
     const config: ExecutorConfig = { maxIterations: 20, toolTimeout: 30000, temperature: 0.7 };
-    await this.executeAgent(agentSession, config, token, chatSession);
+    await this.executeAgent(agentSession, config, token);
   }
 
   private async executeAgent(
     agentSession: any,
     config: ExecutorConfig,
-    token: vscode.CancellationToken,
-    chatSession: ChatSession
+    token: vscode.CancellationToken
   ) {
     const context = { workspace: agentSession.workspace, token, outputChannel: this.outputChannel };
 
@@ -529,6 +615,21 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
               this.refreshExplorer();
             }
 
+            // Store tool execution in database
+            if (this.currentSessionId) {
+              await this.databaseService.addMessage(
+                this.currentSessionId,
+                'tool',
+                result.output || '',
+                {
+                  model: this.currentModel,
+                  toolName: toolCall.name,
+                  toolInput: JSON.stringify(toolCall.args),
+                  toolOutput: result.output
+                }
+              );
+            }
+
             // Show success state
             const { actionText: successText, actionDetail: successDetail } = this.getToolSuccessInfo(toolCall.name, toolCall.args, result.output);
             this.view?.webview.postMessage({
@@ -552,6 +653,22 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
               detail: error.message
             });
             agentSession.errors.push(error.message);
+
+            // Store failed tool execution in database
+            if (this.currentSessionId) {
+              await this.databaseService.addMessage(
+                this.currentSessionId,
+                'tool',
+                `Error: ${error.message}`,
+                {
+                  model: this.currentModel,
+                  toolName: toolCall.name,
+                  toolInput: JSON.stringify(toolCall.args),
+                  toolOutput: `Error: ${error.message}`
+                }
+              );
+            }
+
             messages.push({ role: 'assistant', content: response });
             messages.push({ role: 'user', content: `Tool ${toolCall.name} failed: ${error.message}\n\nTry a different approach.` });
           }
@@ -622,8 +739,14 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
 
     summary += accumulatedExplanation || 'Task completed successfully.';
     
-    const summaryMsg: ChatMessage = { role: 'assistant', content: summary, timestamp: Date.now(), model: this.currentModel };
-    chatSession.messages.push(summaryMsg);
+    // Save assistant message to database
+    const assistantMessage = await this.databaseService.addMessage(
+      this.currentSessionId,
+      'assistant',
+      summary,
+      { model: this.currentModel }
+    );
+    this.currentMessages.push(assistantMessage);
     
     this.view?.webview.postMessage({ type: 'finalMessage', content: summary, model: this.currentModel });
     this.view?.webview.postMessage({ type: 'hideThinking' });
@@ -793,10 +916,11 @@ RULES:
 3. Use [TASK_COMPLETE] when done`;
   }
 
-  private async handleChatMode(session: ChatSession, prompt: string, token: vscode.CancellationToken) {
+  private async handleChatMode(prompt: string, token: vscode.CancellationToken) {
     let fullResponse = '';
     
-    const chatMessages = session.messages
+    // Build chat messages from current session messages
+    const chatMessages = this.currentMessages
       .filter(m => m.role !== 'tool')
       .map(m => ({ role: m.role as 'user' | 'assistant', content: m.content }));
     
@@ -821,8 +945,14 @@ RULES:
       }
     }
 
-    const assistantMessage: ChatMessage = { role: 'assistant', content: fullResponse, timestamp: Date.now(), model: this.currentModel };
-    session.messages.push(assistantMessage);
+    // Save assistant message to database
+    const assistantMessage = await this.databaseService.addMessage(
+      this.currentSessionId,
+      'assistant',
+      fullResponse,
+      { model: this.currentModel }
+    );
+    this.currentMessages.push(assistantMessage);
     
     this.view?.webview.postMessage({ type: 'finalMessage', content: fullResponse, model: this.currentModel });
   }

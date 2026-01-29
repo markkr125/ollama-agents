@@ -8,7 +8,11 @@
 
       <template v-for="(item, index) in timeline" :key="item.id">
         <template v-if="item.type === 'message'">
-          <div class="message" :class="item.role === 'user' ? 'message-user' : 'message-assistant'">
+          <div
+            class="message"
+            :class="item.role === 'user' ? 'message-user' : 'message-assistant'"
+            :data-message-id="item.id"
+          >
             <div v-if="item.role === 'assistant'" class="markdown-body" v-html="formatMarkdown(item.content)"></div>
             <div v-else class="message-text">{{ item.content }}</div>
             <div v-if="item.role === 'assistant' && item.model" class="message-model">{{ item.model }}</div>
@@ -94,7 +98,7 @@
 
 <script setup lang="ts">
 import type { PropType } from 'vue';
-import { onBeforeUnmount, onMounted, ref } from 'vue';
+import { nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue';
 import type { ActionItem, ProgressItem, TimelineItem } from '../scripts/core/types';
 
 type ThinkingState = {
@@ -203,6 +207,14 @@ const props = defineProps({
   selectModel: {
     type: Function as PropType<() => void>,
     required: true
+  },
+  scrollTargetMessageId: {
+    type: String as PropType<string | null>,
+    default: null
+  },
+  clearScrollTarget: {
+    type: Function as PropType<() => void>,
+    required: true
   }
 });
 
@@ -289,6 +301,35 @@ onMounted(() => {
     localMessagesEl.value.addEventListener('click', onMessagesClick);
   }
 });
+
+// Watch for scroll target changes (when clicking search results)
+watch(
+  () => props.scrollTargetMessageId,
+  async (messageId) => {
+    if (!messageId) return;
+
+    // Wait for DOM updates
+    await nextTick();
+
+    const container = localMessagesEl.value;
+    if (!container) return;
+
+    // Find the message element by data attribute
+    const messageEl = container.querySelector(`[data-message-id="${messageId}"]`) as HTMLElement;
+    if (messageEl) {
+      messageEl.scrollIntoView({ behavior: 'smooth', block: 'center' });
+
+      // Add highlight effect
+      messageEl.classList.add('highlight-flash');
+      setTimeout(() => {
+        messageEl.classList.remove('highlight-flash');
+      }, 2000);
+    }
+
+    // Clear the scroll target after handling
+    props.clearScrollTarget();
+  }
+);
 
 onBeforeUnmount(() => {
   if (localMessagesEl.value) {

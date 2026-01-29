@@ -34,6 +34,8 @@
         :resize-input="resizeInput"
         :select-mode="selectMode"
         :select-model="selectModel"
+        :scroll-target-message-id="scrollTargetMessageId"
+        :clear-scroll-target="clearScrollTarget"
       />
 
       <SettingsPage
@@ -72,10 +74,17 @@
     <SessionsPanel
       :sessions-open="sessionsOpen"
       :sessions="sessions"
+      :search-query="searchQuery"
+      :search-results="searchResults"
+      :is-searching="isSearching"
       :load-session="loadSession"
       :delete-session="deleteSession"
       :format-time="formatTime"
       :close-sessions="closeSessions"
+      :handle-search-input="handleSearchInput"
+      :clear-search="clearSearch"
+      :load-session-with-message="loadSessionWithMessage"
+      :highlight-snippet="highlightSnippet"
     />
   </div>
 </template>
@@ -95,6 +104,8 @@ import {
     autocomplete,
     bearerToken,
     chatSettings,
+    clearScrollTarget,
+    clearSearch,
     connectionStatus,
     contextList,
     currentMode,
@@ -104,13 +115,17 @@ import {
     formatMarkdown,
     formatTime,
     handleEnter,
+    handleSearchInput,
     handleSend,
     hasToken,
     headerTitle,
+    highlightSnippet,
     inputEl,
     inputText,
     isGenerating,
+    isSearching,
     loadSession,
+    loadSessionWithMessage,
     messagesEl,
     modelOptions,
     modelsStatus,
@@ -121,6 +136,9 @@ import {
     saveBaseUrl,
     saveBearerToken,
     saveModelSettings,
+    scrollTargetMessageId,
+    searchQuery,
+    searchResults,
     selectMode,
     selectModel,
     sessions,

@@ -15,8 +15,12 @@ import {
     inputEl,
     inputText,
     isGenerating,
+    isSearching,
     messagesEl,
     modelsStatus,
+    scrollTargetMessageId,
+    searchQuery,
+    searchResults,
     sessionsOpen,
     settings,
     thinking,
@@ -303,4 +307,61 @@ export const applySettings = (msg: any) => {
   settings.maxIterations = msg.settings.maxIterations || settings.maxIterations;
   settings.toolTimeout = msg.settings.toolTimeout || settings.toolTimeout;
   settings.temperature = msg.settings.temperature ?? settings.temperature;
+};
+
+// Session search actions
+let searchDebounceTimer: ReturnType<typeof setTimeout> | null = null;
+
+export const handleSearchInput = (query: string) => {
+  searchQuery.value = query;
+  
+  if (searchDebounceTimer) {
+    clearTimeout(searchDebounceTimer);
+  }
+  
+  if (!query.trim()) {
+    searchResults.value = [];
+    isSearching.value = false;
+    return;
+  }
+  
+  isSearching.value = true;
+  searchDebounceTimer = setTimeout(() => {
+    vscode.postMessage({ type: 'searchSessions', query: query.trim() });
+  }, 300);
+};
+
+export const clearSearch = () => {
+  searchQuery.value = '';
+  searchResults.value = [];
+  isSearching.value = false;
+  if (searchDebounceTimer) {
+    clearTimeout(searchDebounceTimer);
+    searchDebounceTimer = null;
+  }
+};
+
+export const clearScrollTarget = () => {
+  scrollTargetMessageId.value = null;
+};
+
+export const loadSessionWithMessage = (sessionId: string, messageId: string) => {
+  scrollTargetMessageId.value = messageId;
+  vscode.postMessage({ type: 'loadSession', sessionId });
+  clearSearch();
+  sessionsOpen.value = false;
+};
+
+export const highlightSnippet = (snippet: string, query: string): string => {
+  if (!query.trim()) return snippet;
+  
+  const words = query.trim().split(/\s+/).filter(w => w.length > 2);
+  let result = snippet;
+  
+  for (const word of words) {
+    const regex = new RegExp(`(${word})`, 'gi');
+    result = result.replace(regex, '<mark>$1</mark>');
+  }
+  
+  return result;
 };

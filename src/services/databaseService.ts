@@ -1,0 +1,611 @@
+import * as lancedb from '@lancedb/lancedb';
+import * as vscode from 'vscode';
+import { OllamaClient } from './ollamaClient';
+
+// ============================================================================
+// Types
+// ============================================================================
+
+export interface SessionRecord {
+  id: string;
+  title: string;
+  mode: string;
+  model: string;
+  created_at: number;
+  updated_at: number;
+}
+
+export interface MessageRecord {
+  id: string;
+  session_id: string;
+  role: 'user' | 'assistant' | 'tool';
+  content: string;
+  model?: string;
+  tool_name?: string;
+  tool_input?: string;
+  tool_output?: string;
+  timestamp: number;
+  vector?: number[];
+}
+
+export interface SearchResult {
+  message: MessageRecord;
+  session: SessionRecord;
+  snippet: string;
+  score: number;
+}
+
+// ============================================================================
+// Embedding Queue - Background processing of embeddings
+// ============================================================================
+
+interface EmbeddingQueueItem {
+  messageId: string;
+  content: string;
+}
+
+class EmbeddingQueue {
+  private queue: EmbeddingQueueItem[] = [];
+  private processing = false;
+  private embedFn: (text: string) => Promise<number[]>;
+  private updateFn: (messageId: string, vector: number[]) => Promise<void>;
+
+  constructor(
+    embedFn: (text: string) => Promise<number[]>,
+    updateFn: (messageId: string, vector: number[]) => Promise<void>
+  ) {
+    this.embedFn = embedFn;
+    this.updateFn = updateFn;
+  }
+
+  enqueue(messageId: string, content: string): void {
+    this.queue.push({ messageId, content });
+    this.processNext();
+  }
+
+  private processNext(): void {
+    if (this.processing || this.queue.length === 0) {
+      return;
+    }
+
+    this.processing = true;
+    const item = this.queue.shift()!;
+
+    setImmediate(async () => {
+      try {
+        const vector = await this.embedFn(item.content);
+        await this.updateFn(item.messageId, vector);
+      } catch (error) {
+        console.error(`Failed to embed message ${item.messageId}:`, error);
+      } finally {
+        this.processing = false;
+        this.processNext();
+      }
+    });
+  }
+
+  get pendingCount(): number {
+    return this.queue.length + (this.processing ? 1 : 0);
+  }
+}
+
+// ============================================================================
+// Database Service
+// ============================================================================
+
+export class DatabaseService {
+  private db: lancedb.Connection | null = null;
+  private sessionsTable: lancedb.Table | null = null;
+  private messagesTable: lancedb.Table | null = null;
+  private embeddingQueue: EmbeddingQueue | null = null;
+  private context: vscode.ExtensionContext;
+  private ollamaClient: OllamaClient | null = null;
+  private embeddingDimensions = 384; // sentence-transformers default
+  private initialized = false;
+
+  constructor(context: vscode.ExtensionContext) {
+    this.context = context;
+  }
+
+  // --------------------------------------------------------------------------
+  // Initialization
+  // --------------------------------------------------------------------------
+
+  async initialize(ollamaClient?: OllamaClient): Promise<void> {
+    if (this.initialized) {
+      return;
+    }
+
+    this.ollamaClient = ollamaClient || null;
+
+    const dbPath = vscode.Uri.joinPath(
+      this.context.globalStorageUri,
+      'ollama-copilot.lance'
+    ).fsPath;
+
+    // Ensure directory exists
+    await vscode.workspace.fs.createDirectory(this.context.globalStorageUri);
+
+    console.log(`Initializing LanceDB at: ${dbPath}`);
+    this.db = await lancedb.connect(dbPath);
+
+    // Initialize tables
+    await this.initializeTables();
+
+    // Initialize embedding queue
+    this.embeddingQueue = new EmbeddingQueue(
+      (text) => this.generateEmbedding(text),
+      (messageId, vector) => this.updateMessageVector(messageId, vector)
+    );
+
+    this.initialized = true;
+    console.log('DatabaseService initialized successfully');
+  }
+
+  private async initializeTables(): Promise<void> {
+    if (!this.db) {
+      throw new Error('Database not connected');
+    }
+
+    const tableNames = await this.db.tableNames();
+
+    // Sessions table
+    if (tableNames.includes('sessions')) {
+      this.sessionsTable = await this.db.openTable('sessions');
+    } else {
+      // Create with initial schema
+      this.sessionsTable = await this.db.createTable('sessions', [
+        {
+          id: '__schema__',
+          title: '',
+          mode: '',
+          model: '',
+          created_at: 0,
+          updated_at: 0
+        }
+      ]);
+      // Remove schema row
+      await this.sessionsTable.delete('id = "__schema__"');
+    }
+
+    // Messages table with vector column
+    if (tableNames.includes('messages')) {
+      this.messagesTable = await this.db.openTable('messages');
+      
+      // Check if schema has correct Float64 vectors by attempting a test update
+      // If the table has Int64 vectors from old schema, drop and recreate it
+      try {
+        // Try to detect schema issue by checking first row's vector type
+        const testRows = await this.messagesTable.query().limit(1).toArray();
+        if (testRows.length > 0) {
+          const row = testRows[0] as any;
+          if (row.vector && Array.isArray(row.vector) && row.vector.length > 0) {
+            // If the first element is an integer (no decimal), we have the old schema
+            if (Number.isInteger(row.vector[0])) {
+              console.log('Detected old Int64 vector schema, recreating messages table with Float64...');
+              await this.db.dropTable('messages');
+              this.messagesTable = null;
+            }
+          }
+        }
+      } catch (e) {
+        console.log('Could not verify schema, will recreate table:', e);
+        await this.db.dropTable('messages');
+        this.messagesTable = null;
+      }
+    }
+    
+    if (!this.messagesTable) {
+      // Create with initial schema including vector
+      // Use 0.0 to ensure Float64 type (not Int64) for compatibility with embeddings
+      const zeroVector = new Array(this.embeddingDimensions).fill(0.0);
+      this.messagesTable = await this.db.createTable('messages', [
+        {
+          id: '__schema__',
+          session_id: '',
+          role: 'user',
+          content: '',
+          model: '',
+          tool_name: '',
+          tool_input: '',
+          tool_output: '',
+          timestamp: 0,
+          vector: zeroVector
+        }
+      ]);
+      // Remove schema row
+      await this.messagesTable.delete('id = "__schema__"');
+
+      // Create FTS index on content
+      await this.messagesTable.createIndex('content', {
+        config: lancedb.Index.fts()
+      });
+    }
+  }
+
+  // --------------------------------------------------------------------------
+  // Embedding
+  // --------------------------------------------------------------------------
+
+  private async generateEmbedding(text: string): Promise<number[]> {
+    const config = vscode.workspace.getConfiguration('ollamaCopilot');
+    const provider = config.get<string>('embedding.provider', 'builtin');
+
+    if (provider === 'ollama' && this.ollamaClient) {
+      return this.generateOllamaEmbedding(text);
+    }
+
+    return this.generateBuiltinEmbedding(text);
+  }
+
+  private async generateOllamaEmbedding(text: string): Promise<number[]> {
+    if (!this.ollamaClient) {
+      throw new Error('Ollama client not available');
+    }
+
+    const config = vscode.workspace.getConfiguration('ollamaCopilot');
+    const model = config.get<string>('embedding.model', 'nomic-embed-text');
+    const baseUrl = config.get<string>('baseUrl', 'http://localhost:11434');
+
+    const response = await fetch(`${baseUrl}/api/embeddings`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ model, prompt: text })
+    });
+
+    if (!response.ok) {
+      throw new Error(`Ollama embedding failed: ${response.statusText}`);
+    }
+
+    const data = await response.json() as { embedding: number[] };
+    return data.embedding;
+  }
+
+  private async generateBuiltinEmbedding(text: string): Promise<number[]> {
+    // Use LanceDB's built-in embedding via the embedding registry
+    // For now, return a simple hash-based vector as placeholder
+    // TODO: Integrate with LanceDB's sentence-transformers embedding
+    // Use 0.0 to ensure Float64 type
+    const vector = new Array(this.embeddingDimensions).fill(0.0);
+    
+    // Simple hash-based embedding (placeholder until proper integration)
+    const words = text.toLowerCase().split(/\s+/);
+    for (let i = 0; i < words.length; i++) {
+      const word = words[i];
+      for (let j = 0; j < word.length; j++) {
+        const idx = (word.charCodeAt(j) * (i + 1) * (j + 1)) % this.embeddingDimensions;
+        vector[idx] += 1 / (words.length * word.length);
+      }
+    }
+
+    // Normalize
+    const magnitude = Math.sqrt(vector.reduce((sum, v) => sum + v * v, 0));
+    if (magnitude > 0) {
+      for (let i = 0; i < vector.length; i++) {
+        vector[i] /= magnitude;
+      }
+    }
+
+    return vector;
+  }
+
+  private async updateMessageVector(messageId: string, vector: number[]): Promise<void> {
+    if (!this.messagesTable) {
+      return;
+    }
+
+    await this.messagesTable.update({
+      where: `id = "${messageId}"`,
+      values: { vector }
+    });
+  }
+
+  // --------------------------------------------------------------------------
+  // Session CRUD
+  // --------------------------------------------------------------------------
+
+  async createSession(
+    title: string,
+    mode: string,
+    model: string
+  ): Promise<SessionRecord> {
+    if (!this.sessionsTable) {
+      throw new Error('Sessions table not initialized');
+    }
+
+    const session: SessionRecord = {
+      id: crypto.randomUUID(),
+      title,
+      mode,
+      model,
+      created_at: Date.now(),
+      updated_at: Date.now()
+    };
+
+    await this.sessionsTable.add([session as unknown as Record<string, unknown>]);
+    return session;
+  }
+
+  async getSession(id: string): Promise<SessionRecord | null> {
+    if (!this.sessionsTable) {
+      return null;
+    }
+
+    const results = await this.sessionsTable
+      .query()
+      .where(`id = "${id}"`)
+      .limit(1)
+      .toArray();
+
+    return results.length > 0 ? (results[0] as unknown as SessionRecord) : null;
+  }
+
+  async updateSession(id: string, updates: Partial<SessionRecord>): Promise<void> {
+    if (!this.sessionsTable) {
+      return;
+    }
+
+    await this.sessionsTable.update({
+      where: `id = "${id}"`,
+      values: { ...updates, updated_at: Date.now() }
+    });
+  }
+
+  async deleteSession(id: string): Promise<void> {
+    if (!this.sessionsTable || !this.messagesTable) {
+      return;
+    }
+
+    // Delete all messages for this session
+    await this.messagesTable.delete(`session_id = "${id}"`);
+    
+    // Delete the session
+    await this.sessionsTable.delete(`id = "${id}"`);
+  }
+
+  async listSessions(limit = 50): Promise<SessionRecord[]> {
+    if (!this.sessionsTable) {
+      return [];
+    }
+
+    const results = await this.sessionsTable
+      .query()
+      .limit(limit)
+      .toArray();
+
+    // Sort by updated_at descending (most recent first)
+    const sessions = results as unknown as SessionRecord[];
+    return sessions.sort((a, b) => b.updated_at - a.updated_at);
+  }
+
+  // --------------------------------------------------------------------------
+  // Message CRUD
+  // --------------------------------------------------------------------------
+
+  async addMessage(
+    sessionId: string,
+    role: 'user' | 'assistant' | 'tool',
+    content: string,
+    options: {
+      model?: string;
+      toolName?: string;
+      toolInput?: string;
+      toolOutput?: string;
+    } = {}
+  ): Promise<MessageRecord> {
+    if (!this.messagesTable) {
+      throw new Error('Messages table not initialized');
+    }
+
+    const message: MessageRecord = {
+      id: crypto.randomUUID(),
+      session_id: sessionId,
+      role,
+      content,
+      model: options.model,
+      tool_name: options.toolName,
+      tool_input: options.toolInput,
+      tool_output: options.toolOutput,
+      timestamp: Date.now(),
+      // Use 0.0 to ensure Float64 type for compatibility with embeddings
+      vector: new Array(this.embeddingDimensions).fill(0.0)
+    };
+
+    await this.messagesTable.add([message as unknown as Record<string, unknown>]);
+
+    // Queue embedding generation in background
+    if (content && this.embeddingQueue) {
+      this.embeddingQueue.enqueue(message.id, content);
+    }
+
+    // Update session's updated_at
+    await this.updateSession(sessionId, {});
+
+    return message;
+  }
+
+  async getSessionMessages(sessionId: string): Promise<MessageRecord[]> {
+    if (!this.messagesTable) {
+      return [];
+    }
+
+    const results = await this.messagesTable
+      .query()
+      .where(`session_id = "${sessionId}"`)
+      .toArray();
+
+    const messages = results as unknown as MessageRecord[];
+    return messages.sort((a, b) => a.timestamp - b.timestamp);
+  }
+
+  async deleteMessage(id: string): Promise<void> {
+    if (!this.messagesTable) {
+      return;
+    }
+
+    await this.messagesTable.delete(`id = "${id}"`);
+  }
+
+  // --------------------------------------------------------------------------
+  // Search
+  // --------------------------------------------------------------------------
+
+  async searchByKeyword(query: string, limit = 20): Promise<SearchResult[]> {
+    if (!this.messagesTable || !this.sessionsTable) {
+      return [];
+    }
+
+    try {
+      const results = await this.messagesTable
+        .search(query)
+        .limit(limit)
+        .toArray();
+
+      return this.enrichSearchResults(results as unknown as MessageRecord[]);
+    } catch (error) {
+      console.error('Keyword search failed:', error);
+      return [];
+    }
+  }
+
+  async searchSemantic(query: string, limit = 20): Promise<SearchResult[]> {
+    if (!this.messagesTable || !this.sessionsTable) {
+      return [];
+    }
+
+    try {
+      const queryVector = await this.generateEmbedding(query);
+      
+      const results = await this.messagesTable
+        .vectorSearch(queryVector)
+        .limit(limit)
+        .toArray();
+
+      return this.enrichSearchResults(results as unknown as MessageRecord[]);
+    } catch (error) {
+      console.error('Semantic search failed:', error);
+      return [];
+    }
+  }
+
+  async searchHybrid(query: string, limit = 20): Promise<SearchResult[]> {
+    if (!this.messagesTable || !this.sessionsTable) {
+      return [];
+    }
+
+    try {
+      // Perform both searches
+      const [keywordResults, semanticResults] = await Promise.all([
+        this.searchByKeyword(query, limit),
+        this.searchSemantic(query, limit)
+      ]);
+
+      // RRF (Reciprocal Rank Fusion) reranking
+      const k = 60; // RRF constant
+      const scores = new Map<string, number>();
+      const resultMap = new Map<string, SearchResult>();
+
+      // Score keyword results
+      keywordResults.forEach((result, rank) => {
+        const score = 1 / (k + rank + 1);
+        scores.set(result.message.id, (scores.get(result.message.id) || 0) + score);
+        resultMap.set(result.message.id, result);
+      });
+
+      // Score semantic results
+      semanticResults.forEach((result, rank) => {
+        const score = 1 / (k + rank + 1);
+        scores.set(result.message.id, (scores.get(result.message.id) || 0) + score);
+        if (!resultMap.has(result.message.id)) {
+          resultMap.set(result.message.id, result);
+        }
+      });
+
+      // Sort by combined score
+      const rankedIds = Array.from(scores.entries())
+        .sort((a, b) => b[1] - a[1])
+        .slice(0, limit)
+        .map(([id]) => id);
+
+      return rankedIds
+        .map(id => {
+          const result = resultMap.get(id)!;
+          result.score = scores.get(id)!;
+          return result;
+        });
+    } catch (error) {
+      console.error('Hybrid search failed:', error);
+      // Fallback to keyword search only
+      return this.searchByKeyword(query, limit);
+    }
+  }
+
+  private async enrichSearchResults(messages: MessageRecord[]): Promise<SearchResult[]> {
+    const results: SearchResult[] = [];
+    const sessionCache = new Map<string, SessionRecord>();
+
+    for (const message of messages) {
+      let session = sessionCache.get(message.session_id);
+      if (!session) {
+        session = await this.getSession(message.session_id) || undefined;
+        if (session) {
+          sessionCache.set(message.session_id, session);
+        }
+      }
+
+      if (session) {
+        results.push({
+          message,
+          session,
+          snippet: this.createSnippet(message.content),
+          score: 0
+        });
+      }
+    }
+
+    return results;
+  }
+
+  private createSnippet(content: string, maxLength = 150): string {
+    if (content.length <= maxLength) {
+      return content;
+    }
+    return content.substring(0, maxLength - 3) + '...';
+  }
+
+  // --------------------------------------------------------------------------
+  // Lifecycle
+  // --------------------------------------------------------------------------
+
+  async close(): Promise<void> {
+    // LanceDB connections don't need explicit close in JS
+    this.db = null;
+    this.sessionsTable = null;
+    this.messagesTable = null;
+    this.initialized = false;
+  }
+
+  get isInitialized(): boolean {
+    return this.initialized;
+  }
+}
+
+// Singleton instance
+let databaseServiceInstance: DatabaseService | null = null;
+
+export function getDatabaseService(context?: vscode.ExtensionContext): DatabaseService {
+  if (!databaseServiceInstance && context) {
+    databaseServiceInstance = new DatabaseService(context);
+  }
+  if (!databaseServiceInstance) {
+    throw new Error('DatabaseService not initialized. Call with context first.');
+  }
+  return databaseServiceInstance;
+}
+
+export function disposeDatabaseService(): void {
+  if (databaseServiceInstance) {
+    databaseServiceInstance.close();
+    databaseServiceInstance = null;
+  }
+}

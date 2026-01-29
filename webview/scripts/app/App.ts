@@ -18,13 +18,15 @@ import {
   currentProgressIndex,
   currentStreamIndex,
   hasToken,
+  isSearching,
   modelOptions,
+  searchResults,
   sessions,
   settings,
   temperatureSlider,
   timeline
 } from '../core/state';
-import type { MessageItem, ProgressItem } from '../core/types';
+import type { MessageItem, ProgressItem, SearchResultGroup } from '../core/types';
 
 export * from '../core/actions';
 export * from '../core/computed';
@@ -60,18 +62,55 @@ window.addEventListener('message', e => {
       sessions.value = msg.sessions || [];
       break;
 
-    case 'loadSessionMessages':
-      timeline.value = (msg.messages || []).map((m: any) => ({
-        id: `msg_${Date.now()}_${Math.random()}`,
-        type: 'message',
-        role: m.role,
-        content: m.content,
-        model: m.model
-      }));
+    case 'loadSessionMessages': {
+      const items: any[] = [];
+      let currentProgressGroup: any = null;
+      
+      for (const m of (msg.messages || [])) {
+        if (m.role === 'tool') {
+          // Group consecutive tool messages into progress groups
+          if (!currentProgressGroup) {
+            currentProgressGroup = {
+              id: `progress_${m.id}`,
+              type: 'progress',
+              title: 'Tool executions',
+              status: 'done',
+              collapsed: true,
+              actions: []
+            };
+            items.push(currentProgressGroup);
+          }
+          
+          // Add tool as action
+          const isError = m.content?.startsWith('Error:');
+          currentProgressGroup.actions.push({
+            id: m.id,
+            status: isError ? 'error' : 'success',
+            icon: '📄',
+            text: m.toolName || 'Tool',
+            detail: m.content?.split('\n')[0]?.substring(0, 50) || null
+          });
+        } else {
+          // Close any open progress group
+          currentProgressGroup = null;
+          
+          // Add regular message
+          items.push({
+            id: m.id || `msg_${Date.now()}_${Math.random()}`,
+            type: 'message',
+            role: m.role,
+            content: m.content,
+            model: m.model
+          });
+        }
+      }
+      
+      timeline.value = items;
       currentProgressIndex.value = null;
       currentStreamIndex.value = null;
       scrollToBottom();
       break;
+    }
 
     case 'addMessage':
       if (msg.message?.role === 'user') {
@@ -239,6 +278,11 @@ window.addEventListener('message', e => {
       }
       syncModelSelection();
       hasToken.value = !!msg.hasToken;
+      break;
+
+    case 'searchSessionsResult':
+      isSearching.value = false;
+      searchResults.value = (msg.results || []) as SearchResultGroup[];
       break;
   }
 });

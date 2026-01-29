@@ -1,5 +1,5 @@
 import { reactive, ref } from 'vue';
-import type { SessionItem, StatusMessage, TimelineItem } from './types';
+import type { SearchResultGroup, SessionItem, StatusMessage, TimelineItem } from './types';
 
 declare const acquireVsCodeApi: () => { postMessage: (message: any) => void };
 
@@ -74,3 +74,9 @@ export const temperatureSlider = ref(70);
 
 export const currentProgressIndex = ref<number | null>(null);
 export const currentStreamIndex = ref<number | null>(null);
+
+// Session search state
+export const searchQuery = ref('');
+export const searchResults = ref<SearchResultGroup[]>([]);
+export const isSearching = ref(false);
+export const scrollTargetMessageId = ref<string | null>(null);

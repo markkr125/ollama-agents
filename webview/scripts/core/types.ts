@@ -38,3 +38,19 @@ export type StatusMessage = {
   success: boolean;
   message: string;
 };
+
+export type SearchResultMessage = {
+  id: string;
+  content: string;
+  snippet: string;
+  role: string;
+};
+
+export type SearchResultGroup = {
+  session: {
+    id: string;
+    title: string;
+    timestamp: number;
+  };
+  messages: SearchResultMessage[];
+};

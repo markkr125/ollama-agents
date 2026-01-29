@@ -6,7 +6,7 @@ import { registerAgentMode } from './modes/agentMode';
 import { registerEditMode } from './modes/editMode';
 import { registerPlanMode } from './modes/planMode';
 import { CompletionProvider } from './providers/completionProvider';
-import { HistoryManager } from './services/historyManager';
+import { DatabaseService, disposeDatabaseService, getDatabaseService } from './services/databaseService';
 import { ModelManager } from './services/modelManager';
 import { OllamaClient } from './services/ollamaClient';
 import { TokenManager } from './services/tokenManager';
@@ -16,7 +16,7 @@ import { registerSetupWizard } from './webview/setupWizard';
 let client: OllamaClient;
 let tokenManager: TokenManager;
 let modelManager: ModelManager;
-let historyManager: HistoryManager;
+let databaseService: DatabaseService;
 let taskTracker: TaskTracker;
 let sessionManager: SessionManager;
 let completionProvider: CompletionProvider | undefined;
@@ -34,7 +34,11 @@ export async function activate(context: vscode.ExtensionContext) {
     
     client = new OllamaClient(config.baseUrl, bearerToken);
     modelManager = new ModelManager(client);
-    historyManager = new HistoryManager();
+    
+    // Initialize database service
+    databaseService = getDatabaseService(context);
+    await databaseService.initialize(client);
+    
     taskTracker = new TaskTracker(context);
     sessionManager = new SessionManager(context);
     outputChannel = vscode.window.createOutputChannel('Ollama Copilot');
@@ -112,9 +116,9 @@ export async function activate(context: vscode.ExtensionContext) {
       context.extensionUri,
       client,
       modelManager,
-      historyManager,
       tokenManager,
-      sessionManager
+      sessionManager,
+      databaseService
     );
     
     context.subscriptions.push(
@@ -171,7 +175,6 @@ export function deactivate() {
     modelManager.clearCache();
   }
 
-  if (historyManager) {
-    historyManager.clearAll();
-  }
+  // Close database connection
+  disposeDatabaseService();
 }
