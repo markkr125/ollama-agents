@@ -26,7 +26,7 @@ import {
   temperatureSlider,
   timeline
 } from '../core/state';
-import type { MessageItem, ProgressItem, SearchResultGroup } from '../core/types';
+import type { ActionItem, MessageItem, ProgressItem, SearchResultGroup } from '../core/types';
 
 export * from '../core/actions';
 export * from '../core/computed';
@@ -64,37 +64,66 @@ window.addEventListener('message', e => {
 
     case 'loadSessionMessages': {
       const items: any[] = [];
-      let currentProgressGroup: any = null;
-      
-      for (const m of (msg.messages || [])) {
+      const messages = msg.messages || [];
+
+      const getProgressTitleForTools = (toolNames: string[]) => {
+        const hasRead = toolNames.includes('read_file');
+        const hasWrite = toolNames.includes('write_file') || toolNames.includes('create_file');
+        const hasSearch = toolNames.includes('search_workspace');
+        const hasCommand = toolNames.includes('run_terminal_command') || toolNames.includes('run_command');
+        const hasListFiles = toolNames.includes('list_files');
+
+        if (hasSearch) return 'Searching codebase';
+        if (hasWrite && hasRead) return 'Modifying files';
+        if (hasWrite) return 'Writing files';
+        if (hasRead && toolNames.length > 1) return 'Reading files';
+        if (hasRead) return 'Analyzing code';
+        if (hasListFiles) return 'Exploring workspace';
+        if (hasCommand) return 'Running commands';
+        return 'Executing task';
+      };
+
+      for (let i = 0; i < messages.length; i++) {
+        const m = messages[i];
         if (m.role === 'tool') {
-          // Group consecutive tool messages into progress groups
-          if (!currentProgressGroup) {
-            currentProgressGroup = {
-              id: `progress_${m.id}`,
-              type: 'progress',
-              title: 'Tool executions',
-              status: 'done',
-              collapsed: true,
-              actions: []
-            };
-            items.push(currentProgressGroup);
+          const toolBlock: any[] = [];
+          let j = i;
+          while (j < messages.length && messages[j].role === 'tool') {
+            toolBlock.push(messages[j]);
+            j++;
           }
-          
-          // Add tool as action
-          const isError = m.content?.startsWith('Error:');
-          currentProgressGroup.actions.push({
-            id: m.id,
-            status: isError ? 'error' : 'success',
-            icon: '📄',
-            text: m.toolName || 'Tool',
-            detail: m.content?.split('\n')[0]?.substring(0, 50) || null
-          });
+
+          const toolNames = toolBlock
+            .map(toolMessage => toolMessage.toolName)
+            .filter(Boolean);
+          const storedTitle = toolBlock.find(toolMessage => toolMessage.progressTitle)?.progressTitle;
+          const groupTitle = storedTitle || getProgressTitleForTools(toolNames);
+
+          const progressGroup = {
+            id: `progress_${m.id}`,
+            type: 'progress',
+            title: groupTitle,
+            status: 'done',
+            collapsed: true,
+            actions: [] as ActionItem[]
+          };
+
+          for (const toolMessage of toolBlock) {
+            const isError = toolMessage.actionStatus
+              ? toolMessage.actionStatus === 'error'
+              : toolMessage.content?.startsWith('Error:');
+            progressGroup.actions.push({
+              id: toolMessage.id,
+              status: isError ? 'error' : 'success',
+              icon: toolMessage.actionIcon || '📄',
+              text: toolMessage.actionText || toolMessage.toolName || 'Tool',
+              detail: toolMessage.actionDetail || toolMessage.content?.split('\n')[0]?.substring(0, 50) || null
+            });
+          }
+
+          items.push(progressGroup);
+          i = j - 1;
         } else {
-          // Close any open progress group
-          currentProgressGroup = null;
-          
-          // Add regular message
           items.push({
             id: m.id || `msg_${Date.now()}_${Math.random()}`,
             type: 'message',
@@ -233,7 +262,7 @@ window.addEventListener('message', e => {
       ensureProgressGroup('Working on task');
       if (currentProgressIndex.value !== null) {
         const group = timeline.value[currentProgressIndex.value] as ProgressItem;
-        const action = {
+        const action: ActionItem = {
           id: `action_${Date.now()}_${Math.random()}`,
           status: 'error',
           icon: '✗',

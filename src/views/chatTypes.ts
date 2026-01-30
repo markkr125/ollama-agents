@@ -3,6 +3,13 @@ export interface ChatMessage {
   content: string;
   timestamp: number;
   toolName?: string;
+  toolInput?: string;
+  toolOutput?: string;
+  progressTitle?: string;
+  actionText?: string;
+  actionDetail?: string;
+  actionIcon?: string;
+  actionStatus?: 'success' | 'error';
   model?: string;
 }
 

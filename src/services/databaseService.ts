@@ -1,6 +1,60 @@
-import * as lancedb from '@lancedb/lancedb';
+import { randomUUID } from 'crypto';
 import * as vscode from 'vscode';
 import { OllamaClient } from './ollamaClient';
+
+// ---------------------------------------------------------------------------
+// Optional LanceDB types (loaded lazily at runtime)
+// ---------------------------------------------------------------------------
+
+type LanceDbTable = {
+  delete: (filter: string) => Promise<void>;
+  createIndex: (column: string, options: { config: unknown }) => Promise<void>;
+  query: () => {
+    where: (clause: string) => any;
+    limit: (n: number) => any;
+    toArray: () => Promise<any[]>;
+  };
+  add: (rows: Record<string, unknown>[]) => Promise<void>;
+  update: (options: { where: string; values: Record<string, unknown> }) => Promise<void>;
+  search: (query: string) => {
+    limit: (n: number) => any;
+    toArray: () => Promise<any[]>;
+  };
+  vectorSearch: (vector: number[]) => {
+    limit: (n: number) => any;
+    toArray: () => Promise<any[]>;
+  };
+};
+
+type LanceDbConnection = {
+  tableNames: () => Promise<string[]>;
+  openTable: (name: string) => Promise<LanceDbTable>;
+  createTable: (name: string, rows: Record<string, unknown>[]) => Promise<LanceDbTable>;
+  dropTable: (name: string) => Promise<void>;
+};
+
+type LanceDbModule = {
+  connect: (path: string) => Promise<LanceDbConnection>;
+  Index: { fts: () => unknown };
+};
+
+let cachedLanceDbModule: LanceDbModule | null = null;
+
+const generateId = (): string => {
+  try {
+    if (typeof randomUUID === 'function') {
+      return randomUUID();
+    }
+  } catch {
+    // fall through to fallback
+  }
+
+  const bytes = Array.from({ length: 16 }, () => Math.floor(Math.random() * 256));
+  bytes[6] = (bytes[6] & 0x0f) | 0x40; // version 4
+  bytes[8] = (bytes[8] & 0x3f) | 0x80; // variant 10
+  const hex = bytes.map(b => b.toString(16).padStart(2, '0')).join('');
+  return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`;
+};
 
 // ============================================================================
 // Types
@@ -24,6 +78,7 @@ export interface MessageRecord {
   tool_name?: string;
   tool_input?: string;
   tool_output?: string;
+  progress_title?: string;
   timestamp: number;
   vector?: number[];
 }
@@ -94,9 +149,10 @@ class EmbeddingQueue {
 // ============================================================================
 
 export class DatabaseService {
-  private db: lancedb.Connection | null = null;
-  private sessionsTable: lancedb.Table | null = null;
-  private messagesTable: lancedb.Table | null = null;
+  private db: LanceDbConnection | null = null;
+  private sessionsTable: LanceDbTable | null = null;
+  private messagesTable: LanceDbTable | null = null;
+  private lancedb: LanceDbModule | null = null;
   private embeddingQueue: EmbeddingQueue | null = null;
   private context: vscode.ExtensionContext;
   private ollamaClient: OllamaClient | null = null;
@@ -118,19 +174,34 @@ export class DatabaseService {
 
     this.ollamaClient = ollamaClient || null;
 
-    const dbPath = vscode.Uri.joinPath(
-      this.context.globalStorageUri,
-      'ollama-copilot.lance'
-    ).fsPath;
+    try {
+      if (!cachedLanceDbModule) {
+        const mod = await import('@lancedb/lancedb');
+        cachedLanceDbModule = mod as unknown as LanceDbModule;
+      }
 
-    // Ensure directory exists
-    await vscode.workspace.fs.createDirectory(this.context.globalStorageUri);
+      this.lancedb = cachedLanceDbModule;
 
-    console.log(`Initializing LanceDB at: ${dbPath}`);
-    this.db = await lancedb.connect(dbPath);
+      const dbPath = vscode.Uri.joinPath(
+        this.context.globalStorageUri,
+        'ollama-copilot.lance'
+      ).fsPath;
 
-    // Initialize tables
-    await this.initializeTables();
+      // Ensure directory exists
+      await vscode.workspace.fs.createDirectory(this.context.globalStorageUri);
+
+      console.log(`Initializing LanceDB at: ${dbPath}`);
+      this.db = await this.lancedb.connect(dbPath);
+
+      // Initialize tables
+      await this.initializeTables();
+    } catch (error) {
+      console.error('Failed to initialize LanceDB. Ensure dependencies are installed.', error);
+      void vscode.window.showErrorMessage(
+        'Ollama Copilot: LanceDB failed to load. Ensure @lancedb/lancedb is installed and available.'
+      );
+      throw error;
+    }
 
     // Initialize embedding queue
     this.embeddingQueue = new EmbeddingQueue(
@@ -143,7 +214,22 @@ export class DatabaseService {
   }
 
   private async initializeTables(): Promise<void> {
-    if (!this.db) {
+    if (!this.db || !this.lancedb) {
+      throw new Error('Database not connected');
+    }
+    try {
+      await this.setupTables();
+    } catch (error) {
+      console.error('LanceDB appears corrupted. Recreating database tables.', error);
+      void vscode.window.showWarningMessage(
+        'Ollama Copilot: Database appears corrupted. Recreating it now.'
+      );
+      await this.recreateTables();
+    }
+  }
+
+  private async setupTables(): Promise<void> {
+    if (!this.db || !this.lancedb) {
       throw new Error('Database not connected');
     }
 
@@ -171,56 +257,115 @@ export class DatabaseService {
     // Messages table with vector column
     if (tableNames.includes('messages')) {
       this.messagesTable = await this.db.openTable('messages');
-      
-      // Check if schema has correct Float64 vectors by attempting a test update
-      // If the table has Int64 vectors from old schema, drop and recreate it
+
+      // Validate vector schema; if incompatible, drop and recreate the table
       try {
-        // Try to detect schema issue by checking first row's vector type
-        const testRows = await this.messagesTable.query().limit(1).toArray();
-        if (testRows.length > 0) {
-          const row = testRows[0] as any;
-          if (row.vector && Array.isArray(row.vector) && row.vector.length > 0) {
-            // If the first element is an integer (no decimal), we have the old schema
-            if (Number.isInteger(row.vector[0])) {
-              console.log('Detected old Int64 vector schema, recreating messages table with Float64...');
-              await this.db.dropTable('messages');
-              this.messagesTable = null;
-            }
-          }
-        }
+        await this.validateMessageVectorSchema();
       } catch (e) {
-        console.log('Could not verify schema, will recreate table:', e);
+        console.log('Detected incompatible vector schema, recreating messages table:', e);
         await this.db.dropTable('messages');
         this.messagesTable = null;
       }
     }
-    
-    if (!this.messagesTable) {
-      // Create with initial schema including vector
-      // Use 0.0 to ensure Float64 type (not Int64) for compatibility with embeddings
-      const zeroVector = new Array(this.embeddingDimensions).fill(0.0);
-      this.messagesTable = await this.db.createTable('messages', [
-        {
-          id: '__schema__',
-          session_id: '',
-          role: 'user',
-          content: '',
-          model: '',
-          tool_name: '',
-          tool_input: '',
-          tool_output: '',
-          timestamp: 0,
-          vector: zeroVector
-        }
-      ]);
-      // Remove schema row
-      await this.messagesTable.delete('id = "__schema__"');
 
-      // Create FTS index on content
-      await this.messagesTable.createIndex('content', {
-        config: lancedb.Index.fts()
-      });
+    if (!this.messagesTable) {
+      await this.createMessagesTable();
     }
+  }
+
+  private async recreateTables(): Promise<void> {
+    if (!this.db || !this.lancedb) {
+      throw new Error('Database not connected');
+    }
+
+    try {
+      await this.db.dropTable('messages');
+    } catch {
+      // ignore if missing
+    }
+
+    try {
+      await this.db.dropTable('sessions');
+    } catch {
+      // ignore if missing
+    }
+
+    this.sessionsTable = null;
+    this.messagesTable = null;
+
+    // Recreate tables from scratch
+    this.sessionsTable = await this.db.createTable('sessions', [
+      {
+        id: '__schema__',
+        title: '',
+        mode: '',
+        model: '',
+        created_at: 0,
+        updated_at: 0
+      }
+    ]);
+    await this.sessionsTable.delete('id = "__schema__"');
+
+    await this.createMessagesTable();
+  }
+
+  private async createMessagesTable(): Promise<void> {
+    if (!this.db || !this.lancedb) {
+      throw new Error('Database not connected');
+    }
+
+    // Create with initial schema including vector
+    // Use 0.0 to ensure Float64 type (not Int64) for compatibility with embeddings
+    const zeroVector = new Array(this.embeddingDimensions).fill(0.0);
+    this.messagesTable = await this.db.createTable('messages', [
+      {
+        id: '__schema__',
+        session_id: '',
+        role: 'user',
+        content: '',
+        model: '',
+        tool_name: '',
+        tool_input: '',
+        tool_output: '',
+        progress_title: '',
+        timestamp: 0,
+        vector: zeroVector
+      }
+    ]);
+    // Remove schema row
+    await this.messagesTable.delete('id = "__schema__"');
+
+    // Create FTS index on content
+    await this.messagesTable.createIndex('content', {
+      config: this.lancedb.Index.fts()
+    });
+  }
+
+  private async validateMessageVectorSchema(): Promise<void> {
+    if (!this.messagesTable) {
+      return;
+    }
+
+    const testId = `__schema_check__${Date.now()}`;
+    const zeroVector = new Array(this.embeddingDimensions).fill(0.0);
+
+    await this.messagesTable.add([
+      {
+        id: testId,
+        session_id: '__schema__',
+        role: 'user',
+        content: '',
+        model: '',
+        tool_name: '',
+        tool_input: '',
+        tool_output: '',
+        progress_title: '',
+        timestamp: 0,
+        vector: zeroVector
+      }
+    ]);
+
+    await this.messagesTable.delete(`id = "${testId}"`);
   }
 
   // --------------------------------------------------------------------------
@@ -314,7 +459,7 @@ export class DatabaseService {
     }
 
     const session: SessionRecord = {
-      id: crypto.randomUUID(),
+      id: generateId(),
       title,
       mode,
       model,
@@ -391,6 +536,7 @@ export class DatabaseService {
       toolName?: string;
       toolInput?: string;
       toolOutput?: string;
+      progressTitle?: string;
     } = {}
   ): Promise<MessageRecord> {
     if (!this.messagesTable) {
@@ -398,7 +544,7 @@ export class DatabaseService {
     }
 
     const message: MessageRecord = {
-      id: crypto.randomUUID(),
+      id: generateId(),
       session_id: sessionId,
       role,
       content,
@@ -406,6 +552,7 @@ export class DatabaseService {
       tool_name: options.toolName,
       tool_input: options.toolInput,
       tool_output: options.toolOutput,
+      progress_title: options.progressTitle,
       timestamp: Date.now(),
       // Use 0.0 to ensure Float64 type for compatibility with embeddings
       vector: new Array(this.embeddingDimensions).fill(0.0)
@@ -582,6 +729,7 @@ export class DatabaseService {
     this.db = null;
     this.sessionsTable = null;
     this.messagesTable = null;
+    this.lancedb = null;
     this.initialized = false;
   }
 

@@ -249,7 +249,8 @@
         {
           "id": "ollamaCopilot.chatView",
           "name": "Copilot",
-          "type": "webview"
+          "type": "webview",
+          "icon": "$(robot)"
         }
       ]
     },

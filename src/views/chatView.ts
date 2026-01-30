@@ -154,9 +154,14 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     const settings = this.getSettingsPayload();
     const hasToken = await this.tokenManager.hasToken();
     
-    // Create initial session if none exists
+    // Load most recent session if none selected, otherwise create a new one
     if (!this.currentSessionId) {
-      await this.createNewSession();
+      const recentSessions = await this.databaseService.listSessions(1);
+      if (recentSessions.length > 0) {
+        await this.loadSession(recentSessions[0].id);
+      } else {
+        await this.createNewSession();
+      }
     }
     
     // Always send sessions list first - this doesn't depend on Ollama connection
@@ -235,27 +240,82 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
 
   private async loadSession(sessionId: string) {
     const session = await this.databaseService.getSession(sessionId);
-    if (session) {
-      this.currentSessionId = sessionId;
-      this.currentSession = session;
+    if (!session) {
+      this.view?.webview.postMessage({ type: 'clearMessages' });
+      await this.sendSessionsList();
+      return;
+    }
+
+    this.currentSessionId = sessionId;
+    this.currentSession = session;
+    try {
       this.currentMessages = await this.databaseService.getSessionMessages(sessionId);
-      
-      // Convert to ChatMessage format for frontend
-      const messages = this.currentMessages.map(m => ({
+    } catch (error: any) {
+      this.view?.webview.postMessage({ type: 'showError', message: error.message || 'Failed to load session.' });
+      this.view?.webview.postMessage({ type: 'clearMessages' });
+      await this.sendSessionsList();
+      return;
+    }
+    
+    // Convert to ChatMessage format for frontend
+    const messages = this.currentMessages.map(m => {
+      let actionText: string | undefined;
+      let actionDetail: string | undefined;
+      let actionIcon: string | undefined;
+      let actionStatus: 'success' | 'error' | undefined;
+      let toolArgs: any = undefined;
+
+      if (m.tool_input) {
+        try {
+          toolArgs = JSON.parse(m.tool_input);
+        } catch {
+          toolArgs = undefined;
+        }
+      }
+
+      if (m.role === 'tool' && m.tool_name) {
+        const isError = (m.content || '').startsWith('Error:') || (m.tool_output || '').startsWith('Error:');
+        actionStatus = isError ? 'error' : 'success';
+
+        const { actionText: baseText, actionDetail: baseDetail, actionIcon: baseIcon } =
+          this.getToolActionInfo(m.tool_name, toolArgs);
+
+        actionText = baseText;
+        actionIcon = baseIcon;
+        actionDetail = baseDetail;
+
+        if (!isError) {
+          const { actionText: successText, actionDetail: successDetail } =
+            this.getToolSuccessInfo(m.tool_name, toolArgs, m.tool_output || m.content || '');
+          actionText = successText || actionText;
+          actionDetail = successDetail || actionDetail;
+        } else {
+          actionDetail = (m.content || '').replace(/^Error:\s*/, '') || actionDetail;
+        }
+      }
+
+      return {
         id: m.id,
         role: m.role,
         content: m.content,
         timestamp: m.timestamp,
         toolName: m.tool_name,
+        toolInput: m.tool_input,
+        toolOutput: m.tool_output,
+        progressTitle: m.progress_title,
+        actionText,
+        actionDetail,
+        actionIcon,
+        actionStatus,
         model: m.model
-      }));
-      
-      this.view?.webview.postMessage({
-        type: 'loadSessionMessages',
-        messages
-      });
-      await this.sendSessionsList();
-    }
+      };
+    });
+    
+    this.view?.webview.postMessage({
+      type: 'loadSessionMessages',
+      messages
+    });
+    await this.sendSessionsList();
   }
 
   private async deleteSession(sessionId: string) {
@@ -625,7 +685,8 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
                   model: this.currentModel,
                   toolName: toolCall.name,
                   toolInput: JSON.stringify(toolCall.args),
-                  toolOutput: result.output
+                  toolOutput: result.output,
+                  progressTitle: groupTitle
                 }
               );
             }
@@ -664,7 +725,8 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
                   model: this.currentModel,
                   toolName: toolCall.name,
                   toolInput: JSON.stringify(toolCall.args),
-                  toolOutput: `Error: ${error.message}`
+                  toolOutput: `Error: ${error.message}`,
+                  progressTitle: groupTitle
                 }
               );
             }

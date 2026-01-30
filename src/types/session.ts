@@ -8,6 +8,7 @@ export interface ToolExecution {
   output: string;
   error?: string;
   timestamp: number;
+  progressTitle?: string;
 }
 
 export interface Session {
