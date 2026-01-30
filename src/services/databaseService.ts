@@ -515,12 +515,13 @@ export class DatabaseService {
 
     const results = await this.sessionsTable
       .query()
-      .limit(limit)
       .toArray();
 
     // Sort by updated_at descending (most recent first)
     const sessions = results as unknown as SessionRecord[];
-    return sessions.sort((a, b) => b.updated_at - a.updated_at);
+    return sessions
+      .sort((a, b) => b.updated_at - a.updated_at)
+      .slice(0, limit);
   }
 
   // --------------------------------------------------------------------------
