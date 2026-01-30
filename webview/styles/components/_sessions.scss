@@ -162,6 +162,18 @@
   padding: 8px;
 }
 
+.sessions-group {
+  margin-bottom: 10px;
+}
+
+.sessions-group-title {
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.6px;
+  color: var(--muted);
+  padding: 6px 4px;
+}
+
 .session-item {
   padding: 8px 10px;
   border-radius: 4px;
@@ -208,4 +220,11 @@
   &:hover {
     opacity: 1 !important;
   }
+}
+
+.sessions-loading {
+  text-align: center;
+  color: var(--muted);
+  font-size: 11px;
+  padding: 6px 0 10px;
 }

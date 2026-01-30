@@ -145,6 +145,9 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
         case 'searchSessions':
           await this.handleSearchSessions(data.query);
           break;
+        case 'loadMoreSessions':
+          await this.sendSessionsList(data.offset || 0, true);
+          break;
       }
     });
   }
@@ -157,8 +160,8 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     // Load most recent session if none selected, otherwise create a new one
     if (!this.currentSessionId) {
       const recentSessions = await this.databaseService.listSessions(1);
-      if (recentSessions.length > 0) {
-        await this.loadSession(recentSessions[0].id);
+      if (recentSessions.sessions.length > 0) {
+        await this.loadSession(recentSessions.sessions[0].id);
       } else {
         await this.createNewSession();
       }
@@ -223,9 +226,9 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     });
   }
 
-  private async sendSessionsList() {
-    const sessions = await this.databaseService.listSessions();
-    const sessionsList = sessions.map(s => ({
+  private async sendSessionsList(offset = 0, append = false) {
+    const sessionsPage = await this.databaseService.listSessions(50, offset);
+    const sessionsList = sessionsPage.sessions.map(s => ({
       id: s.id,
       title: s.title,
       timestamp: s.updated_at,
@@ -233,8 +236,9 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     }));
     
     this.view?.webview.postMessage({
-      type: 'loadSessions',
-      sessions: sessionsList
+      type: append ? 'appendSessions' : 'loadSessions',
+      sessions: sessionsList,
+      hasMore: sessionsPage.hasMore
     });
   }
 

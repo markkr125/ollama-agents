@@ -21,6 +21,9 @@ import {
     scrollTargetMessageId,
     searchQuery,
     searchResults,
+    sessions,
+    sessionsHasMore,
+    sessionsLoading,
     sessionsOpen,
     settings,
     thinking,
@@ -271,6 +274,12 @@ export const loadSession = (id: string) => {
 
 export const deleteSession = (id: string) => {
   vscode.postMessage({ type: 'deleteSession', sessionId: id });
+};
+
+export const loadMoreSessions = () => {
+  if (sessionsLoading.value || !sessionsHasMore.value) return;
+  sessionsLoading.value = true;
+  vscode.postMessage({ type: 'loadMoreSessions', offset: sessions.value.length });
 };
 
 export const updateThinking = (visible: boolean, message?: string) => {

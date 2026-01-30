@@ -69,6 +69,11 @@ export interface SessionRecord {
   updated_at: number;
 }
 
+export interface SessionsPage {
+  sessions: SessionRecord[];
+  hasMore: boolean;
+}
+
 export interface MessageRecord {
   id: string;
   session_id: string;
@@ -508,9 +513,9 @@ export class DatabaseService {
     await this.sessionsTable.delete(`id = "${id}"`);
   }
 
-  async listSessions(limit = 50): Promise<SessionRecord[]> {
+  async listSessions(limit = 50, offset = 0): Promise<SessionsPage> {
     if (!this.sessionsTable) {
-      return [];
+      return { sessions: [], hasMore: false };
     }
 
     const results = await this.sessionsTable
@@ -519,9 +524,12 @@ export class DatabaseService {
 
     // Sort by updated_at descending (most recent first)
     const sessions = results as unknown as SessionRecord[];
-    return sessions
-      .sort((a, b) => b.updated_at - a.updated_at)
-      .slice(0, limit);
+    const sortedSessions = sessions.sort((a, b) => b.updated_at - a.updated_at);
+    const page = sortedSessions.slice(offset, offset + limit);
+    return {
+      sessions: page,
+      hasMore: offset + limit < sortedSessions.length
+    };
   }
 
   // --------------------------------------------------------------------------

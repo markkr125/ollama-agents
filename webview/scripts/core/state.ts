@@ -10,6 +10,8 @@ export const inputEl = ref<HTMLTextAreaElement | null>(null);
 
 export const timeline = ref<TimelineItem[]>([]);
 export const sessions = ref<SessionItem[]>([]);
+export const sessionsHasMore = ref(false);
+export const sessionsLoading = ref(false);
 export const modelOptions = ref<string[]>([]);
 export const currentMode = ref('agent');
 export const currentModel = ref('');

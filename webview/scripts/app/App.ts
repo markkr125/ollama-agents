@@ -20,8 +20,11 @@ import {
   hasToken,
   isSearching,
   modelOptions,
+  scrollTargetMessageId,
   searchResults,
   sessions,
+  sessionsHasMore,
+  sessionsLoading,
   settings,
   temperatureSlider,
   timeline
@@ -60,6 +63,14 @@ window.addEventListener('message', e => {
 
     case 'loadSessions':
       sessions.value = msg.sessions || [];
+      sessionsHasMore.value = !!msg.hasMore;
+      sessionsLoading.value = false;
+      break;
+
+    case 'appendSessions':
+      sessions.value = [...sessions.value, ...(msg.sessions || [])];
+      sessionsHasMore.value = !!msg.hasMore;
+      sessionsLoading.value = false;
       break;
 
     case 'loadSessionMessages': {
@@ -137,7 +148,9 @@ window.addEventListener('message', e => {
       timeline.value = items;
       currentProgressIndex.value = null;
       currentStreamIndex.value = null;
-      scrollToBottom();
+      if (!scrollTargetMessageId.value) {
+        scrollToBottom();
+      }
       break;
     }
 

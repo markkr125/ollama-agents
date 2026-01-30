@@ -74,6 +74,8 @@
     <SessionsPanel
       :sessions-open="sessionsOpen"
       :sessions="sessions"
+      :has-more-sessions="sessionsHasMore"
+      :is-loading-more="sessionsLoading"
       :search-query="searchQuery"
       :search-results="searchResults"
       :is-searching="isSearching"
@@ -84,6 +86,7 @@
       :handle-search-input="handleSearchInput"
       :clear-search="clearSearch"
       :load-session-with-message="loadSessionWithMessage"
+      :load-more-sessions="loadMoreSessions"
       :highlight-snippet="highlightSnippet"
     />
   </div>
@@ -124,6 +127,7 @@ import {
     inputText,
     isGenerating,
     isSearching,
+    loadMoreSessions,
     loadSession,
     loadSessionWithMessage,
     messagesEl,
@@ -142,6 +146,8 @@ import {
     selectMode,
     selectModel,
     sessions,
+    sessionsHasMore,
+    sessionsLoading,
     sessionsOpen,
     settings,
     showPage,
