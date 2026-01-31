@@ -105,6 +105,11 @@
   display: flex;
   justify-content: space-between;
   align-items: center;
+  cursor: pointer;
+
+  &:hover {
+    background: var(--vscode-list-hoverBackground, var(--hover));
+  }
 
   .session-title {
     font-weight: 500;

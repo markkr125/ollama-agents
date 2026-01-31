@@ -87,3 +87,4 @@ export const searchVisibleCount = ref(20);
 export const searchIsRevealing = ref(false);
 export const isSearching = ref(false);
 export const scrollTargetMessageId = ref<string | null>(null);
+export const autoScrollLocked = ref(false);

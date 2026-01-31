@@ -11,6 +11,7 @@
           <div
             class="message"
             :class="item.role === 'user' ? 'message-user' : 'message-assistant'"
+            :id="`message-${item.id}`"
             :data-message-id="item.id"
           >
             <div v-if="item.role === 'assistant'" class="markdown-body" v-html="formatMarkdown(item.content)"></div>
@@ -310,14 +311,20 @@ watch(
 
     // Wait for DOM updates
     await nextTick();
+    await new Promise(resolve => requestAnimationFrame(() => resolve(null)));
 
     const container = localMessagesEl.value;
     if (!container) return;
 
-    // Find the message element by data attribute
-    const messageEl = container.querySelector(`[data-message-id="${messageId}"]`) as HTMLElement;
+    const targetId = `message-${messageId}`;
+    const safeSelector = typeof CSS !== 'undefined' && CSS.escape ? `#${CSS.escape(targetId)}` : null;
+    const messageEl = safeSelector
+      ? (container.querySelector(safeSelector) as HTMLElement | null)
+      : (container.querySelector(`[data-message-id="${messageId}"]`) as HTMLElement | null);
     if (messageEl) {
-      messageEl.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      const paddingOffset = 0;
+      const targetTop = messageEl.offsetTop - container.offsetTop - paddingOffset;
+      container.scrollTo({ top: Math.max(0, targetTop), behavior: 'auto' });
 
       // Add highlight effect
       messageEl.classList.add('highlight-flash');

@@ -263,8 +263,9 @@ export class DatabaseService {
     }
 
     // Create with initial schema including vector
-    // Use 0.0 to ensure Float64 type (not Int64) for compatibility with embeddings
+    // Use a non-integer float to ensure Float64 type (not Int64) for compatibility with embeddings
     const zeroVector = new Array(this.embeddingDimensions).fill(0.0);
+    zeroVector[0] = 0.5;
     this.messagesTable = await this.db.createTable('messages', [
       {
         id: '__schema__',
@@ -323,6 +324,7 @@ export class DatabaseService {
 
     const testId = `__schema_check__${Date.now()}`;
     const zeroVector = new Array(this.embeddingDimensions).fill(0.0);
+    zeroVector[0] = 0.5;
 
     await this.messagesTable.add([
       {

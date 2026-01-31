@@ -371,6 +371,9 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       }> = new Map();
 
       for (const result of results) {
+        if (result.message.role === 'tool') {
+          continue;
+        }
         if (!groupedResults.has(result.session.id)) {
           groupedResults.set(result.session.id, {
             session: {

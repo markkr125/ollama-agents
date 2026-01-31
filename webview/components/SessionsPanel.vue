@@ -29,7 +29,7 @@
         v-for="group in searchResults" 
         :key="group.session.id"
       >
-        <div class="search-result-session">
+        <div class="search-result-session" @click="onLoadSession(group.session.id)">
           <span class="session-title">{{ group.session.title }}</span>
           <span class="session-time">{{ formatTime(group.session.timestamp) }}</span>
         </div>
@@ -193,6 +193,10 @@ const onClearSearch = () => {
 
 const onLoadWithMessage = (sessionId: string, messageId: string) => {
   props.loadSessionWithMessage(sessionId, messageId);
+};
+
+const onLoadSession = (sessionId: string) => {
+  props.loadSession(sessionId);
 };
 
 const onSessionsScroll = (event: Event) => {

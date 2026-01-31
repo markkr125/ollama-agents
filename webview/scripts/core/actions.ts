@@ -2,37 +2,38 @@ import MarkdownIt from 'markdown-it';
 import taskLists from 'markdown-it-task-lists';
 import { nextTick } from 'vue';
 import {
-    agentSettings,
-    agentStatus,
-    allSearchResults,
-    bearerToken,
-    contextList,
-    currentMode,
-    currentModel,
-    currentPage,
-    currentProgressIndex,
-    currentStreamIndex,
-    dbMaintenanceStatus,
-    hasToken,
-    inputEl,
-    inputText,
-    isGenerating,
-    isSearching,
-    messagesEl,
-    modelsStatus,
-    scrollTargetMessageId,
-    searchIsRevealing,
-    searchQuery,
-    searchResults,
-    searchVisibleCount,
-    sessionsHasMore,
-    sessionsLoading,
-    sessionsOpen,
-    settings,
-    thinking,
-    timeline,
-    tokenVisible,
-    vscode
+  agentSettings,
+  agentStatus,
+  allSearchResults,
+  autoScrollLocked,
+  bearerToken,
+  contextList,
+  currentMode,
+  currentModel,
+  currentPage,
+  currentProgressIndex,
+  currentStreamIndex,
+  dbMaintenanceStatus,
+  hasToken,
+  inputEl,
+  inputText,
+  isGenerating,
+  isSearching,
+  messagesEl,
+  modelsStatus,
+  scrollTargetMessageId,
+  searchIsRevealing,
+  searchQuery,
+  searchResults,
+  searchVisibleCount,
+  sessionsHasMore,
+  sessionsLoading,
+  sessionsOpen,
+  settings,
+  thinking,
+  timeline,
+  tokenVisible,
+  vscode
 } from './state';
 import type { ActionItem, MessageItem, ProgressItem, SearchResultGroup, StatusMessage } from './types';
 
@@ -82,6 +83,9 @@ export const statusClass = (status: StatusMessage) => {
 
 export const scrollToBottom = () => {
   nextTick(() => {
+    if (scrollTargetMessageId.value || autoScrollLocked.value) {
+      return;
+    }
     if (messagesEl.value) {
       messagesEl.value.scrollTop = messagesEl.value.scrollHeight;
     }
@@ -412,9 +416,13 @@ export const clearSearch = () => {
 
 export const clearScrollTarget = () => {
   scrollTargetMessageId.value = null;
+  setTimeout(() => {
+    autoScrollLocked.value = false;
+  }, 300);
 };
 
 export const loadSessionWithMessage = (sessionId: string, messageId: string) => {
+  autoScrollLocked.value = true;
   scrollTargetMessageId.value = messageId;
   vscode.postMessage({ type: 'loadSession', sessionId });
   clearSearch();
