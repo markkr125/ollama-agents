@@ -161,13 +161,11 @@ export class DatabaseService {
 
       this.lancedb = cachedLanceDbModule;
 
-      const dbPath = vscode.Uri.joinPath(
-        this.context.globalStorageUri,
-        'ollama-copilot.lance'
-      ).fsPath;
+      const storageUri = this.context.storageUri ?? this.context.globalStorageUri;
+      const dbPath = vscode.Uri.joinPath(storageUri, 'ollama-copilot.lance').fsPath;
 
       // Ensure directory exists
-      await vscode.workspace.fs.createDirectory(this.context.globalStorageUri);
+      await vscode.workspace.fs.createDirectory(storageUri);
 
       console.log(`Initializing LanceDB at: ${dbPath}`);
       this.db = await this.lancedb.connect(dbPath);

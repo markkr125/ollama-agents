@@ -5,15 +5,17 @@ export class SessionIndexService {
   private db: any | null = null;
   private initialized = false;
   private dbUri: vscode.Uri;
+  private storageUri: vscode.Uri;
 
   constructor(private readonly context: vscode.ExtensionContext) {
-    this.dbUri = vscode.Uri.joinPath(this.context.globalStorageUri, 'sessions.sqlite');
+    this.storageUri = this.context.storageUri ?? this.context.globalStorageUri;
+    this.dbUri = vscode.Uri.joinPath(this.storageUri, 'sessions.sqlite');
   }
 
   async initialize(): Promise<void> {
     if (this.initialized) return;
 
-    await vscode.workspace.fs.createDirectory(this.context.globalStorageUri);
+    await vscode.workspace.fs.createDirectory(this.storageUri);
 
     // Use runtime require to avoid bundling issues
     // eslint-disable-next-line @typescript-eslint/no-var-requires

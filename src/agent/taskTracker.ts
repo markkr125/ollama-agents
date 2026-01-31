@@ -133,7 +133,7 @@ export class TaskTracker {
    * Load tasks from storage
    */
   private loadTasks(): void {
-    const stored = this.context.globalState.get<string>('ollamaCopilot.tasks');
+    const stored = this.context.workspaceState.get<string>('ollamaCopilot.tasks');
     if (stored) {
       try {
         const parsed = JSON.parse(stored);
@@ -149,6 +149,6 @@ export class TaskTracker {
    */
   private saveTasks(): void {
     const serialized = JSON.stringify(Array.from(this.tasks.entries()));
-    this.context.globalState.update('ollamaCopilot.tasks', serialized);
+    this.context.workspaceState.update('ollamaCopilot.tasks', serialized);
   }
 }

@@ -149,7 +149,7 @@ export class SessionManager {
    * Load sessions from storage
    */
   private loadSessions(): void {
-    const stored = this.context.globalState.get<string>('ollamaCopilot.sessions');
+    const stored = this.context.workspaceState.get<string>('ollamaCopilot.sessions');
     if (stored) {
       try {
         const parsed = JSON.parse(stored);
@@ -165,6 +165,6 @@ export class SessionManager {
    */
   private saveSessions(): void {
     const serialized = JSON.stringify(Array.from(this.sessions.entries()));
-    this.context.globalState.update('ollamaCopilot.sessions', serialized);
+    this.context.workspaceState.update('ollamaCopilot.sessions', serialized);
   }
 }
