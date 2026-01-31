@@ -425,8 +425,6 @@ export const loadSessionWithMessage = (sessionId: string, messageId: string) => 
   autoScrollLocked.value = true;
   scrollTargetMessageId.value = messageId;
   vscode.postMessage({ type: 'loadSession', sessionId });
-  clearSearch();
-  sessionsOpen.value = false;
 };
 
 export const highlightSnippet = (snippet: string, query: string): string => {
