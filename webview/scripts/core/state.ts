@@ -12,6 +12,7 @@ export const timeline = ref<TimelineItem[]>([]);
 export const sessions = ref<SessionItem[]>([]);
 export const sessionsHasMore = ref(false);
 export const sessionsLoading = ref(false);
+export const sessionsCursor = ref<number | null>(null);
 export const modelOptions = ref<string[]>([]);
 export const currentMode = ref('agent');
 export const currentModel = ref('');
@@ -61,6 +62,7 @@ export const agentSettings = reactive({
 export const connectionStatus = reactive<StatusMessage>({ visible: false, success: true, message: '' });
 export const modelsStatus = reactive<StatusMessage>({ visible: false, success: true, message: '' });
 export const agentStatus = reactive<StatusMessage>({ visible: false, success: true, message: '' });
+export const dbMaintenanceStatus = reactive<StatusMessage>({ visible: false, success: true, message: '' });
 
 export const tools = ref([
   { name: 'read_file', icon: '📄', desc: 'Read file contents' },
@@ -80,5 +82,8 @@ export const currentStreamIndex = ref<number | null>(null);
 // Session search state
 export const searchQuery = ref('');
 export const searchResults = ref<SearchResultGroup[]>([]);
+export const allSearchResults = ref<SearchResultGroup[]>([]);
+export const searchVisibleCount = ref(20);
+export const searchIsRevealing = ref(false);
 export const isSearching = ref(false);
 export const scrollTargetMessageId = ref<string | null>(null);

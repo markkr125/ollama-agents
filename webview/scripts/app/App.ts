@@ -1,4 +1,5 @@
 import {
+  applySearchResults,
   applySettings,
   clearToken,
   ensureProgressGroup,
@@ -17,12 +18,13 @@ import {
   currentModel,
   currentProgressIndex,
   currentStreamIndex,
+  dbMaintenanceStatus,
   hasToken,
   isSearching,
   modelOptions,
   scrollTargetMessageId,
-  searchResults,
   sessions,
+  sessionsCursor,
   sessionsHasMore,
   sessionsLoading,
   settings,
@@ -64,12 +66,14 @@ window.addEventListener('message', e => {
     case 'loadSessions':
       sessions.value = msg.sessions || [];
       sessionsHasMore.value = !!msg.hasMore;
+      sessionsCursor.value = typeof msg.nextOffset === 'number' ? msg.nextOffset : null;
       sessionsLoading.value = false;
       break;
 
     case 'appendSessions':
       sessions.value = [...sessions.value, ...(msg.sessions || [])];
       sessionsHasMore.value = !!msg.hasMore;
+      sessionsCursor.value = typeof msg.nextOffset === 'number' ? msg.nextOffset : sessionsCursor.value;
       sessionsLoading.value = false;
       break;
 
@@ -324,7 +328,18 @@ window.addEventListener('message', e => {
 
     case 'searchSessionsResult':
       isSearching.value = false;
-      searchResults.value = (msg.results || []) as SearchResultGroup[];
+      applySearchResults((msg.results || []) as SearchResultGroup[]);
       break;
+
+    case 'dbMaintenanceResult': {
+      const success = !!msg.success;
+      const deletedSessions = msg.deletedSessions ?? 0;
+      const deletedMessages = msg.deletedMessages ?? 0;
+      const message = success
+        ? `Maintenance complete. Removed ${deletedSessions} session(s), ${deletedMessages} message(s).`
+        : (msg.message || 'Database maintenance failed.');
+      showStatus(dbMaintenanceStatus, message, success);
+      break;
+    }
   }
 });

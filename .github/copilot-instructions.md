@@ -42,6 +42,7 @@ src/
 │   ├── modelCompatibility.ts # Model feature detection
 │   ├── modelManager.ts   # Model listing/selection
 │   ├── ollamaClient.ts   # Ollama API client
+│   ├── sessionIndexService.ts # SQLite-backed chat session index
 │   └── tokenManager.ts   # Bearer token management
 ├── views/
 │   └── chatView.ts       # Main chat sidebar (2400+ lines)
@@ -72,6 +73,7 @@ src/
 │   └── vite.config.ts     # Vite build for webview
 ├── templates/            # Prompt templates
 ├── types/                # TypeScript type definitions
+│   └── session.ts         # Shared chat + agent session types
 └── utils/                # Utility functions
 ```
 
@@ -104,6 +106,7 @@ The UI is built with Vue via Vite and emitted to `media/index.html`, `media/chat
 - **Sessions Management**: Create, switch, delete chat sessions
 - **Settings Page**: Continue.dev-style settings with navigation sidebar
 - **Progress Groups**: Copilot-style collapsible action groups
+- **Advanced DB Maintenance**: Manual cleanup of session/message orphans
 
 **UI Structure:**
 ```
@@ -168,6 +171,23 @@ Settings are defined in `package.json` under `contributes.configuration`:
 
 ---
 
+## Session Storage (Chat)
+
+Chat session metadata lives in SQLite via `SessionIndexService` (`sessions.sqlite`), while messages and semantic search stay in LanceDB (`ollama-copilot.lance`).
+
+- **Session index**: `SessionIndexService` (sql.js, offset pagination, sorted by `updated_at DESC`).
+- **Messages**: LanceDB `messages` table only (no `sessions` table). Legacy LanceDB sessions are migrated to SQLite on startup.
+- **Deletion**: `deleteSession()` removes from SQLite and deletes messages in LanceDB.
+
+## Pagination
+
+Session list uses offset-based pagination:
+
+- Backend returns `{ hasMore, nextOffset }`.
+- Webview requests `loadMoreSessions` with `{ offset }`.
+
+---
+
 ## Agent Execution Flow
 
 When user sends a message in Agent mode:
@@ -211,7 +231,9 @@ When user sends a message in Agent mode:
 | `finishProgressGroup` | - | Mark group complete |
 | `streamChunk` | `{content, model?}` | Stream assistant response (optional model name) |
 | `finalMessage` | `{content, model?}` | Finalize response (optional model name) |
-| `loadSessions` | `{sessions}` | Update sessions list |
+| `loadSessions` | `{sessions, hasMore, nextOffset}` | Update sessions list |
+| `appendSessions` | `{sessions, hasMore, nextOffset}` | Append sessions list |
+| `dbMaintenanceResult` | `{success, deletedSessions?, deletedMessages?, message?}` | Maintenance result |
 | `connectionTestResult` | `{success, message}` | Connection test result |
 | `bearerTokenSaved` | `{hasToken}` | Token save confirmation |
 
@@ -230,6 +252,8 @@ When user sends a message in Agent mode:
 | `saveSettings` | `{settings}` | Save settings |
 | `testConnection` | - | Test server connection |
 | `saveBearerToken` | `{token, testAfterSave?}` | Save bearer token (optionally test after) |
+| `loadMoreSessions` | `{offset}` | Load more sessions |
+| `runDbMaintenance` | - | Run DB maintenance cleanup |
 
 ---
 

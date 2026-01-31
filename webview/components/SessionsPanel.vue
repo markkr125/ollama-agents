@@ -23,7 +23,7 @@
     </div>
 
     <!-- Search results -->
-    <div v-if="searchResults.length > 0" class="search-results">
+    <div v-if="searchResults.length > 0" class="search-results" @scroll="onSearchResultsScroll">
       <div 
         class="search-result-group" 
         v-for="group in searchResults" 
@@ -43,6 +43,7 @@
           <span class="message-snippet" v-html="highlightSnippet(message.snippet, searchQuery)"></span>
         </div>
       </div>
+      <div v-if="isSearchRevealing" class="search-loading">Loading more...</div>
     </div>
 
     <!-- Regular sessions list (when not searching) -->
@@ -96,6 +97,14 @@ const props = defineProps({
     type: Array as PropType<SearchResultGroup[]>,
     default: () => []
   },
+  searchHasMore: {
+    type: Boolean,
+    default: false
+  },
+  isSearchRevealing: {
+    type: Boolean,
+    default: false
+  },
   isSearching: {
     type: Boolean,
     default: false
@@ -129,6 +138,10 @@ const props = defineProps({
     required: true
   },
   loadMoreSessions: {
+    type: Function as PropType<() => void>,
+    required: true
+  },
+  revealMoreSearchResults: {
     type: Function as PropType<() => void>,
     required: true
   },
@@ -190,6 +203,16 @@ const onSessionsScroll = (event: Event) => {
   const threshold = 40;
   if (target.scrollTop + target.clientHeight >= target.scrollHeight - threshold) {
     props.loadMoreSessions();
+  }
+};
+
+const onSearchResultsScroll = (event: Event) => {
+  if (!props.searchHasMore || props.isSearchRevealing) return;
+  const target = event.target as HTMLElement;
+  if (!target) return;
+  const threshold = Math.max(40, target.clientHeight * 0.5);
+  if (target.scrollTop + target.clientHeight >= target.scrollHeight - threshold) {
+    props.revealMoreSearchResults();
   }
 };
 </script>

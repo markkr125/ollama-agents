@@ -4,6 +4,7 @@ import { nextTick } from 'vue';
 import {
     agentSettings,
     agentStatus,
+    allSearchResults,
     bearerToken,
     contextList,
     currentMode,
@@ -11,6 +12,7 @@ import {
     currentPage,
     currentProgressIndex,
     currentStreamIndex,
+    dbMaintenanceStatus,
     hasToken,
     inputEl,
     inputText,
@@ -19,9 +21,10 @@ import {
     messagesEl,
     modelsStatus,
     scrollTargetMessageId,
+    searchIsRevealing,
     searchQuery,
     searchResults,
-    sessions,
+    searchVisibleCount,
     sessionsHasMore,
     sessionsLoading,
     sessionsOpen,
@@ -31,7 +34,7 @@ import {
     tokenVisible,
     vscode
 } from './state';
-import type { ActionItem, MessageItem, ProgressItem, StatusMessage } from './types';
+import type { ActionItem, MessageItem, ProgressItem, SearchResultGroup, StatusMessage } from './types';
 
 const markdown = new MarkdownIt({
   html: false,
@@ -200,6 +203,11 @@ export const saveAgentSettings = () => {
   showStatus(agentStatus, 'Agent settings saved!', true);
 };
 
+export const runDbMaintenance = () => {
+  showStatus(dbMaintenanceStatus, 'Running database maintenance...', true);
+  vscode.postMessage({ type: 'runDbMaintenance' });
+};
+
 export const toggleAutocomplete = () => {
   settings.enableAutoComplete = !settings.enableAutoComplete;
   vscode.postMessage({
@@ -279,7 +287,7 @@ export const deleteSession = (id: string) => {
 export const loadMoreSessions = () => {
   if (sessionsLoading.value || !sessionsHasMore.value) return;
   sessionsLoading.value = true;
-  vscode.postMessage({ type: 'loadMoreSessions', offset: sessions.value.length });
+  vscode.postMessage({ type: 'loadMoreSessions', offset: sessionsCursor.value ?? 0 });
 };
 
 export const updateThinking = (visible: boolean, message?: string) => {
@@ -320,6 +328,57 @@ export const applySettings = (msg: any) => {
 
 // Session search actions
 let searchDebounceTimer: ReturnType<typeof setTimeout> | null = null;
+const SEARCH_PAGE_SIZE = 20;
+
+const getSearchTotalCount = (groups: SearchResultGroup[]) =>
+  groups.reduce((sum, group) => sum + group.messages.length, 0);
+
+const buildVisibleSearchResults = (groups: SearchResultGroup[], maxMessages: number) => {
+  if (maxMessages <= 0) return [];
+  const visible: SearchResultGroup[] = [];
+  let remaining = maxMessages;
+
+  for (const group of groups) {
+    if (remaining <= 0) break;
+    const messages = group.messages.slice(0, remaining);
+    if (messages.length > 0) {
+      visible.push({ session: group.session, messages });
+      remaining -= messages.length;
+    }
+  }
+
+  return visible;
+};
+
+const updateVisibleSearchResults = () => {
+  searchResults.value = buildVisibleSearchResults(allSearchResults.value, searchVisibleCount.value);
+};
+
+const resetSearchState = () => {
+  allSearchResults.value = [];
+  searchResults.value = [];
+  searchVisibleCount.value = SEARCH_PAGE_SIZE;
+  searchIsRevealing.value = false;
+};
+
+export const applySearchResults = (groups: SearchResultGroup[]) => {
+  allSearchResults.value = groups;
+  const total = getSearchTotalCount(groups);
+  searchVisibleCount.value = Math.min(SEARCH_PAGE_SIZE, total);
+  searchIsRevealing.value = false;
+  updateVisibleSearchResults();
+};
+
+export const revealMoreSearchResults = () => {
+  const total = getSearchTotalCount(allSearchResults.value);
+  if (searchVisibleCount.value >= total) return;
+  searchIsRevealing.value = true;
+  searchVisibleCount.value = Math.min(searchVisibleCount.value + SEARCH_PAGE_SIZE, total);
+  updateVisibleSearchResults();
+  setTimeout(() => {
+    searchIsRevealing.value = false;
+  }, 150);
+};
 
 export const handleSearchInput = (query: string) => {
   searchQuery.value = query;
@@ -329,12 +388,13 @@ export const handleSearchInput = (query: string) => {
   }
   
   if (!query.trim()) {
-    searchResults.value = [];
+    resetSearchState();
     isSearching.value = false;
     return;
   }
   
   isSearching.value = true;
+  resetSearchState();
   searchDebounceTimer = setTimeout(() => {
     vscode.postMessage({ type: 'searchSessions', query: query.trim() });
   }, 300);
@@ -342,7 +402,7 @@ export const handleSearchInput = (query: string) => {
 
 export const clearSearch = () => {
   searchQuery.value = '';
-  searchResults.value = [];
+  resetSearchState();
   isSearching.value = false;
   if (searchDebounceTimer) {
     clearTimeout(searchDebounceTimer);

@@ -1,5 +1,5 @@
 import { computed } from 'vue';
-import { currentPage, settings, temperatureSlider } from './state';
+import { allSearchResults, currentPage, searchVisibleCount, settings, temperatureSlider } from './state';
 
 export const temperatureDisplay = computed(() => (temperatureSlider.value / 100).toFixed(1));
 
@@ -11,3 +11,9 @@ export const toolTimeoutSeconds = computed({
 });
 
 export const headerTitle = computed(() => (currentPage.value === 'settings' ? 'Settings' : 'Copilot'));
+
+export const searchTotalCount = computed(() =>
+  allSearchResults.value.reduce((sum, group) => sum + group.messages.length, 0)
+);
+
+export const searchHasMore = computed(() => searchVisibleCount.value < searchTotalCount.value);

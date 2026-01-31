@@ -5,10 +5,11 @@ import { GitOperations } from '../agent/gitOperations';
 import { SessionManager } from '../agent/sessionManager';
 import { ToolRegistry } from '../agent/toolRegistry';
 import { getConfig, getModeConfig } from '../config/settings';
-import { DatabaseService, MessageRecord, SessionRecord } from '../services/databaseService';
+import { DatabaseService } from '../services/databaseService';
 import { ModelManager } from '../services/modelManager';
 import { OllamaClient } from '../services/ollamaClient';
 import { TokenManager } from '../services/tokenManager';
+import { MessageRecord, SessionRecord } from '../types/session';
 import { ChatMessage, ContextItem } from './chatTypes';
 
 export class ChatViewProvider implements vscode.WebviewViewProvider {
@@ -146,7 +147,10 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
           await this.handleSearchSessions(data.query);
           break;
         case 'loadMoreSessions':
-          await this.sendSessionsList(data.offset || 0, true);
+          await this.sendSessionsList(data.offset, true);
+          break;
+        case 'runDbMaintenance':
+          await this.runDbMaintenance();
           break;
       }
     });
@@ -238,8 +242,27 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     this.view?.webview.postMessage({
       type: append ? 'appendSessions' : 'loadSessions',
       sessions: sessionsList,
-      hasMore: sessionsPage.hasMore
+      hasMore: sessionsPage.hasMore,
+      nextOffset: sessionsPage.nextOffset
     });
+  }
+
+  private async runDbMaintenance() {
+    try {
+      const result = await this.databaseService.runMaintenance();
+      this.view?.webview.postMessage({
+        type: 'dbMaintenanceResult',
+        success: true,
+        deletedSessions: result.deletedSessions,
+        deletedMessages: result.deletedMessages
+      });
+    } catch (error: any) {
+      this.view?.webview.postMessage({
+        type: 'dbMaintenanceResult',
+        success: false,
+        message: error?.message || 'Database maintenance failed.'
+      });
+    }
   }
 
   private async loadSession(sessionId: string) {
@@ -339,7 +362,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     }
 
     try {
-      const results = await this.databaseService.searchHybrid(query, 20);
+      const results = await this.databaseService.searchHybrid(query, 50);
       
       // Group results by session
       const groupedResults: Map<string, {

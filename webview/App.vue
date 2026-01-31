@@ -67,6 +67,8 @@
         :set-tool-timeout-seconds="setToolTimeoutSecondsValue"
         :save-agent-settings="saveAgentSettings"
         :agent-status="agentStatus"
+        :run-db-maintenance="runDbMaintenance"
+        :db-maintenance-status="dbMaintenanceStatus"
         :tools="tools"
       />
     </div>
@@ -78,6 +80,8 @@
       :is-loading-more="sessionsLoading"
       :search-query="searchQuery"
       :search-results="searchResults"
+      :search-has-more="searchHasMore"
+      :is-search-revealing="searchIsRevealing"
       :is-searching="isSearching"
       :load-session="loadSession"
       :delete-session="deleteSession"
@@ -87,6 +91,7 @@
       :clear-search="clearSearch"
       :load-session-with-message="loadSessionWithMessage"
       :load-more-sessions="loadMoreSessions"
+      :reveal-more-search-results="revealMoreSearchResults"
       :highlight-snippet="highlightSnippet"
     />
   </div>
@@ -114,6 +119,7 @@ import {
     currentMode,
     currentModel,
     currentPage,
+    dbMaintenanceStatus,
     deleteSession,
     formatMarkdown,
     formatTime,
@@ -136,11 +142,15 @@ import {
     newChat,
     removeContext,
     resizeInput,
+    revealMoreSearchResults,
+    runDbMaintenance,
     saveAgentSettings,
     saveBaseUrl,
     saveBearerToken,
     saveModelSettings,
     scrollTargetMessageId,
+    searchHasMore,
+    searchIsRevealing,
     searchQuery,
     searchResults,
     selectMode,

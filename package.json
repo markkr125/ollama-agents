@@ -290,6 +290,7 @@
   },
   "dependencies": {
     "@lancedb/lancedb": "^0.23.0",
-    "apache-arrow": "^18.1.0"
+    "apache-arrow": "^18.1.0",
+    "sql.js": "^1.10.3"
   }
 }

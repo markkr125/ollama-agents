@@ -1,6 +1,8 @@
 import { randomUUID } from 'crypto';
 import * as vscode from 'vscode';
+import { MessageRecord, SessionRecord, SessionsPage } from '../types/session';
 import { OllamaClient } from './ollamaClient';
+import { SessionIndexService } from './sessionIndexService';
 
 // ---------------------------------------------------------------------------
 // Optional LanceDB types (loaded lazily at runtime)
@@ -55,38 +57,6 @@ const generateId = (): string => {
   const hex = bytes.map(b => b.toString(16).padStart(2, '0')).join('');
   return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`;
 };
-
-// ============================================================================
-// Types
-// ============================================================================
-
-export interface SessionRecord {
-  id: string;
-  title: string;
-  mode: string;
-  model: string;
-  created_at: number;
-  updated_at: number;
-}
-
-export interface SessionsPage {
-  sessions: SessionRecord[];
-  hasMore: boolean;
-}
-
-export interface MessageRecord {
-  id: string;
-  session_id: string;
-  role: 'user' | 'assistant' | 'tool';
-  content: string;
-  model?: string;
-  tool_name?: string;
-  tool_input?: string;
-  tool_output?: string;
-  progress_title?: string;
-  timestamp: number;
-  vector?: number[];
-}
 
 export interface SearchResult {
   message: MessageRecord;
@@ -155,17 +125,19 @@ class EmbeddingQueue {
 
 export class DatabaseService {
   private db: LanceDbConnection | null = null;
-  private sessionsTable: LanceDbTable | null = null;
+  private legacySessionsTable: LanceDbTable | null = null;
   private messagesTable: LanceDbTable | null = null;
   private lancedb: LanceDbModule | null = null;
   private embeddingQueue: EmbeddingQueue | null = null;
   private context: vscode.ExtensionContext;
   private ollamaClient: OllamaClient | null = null;
+  private sessionIndex: SessionIndexService;
   private embeddingDimensions = 384; // sentence-transformers default
   private initialized = false;
 
   constructor(context: vscode.ExtensionContext) {
     this.context = context;
+    this.sessionIndex = new SessionIndexService(context);
   }
 
   // --------------------------------------------------------------------------
@@ -178,6 +150,8 @@ export class DatabaseService {
     }
 
     this.ollamaClient = ollamaClient || null;
+
+    await this.sessionIndex.initialize();
 
     try {
       if (!cachedLanceDbModule) {
@@ -240,25 +214,6 @@ export class DatabaseService {
 
     const tableNames = await this.db.tableNames();
 
-    // Sessions table
-    if (tableNames.includes('sessions')) {
-      this.sessionsTable = await this.db.openTable('sessions');
-    } else {
-      // Create with initial schema
-      this.sessionsTable = await this.db.createTable('sessions', [
-        {
-          id: '__schema__',
-          title: '',
-          mode: '',
-          model: '',
-          created_at: 0,
-          updated_at: 0
-        }
-      ]);
-      // Remove schema row
-      await this.sessionsTable.delete('id = "__schema__"');
-    }
-
     // Messages table with vector column
     if (tableNames.includes('messages')) {
       this.messagesTable = await this.db.openTable('messages');
@@ -276,6 +231,8 @@ export class DatabaseService {
     if (!this.messagesTable) {
       await this.createMessagesTable();
     }
+
+    await this.migrateLegacySessions(tableNames);
   }
 
   private async recreateTables(): Promise<void> {
@@ -295,22 +252,10 @@ export class DatabaseService {
       // ignore if missing
     }
 
-    this.sessionsTable = null;
+    this.legacySessionsTable = null;
     this.messagesTable = null;
 
-    // Recreate tables from scratch
-    this.sessionsTable = await this.db.createTable('sessions', [
-      {
-        id: '__schema__',
-        title: '',
-        mode: '',
-        model: '',
-        created_at: 0,
-        updated_at: 0
-      }
-    ]);
-    await this.sessionsTable.delete('id = "__schema__"');
-
+    // Recreate messages table from scratch
     await this.createMessagesTable();
   }
 
@@ -344,6 +289,33 @@ export class DatabaseService {
     await this.messagesTable.createIndex('content', {
       config: this.lancedb.Index.fts()
     });
+  }
+
+  private async migrateLegacySessions(tableNames?: string[]): Promise<void> {
+    if (!this.db) {
+      return;
+    }
+
+    const names = tableNames || await this.db.tableNames();
+    if (!names.includes('sessions')) {
+      return;
+    }
+
+    try {
+      this.legacySessionsTable = await this.db.openTable('sessions');
+      const results = await this.legacySessionsTable.query().toArray();
+      const sessions = (results as unknown as SessionRecord[])
+        .filter(session => session.id && session.id !== '__schema__');
+
+      for (const session of sessions) {
+        await this.sessionIndex.upsertSession(session);
+      }
+
+      await this.db.dropTable('sessions');
+      this.legacySessionsTable = null;
+    } catch (error) {
+      console.error('Failed to migrate legacy sessions table:', error);
+    }
   }
 
   private async validateMessageVectorSchema(): Promise<void> {
@@ -459,10 +431,6 @@ export class DatabaseService {
     mode: string,
     model: string
   ): Promise<SessionRecord> {
-    if (!this.sessionsTable) {
-      throw new Error('Sessions table not initialized');
-    }
-
     const session: SessionRecord = {
       id: generateId(),
       title,
@@ -472,64 +440,32 @@ export class DatabaseService {
       updated_at: Date.now()
     };
 
-    await this.sessionsTable.add([session as unknown as Record<string, unknown>]);
+    await this.sessionIndex.createSession(session);
     return session;
   }
 
   async getSession(id: string): Promise<SessionRecord | null> {
-    if (!this.sessionsTable) {
-      return null;
-    }
-
-    const results = await this.sessionsTable
-      .query()
-      .where(`id = "${id}"`)
-      .limit(1)
-      .toArray();
-
-    return results.length > 0 ? (results[0] as unknown as SessionRecord) : null;
+    return this.sessionIndex.getSession(id);
   }
 
   async updateSession(id: string, updates: Partial<SessionRecord>): Promise<void> {
-    if (!this.sessionsTable) {
-      return;
-    }
-
-    await this.sessionsTable.update({
-      where: `id = "${id}"`,
-      values: { ...updates, updated_at: Date.now() }
-    });
+    await this.sessionIndex.updateSession(id, updates);
   }
 
   async deleteSession(id: string): Promise<void> {
-    if (!this.sessionsTable || !this.messagesTable) {
+    if (!this.messagesTable) {
       return;
     }
 
+    // Delete the session from SQLite
+    await this.sessionIndex.deleteSession(id);
+
     // Delete all messages for this session
     await this.messagesTable.delete(`session_id = "${id}"`);
-    
-    // Delete the session
-    await this.sessionsTable.delete(`id = "${id}"`);
   }
 
   async listSessions(limit = 50, offset = 0): Promise<SessionsPage> {
-    if (!this.sessionsTable) {
-      return { sessions: [], hasMore: false };
-    }
-
-    const results = await this.sessionsTable
-      .query()
-      .toArray();
-
-    // Sort by updated_at descending (most recent first)
-    const sessions = results as unknown as SessionRecord[];
-    const sortedSessions = sessions.sort((a, b) => b.updated_at - a.updated_at);
-    const page = sortedSessions.slice(offset, offset + limit);
-    return {
-      sessions: page,
-      hasMore: offset + limit < sortedSessions.length
-    };
+    return this.sessionIndex.listSessions(limit, offset);
   }
 
   // --------------------------------------------------------------------------
@@ -607,7 +543,7 @@ export class DatabaseService {
   // --------------------------------------------------------------------------
 
   async searchByKeyword(query: string, limit = 20): Promise<SearchResult[]> {
-    if (!this.messagesTable || !this.sessionsTable) {
+    if (!this.messagesTable) {
       return [];
     }
 
@@ -625,7 +561,7 @@ export class DatabaseService {
   }
 
   async searchSemantic(query: string, limit = 20): Promise<SearchResult[]> {
-    if (!this.messagesTable || !this.sessionsTable) {
+    if (!this.messagesTable) {
       return [];
     }
 
@@ -645,7 +581,7 @@ export class DatabaseService {
   }
 
   async searchHybrid(query: string, limit = 20): Promise<SearchResult[]> {
-    if (!this.messagesTable || !this.sessionsTable) {
+    if (!this.messagesTable) {
       return [];
     }
 
@@ -696,6 +632,43 @@ export class DatabaseService {
     }
   }
 
+  // --------------------------------------------------------------------------
+  // Maintenance
+  // --------------------------------------------------------------------------
+
+  async runMaintenance(): Promise<{ deletedSessions: number; deletedMessages: number }> {
+    if (!this.messagesTable) {
+      return { deletedSessions: 0, deletedMessages: 0 };
+    }
+
+    const sessions = await this.sessionIndex.listAllSessions();
+    const sessionIdSet = new Set(sessions.map(session => session.id));
+
+    const messages = await this.messagesTable.query().toArray();
+    const messageRecords = messages as unknown as MessageRecord[];
+
+    let deletedMessages = 0;
+    const messageSessionIds = new Set<string>();
+
+    for (const message of messageRecords) {
+      messageSessionIds.add(message.session_id);
+      if (!sessionIdSet.has(message.session_id)) {
+        await this.messagesTable.delete(`id = "${message.id}"`);
+        deletedMessages++;
+      }
+    }
+
+    let deletedSessions = 0;
+    for (const session of sessions) {
+      if (!messageSessionIds.has(session.id)) {
+        await this.sessionIndex.deleteSession(session.id);
+        deletedSessions++;
+      }
+    }
+
+    return { deletedSessions, deletedMessages };
+  }
+
   private async enrichSearchResults(messages: MessageRecord[]): Promise<SearchResult[]> {
     const results: SearchResult[] = [];
     const sessionCache = new Map<string, SessionRecord>();
@@ -736,7 +709,7 @@ export class DatabaseService {
   async close(): Promise<void> {
     // LanceDB connections don't need explicit close in JS
     this.db = null;
-    this.sessionsTable = null;
+    this.legacySessionsTable = null;
     this.messagesTable = null;
     this.lancedb = null;
     this.initialized = false;

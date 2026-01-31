@@ -84,6 +84,13 @@
   padding: 8px;
 }
 
+.search-loading {
+  text-align: center;
+  color: var(--muted);
+  font-size: 11px;
+  padding: 6px 0 10px;
+}
+
 .search-result-group {
   margin-bottom: 12px;
   background: var(--vscode-input-background);
