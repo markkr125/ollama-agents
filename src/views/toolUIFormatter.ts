@@ -1,0 +1,118 @@
+export function getProgressGroupTitle(toolCalls: Array<{ name: string; args: any }>): string {
+  const hasRead = toolCalls.some(t => t.name === 'read_file');
+  const hasWrite = toolCalls.some(t => t.name === 'write_file' || t.name === 'create_file');
+  const hasSearch = toolCalls.some(t => t.name === 'search_workspace');
+  const hasCommand = toolCalls.some(t => t.name === 'run_command');
+  const hasListFiles = toolCalls.some(t => t.name === 'list_files');
+
+  if (hasSearch) return 'Searching codebase';
+  if (hasWrite && hasRead) return 'Modifying files';
+  if (hasWrite) return 'Writing files';
+  if (hasRead && toolCalls.length > 1) return 'Reading files';
+  if (hasRead) return 'Analyzing code';
+  if (hasListFiles) return 'Exploring workspace';
+  if (hasCommand) return 'Running commands';
+  return 'Executing task';
+}
+
+export function getToolActionInfo(
+  toolName: string,
+  args: any
+): { actionText: string; actionDetail: string; actionIcon: string } {
+  const path = args?.path || args?.file || '';
+  const fileName = path ? path.split('/').pop() : '';
+
+  switch (toolName) {
+    case 'read_file':
+      return {
+        actionText: `Read ${fileName || 'file'}`,
+        actionDetail: args?.startLine ? `lines ${args.startLine} to ${args.endLine || 'end'}` : '',
+        actionIcon: '📄'
+      };
+    case 'write_file':
+      return {
+        actionText: `Write ${fileName || 'file'}`,
+        actionDetail: '',
+        actionIcon: '✏️'
+      };
+    case 'create_file':
+      return {
+        actionText: `Create ${fileName || 'file'}`,
+        actionDetail: '',
+        actionIcon: '📁'
+      };
+    case 'list_files':
+      return {
+        actionText: `List ${path || 'workspace'}`,
+        actionDetail: '',
+        actionIcon: '📋'
+      };
+    case 'search_workspace':
+      return {
+        actionText: `Search for "${args?.query || 'pattern'}"`,
+        actionDetail: args?.filePattern ? `in ${args.filePattern}` : '',
+        actionIcon: '🔍'
+      };
+    case 'run_command':
+      return {
+        actionText: 'Run command',
+        actionDetail: (args?.command || '').substring(0, 30),
+        actionIcon: '⚡'
+      };
+    default:
+      return {
+        actionText: toolName,
+        actionDetail: '',
+        actionIcon: '🔧'
+      };
+  }
+}
+
+export function getToolSuccessInfo(
+  toolName: string,
+  args: any,
+  output: string
+): { actionText: string; actionDetail: string } {
+  const path = args?.path || args?.file || '';
+  const fileName = path ? path.split('/').pop() : 'file';
+
+  switch (toolName) {
+    case 'read_file': {
+      const lines = output?.split('\n').length || 0;
+      return {
+        actionText: `Read ${fileName}`,
+        actionDetail: `${lines} lines`
+      };
+    }
+    case 'write_file':
+    case 'create_file':
+      return {
+        actionText: `Wrote ${fileName}`,
+        actionDetail: ''
+      };
+    case 'list_files': {
+      const items = output?.split('\n').filter(Boolean).length || 0;
+      return {
+        actionText: `Listed ${path || 'workspace'}`,
+        actionDetail: `${items} items`
+      };
+    }
+    case 'search_workspace': {
+      const matches = output?.split('\n').filter(Boolean).length || 0;
+      return {
+        actionText: `Searched "${args?.query || ''}"`,
+        actionDetail: `${matches} results`
+      };
+    }
+    case 'run_command':
+      return {
+        actionText: 'Command completed',
+        actionDetail: ''
+      };
+    default:
+      return {
+        actionText: toolName,
+        actionDetail: 'completed'
+      };
+  }
+}

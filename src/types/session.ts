@@ -63,5 +63,5 @@ export interface MessageRecord {
   tool_output?: string;
   progress_title?: string;
   timestamp: number;
-  vector?: number[];
+  vector?: number[] | Float32Array;
 }

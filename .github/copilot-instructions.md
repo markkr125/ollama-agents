@@ -39,13 +39,18 @@ src/
 │   ├── contextBuilder.ts # Builds context for prompts
 │   ├── editManager.ts    # Manages edit operations
 │   ├── historyManager.ts # Conversation history
+│   ├── agentChatExecutor.ts # Agent chat execution loop + tool handling
 │   ├── modelCompatibility.ts # Model feature detection
 │   ├── modelManager.ts   # Model listing/selection
 │   ├── ollamaClient.ts   # Ollama API client
 │   ├── sessionIndexService.ts # SQLite-backed chat session index
 │   └── tokenManager.ts   # Bearer token management
 ├── views/
-│   └── chatView.ts       # Main chat sidebar (2400+ lines)
+│   ├── chatView.ts       # Webview provider (thin orchestration)
+│   ├── chatSessionController.ts # Session state + messages + list/search
+│   ├── settingsHandler.ts # Settings + token + connection handling
+│   ├── toolUIFormatter.ts # Pure mapping for tool UI text/icons
+│   └── chatTypes.ts       # Shared view types + WebviewMessageEmitter
 ├── webview/
 │   ├── App.vue            # Vue root SFC (composes child components)
 │   ├── main.ts            # Webview bootstrap
@@ -98,7 +103,11 @@ The HTTP client for communicating with Ollama/OpenWebUI APIs.
 
 ### 2. ChatViewProvider (`src/views/chatView.ts`)
 
-The main sidebar chat interface - a WebviewViewProvider that renders a GitHub Copilot-style UI.
+The main sidebar chat interface provider. It is intentionally **thin** and only handles:
+- Webview lifecycle + message routing
+- Mode dispatch (`agent` vs `chat/edit`)
+- Delegation to helper services
+
 The UI is built with Vue via Vite and emitted to `media/index.html`, `media/chatView.js`, and `media/chatView.css`.
 
 **Features:**
@@ -133,8 +142,11 @@ The UI is built with Vue via Vite and emitted to `media/index.html`, `media/chat
 **Message Flow:**
 1. User types message → `sendMessage` event
 2. Backend receives via `onDidReceiveMessage`
-3. Based on mode, calls `handleAgentMode`, `handleChatMode`, etc.
-4. Streams response back via `postMessage`
+3. `ChatViewProvider` dispatches to:
+  - `ChatSessionController` (session state/messages)
+  - `SettingsHandler` (settings/token/connection)
+  - `AgentChatExecutor` (agent loop + tools)
+4. Responses are posted via a `WebviewMessageEmitter` interface
 5. Frontend updates UI with `streamChunk`, `showToolAction`, etc.
 
 ### 3. ToolRegistry (`src/agent/toolRegistry.ts`)
@@ -168,6 +180,7 @@ Settings are defined in `package.json` under `contributes.configuration`:
 | `ollamaCopilot.agentMode.model` | `""` | Model for agent tasks |
 | `ollamaCopilot.agent.maxIterations` | `25` | Max tool execution cycles |
 | `ollamaCopilot.agent.toolTimeout` | `30000` | Tool timeout in ms |
+| `ollamaCopilot.agent.maxActiveSessions` | `1` | Max concurrent active sessions |
 
 ---
 
@@ -226,13 +239,17 @@ When user sends a message in Agent mode:
 |--------------|---------|---------|
 | `init` | `{models, settings, hasToken}` | Initialize UI with settings |
 | `settingsUpdate` | `{settings, hasToken}` | Push updated settings to webview |
-| `showThinking` | `{message}` | Show loading state |
-| `hideThinking` | - | Hide loading state |
-| `startProgressGroup` | `{title}` | Start collapsible group |
-| `showToolAction` | `{status, icon, text, detail}` | Add action to group |
-| `finishProgressGroup` | - | Mark group complete |
-| `streamChunk` | `{content, model?}` | Stream assistant response (optional model name) |
-| `finalMessage` | `{content, model?}` | Finalize response (optional model name) |
+| `showThinking` | `{message, sessionId}` | Show loading state for a session |
+| `hideThinking` | `{sessionId}` | Hide loading state for a session |
+| `startProgressGroup` | `{title, sessionId}` | Start collapsible group |
+| `showToolAction` | `{status, icon, text, detail, sessionId}` | Add action to group |
+| `finishProgressGroup` | `{sessionId}` | Mark group complete |
+| `streamChunk` | `{content, model?, sessionId}` | Stream assistant response scoped to a session |
+| `finalMessage` | `{content, model?, sessionId}` | Finalize response scoped to a session |
+| `generationStarted` | `{sessionId}` | Mark session as generating |
+| `generationStopped` | `{sessionId}` | Mark session as stopped |
+| `addMessage` | `{message, sessionId}` | Append a message in a specific session |
+| `loadSessionMessages` | `{messages, sessionId}` | Load messages for a session |
 | `loadSessions` | `{sessions, hasMore, nextOffset}` | Update sessions list |
 | `appendSessions` | `{sessions, hasMore, nextOffset}` | Append sessions list |
 | `dbMaintenanceResult` | `{success, deletedSessions?, deletedMessages?, message?}` | Maintenance result |
@@ -245,7 +262,7 @@ When user sends a message in Agent mode:
 |--------------|---------|---------|
 | `ready` | - | UI initialized (triggers `init` response) |
 | `sendMessage` | `{text, context}` | User message |
-| `stopGeneration` | - | Cancel current generation |
+| `stopGeneration` | `{sessionId}` | Cancel generation for a session |
 | `selectMode` | `{mode}` | Change mode |
 | `selectModel` | `{model}` | Change model |
 | `newChat` | - | Create new session |
@@ -256,6 +273,48 @@ When user sends a message in Agent mode:
 | `saveBearerToken` | `{token, testAfterSave?}` | Save bearer token (optionally test after) |
 | `loadMoreSessions` | `{offset}` | Load more sessions |
 | `runDbMaintenance` | - | Run DB maintenance cleanup |
+
+### Session-Concurrent Streaming
+
+- Streaming, tool actions, and progress updates are routed with `sessionId`.
+- The webview ignores updates that do not match the currently active session.
+- Background sessions continue generating; switching sessions does not stop generation.
+- The Stop button sends `stopGeneration` with the active `sessionId`.
+
+---
+
+## Chat View Backend Structure (Expected)
+
+Keep `src/views/chatView.ts` small and focused. Use these files for specific concerns:
+
+- **`src/views/chatView.ts`**
+  - Webview lifecycle + routing only
+  - Implements `WebviewMessageEmitter`
+  - Delegates to services/controllers
+
+- **`src/views/chatSessionController.ts`**
+  - Session creation/loading/deletion
+  - Session list + search + status updates
+  - Current session state + message cache
+
+- **`src/views/settingsHandler.ts`**
+  - Read/save settings
+  - Test connection + token handling
+  - DB maintenance actions
+
+- **`src/services/agentChatExecutor.ts`**
+  - Agent execution loop
+  - Tool call parsing + execution
+  - Progress group + tool UI updates (via emitter)
+
+- **`src/views/toolUIFormatter.ts`**
+  - Pure helpers mapping tool calls/results → UI text/icons
+
+- **`src/views/chatTypes.ts`**
+  - Shared view types
+  - `WebviewMessageEmitter` interface
+
+**Rule:** Do not re-bloat `chatView.ts`. If a method exceeds ~50 lines or handles a distinct concern, extract it into one of the modules above.
 
 ---
 

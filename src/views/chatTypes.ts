@@ -27,3 +27,7 @@ export interface ContextItem {
   fileName: string;
   content: string;
 }
+
+export interface WebviewMessageEmitter {
+  postMessage(message: any): void;
+}

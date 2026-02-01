@@ -22,7 +22,7 @@ type LanceDbTable = {
     limit: (n: number) => any;
     toArray: () => Promise<any[]>;
   };
-  vectorSearch: (vector: number[]) => {
+  vectorSearch: (vector: number[] | Float32Array) => {
     limit: (n: number) => any;
     toArray: () => Promise<any[]>;
   };
@@ -134,6 +134,7 @@ export class DatabaseService {
   private sessionIndex: SessionIndexService;
   private embeddingDimensions = 384; // sentence-transformers default
   private initialized = false;
+  private rebuildingMessagesTable = false;
 
   constructor(context: vscode.ExtensionContext) {
     this.context = context;
@@ -263,7 +264,7 @@ export class DatabaseService {
     }
 
     // Create with initial schema including vector
-    // Use a non-integer float to ensure Float64 type (not Int64) for compatibility with embeddings
+    // Use a non-integer float to ensure Float64 type in LanceDB
     const zeroVector = new Array(this.embeddingDimensions).fill(0.0);
     zeroVector[0] = 0.5;
     this.messagesTable = await this.db.createTable('messages', [
@@ -383,7 +384,7 @@ export class DatabaseService {
     }
 
     const data = await response.json() as { embedding: number[] };
-    return data.embedding;
+    return data.embedding.map(v => Number(v));
   }
 
   private async generateBuiltinEmbedding(text: string): Promise<number[]> {
@@ -419,10 +420,61 @@ export class DatabaseService {
       return;
     }
 
-    await this.messagesTable.update({
-      where: `id = "${messageId}"`,
-      values: { vector }
-    });
+    try {
+      await this.messagesTable.update({
+        where: `id = "${messageId}"`,
+        values: { vector: Array.from(vector, v => Number(v)) }
+      });
+    } catch (error: any) {
+      const message = error?.message || String(error);
+      if (message.includes('Array expressions must have a consistent datatype')) {
+        await this.recoverMessagesTableForVectorMismatch();
+        return;
+      }
+      throw error;
+    }
+  }
+
+  private async recoverMessagesTableForVectorMismatch(): Promise<void> {
+    if (!this.db || !this.messagesTable || this.rebuildingMessagesTable) {
+      return;
+    }
+
+    this.rebuildingMessagesTable = true;
+    try {
+      const existingMessages = await this.messagesTable.query().toArray();
+      const messages = (existingMessages as unknown as MessageRecord[])
+        .filter(m => m.id && m.id !== '__schema__');
+
+      await this.db.dropTable('messages');
+      this.messagesTable = null;
+      await this.createMessagesTable();
+
+      const messagesTable = await this.db.openTable('messages');
+      this.messagesTable = messagesTable;
+      if (messages.length > 0) {
+        const zeroVector = new Array(this.embeddingDimensions).fill(0.0);
+        zeroVector[0] = 0.5;
+        const rows = messages.map(m => ({
+          ...m,
+          vector: zeroVector
+        }));
+
+        await messagesTable.add(rows as unknown as Record<string, unknown>[]);
+
+        if (this.embeddingQueue) {
+          for (const message of messages) {
+            if (message.content) {
+              this.embeddingQueue.enqueue(message.id, message.content);
+            }
+          }
+        }
+      }
+    } catch (error) {
+      console.error('Failed to recover messages table after vector mismatch:', error);
+    } finally {
+      this.rebuildingMessagesTable = false;
+    }
   }
 
   // --------------------------------------------------------------------------
