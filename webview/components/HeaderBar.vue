@@ -7,17 +7,16 @@
     <div class="header-actions">
       <button class="icon-btn" title="New Chat" @click="newChat">➕</button>
       <button class="icon-btn" title="Settings" @click="showPage('settings')">⚙️</button>
-      <button class="icon-btn" title="Sessions" @click="toggleSessions">📋</button>
+      <button class="icon-btn" title="Sessions" @click="showPage(currentPage === 'sessions' ? 'chat' : 'sessions')">📋</button>
     </div>
   </div>
 </template>
 
 <script setup lang="ts">
 defineProps<{
-  currentPage: 'chat' | 'settings';
+  currentPage: 'chat' | 'settings' | 'sessions';
   headerTitle: string;
-  showPage: (page: 'chat' | 'settings') => void;
+  showPage: (page: 'chat' | 'settings' | 'sessions') => void;
   newChat: () => void;
-  toggleSessions: () => void;
 }>();
 </script>

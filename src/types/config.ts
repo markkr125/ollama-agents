@@ -9,6 +9,7 @@ export interface ModeConfig {
 export interface AgentConfig {
   maxIterations: number;
   toolTimeout: number;
+  maxActiveSessions: number;
 }
 
 export interface ExtensionConfig {

@@ -219,6 +219,13 @@
           "maximum": 300000,
           "description": "Timeout for tool execution in milliseconds"
         },
+        "ollamaCopilot.agent.maxActiveSessions": {
+          "type": "number",
+          "default": 1,
+          "minimum": 1,
+          "maximum": 5,
+          "description": "Maximum number of active chat sessions that can run concurrently"
+        },
         "ollamaCopilot.contextWindow": {
           "type": "number",
           "default": 16000,
@@ -230,6 +237,17 @@
           "type": "boolean",
           "default": true,
           "description": "Enable inline autocomplete suggestions"
+        },
+        "ollamaCopilot.embedding.provider": {
+          "type": "string",
+          "enum": ["builtin", "ollama"],
+          "default": "builtin",
+          "markdownDescription": "Embedding provider for semantic search. `builtin` uses LanceDB's sentence-transformers, `ollama` uses your Ollama server."
+        },
+        "ollamaCopilot.embedding.model": {
+          "type": "string",
+          "default": "nomic-embed-text",
+          "markdownDescription": "Embedding model to use when provider is `ollama`. Common options: `nomic-embed-text`, `mxbai-embed-large`."
         }
       }
     },
@@ -238,7 +256,8 @@
         {
           "id": "ollamaCopilot.chatView",
           "name": "Copilot",
-          "type": "webview"
+          "type": "webview",
+          "icon": "$(robot)"
         }
       ]
     },
@@ -262,12 +281,12 @@
     "lint": "eslint src --ext ts"
   },
   "devDependencies": {
-    "markdown-it": "^14.1.0",
-    "markdown-it-task-lists": "^2.1.1",
     "@types/node": "^20.10.0",
     "@types/vscode": "^1.85.0",
     "@vitejs/plugin-vue": "^5.0.0",
     "@vscode/vsce": "^2.22.0",
+    "markdown-it": "^14.1.0",
+    "markdown-it-task-lists": "^2.1.1",
     "sass": "^1.97.3",
     "ts-loader": "^9.5.0",
     "typescript": "^5.3.0",
@@ -275,5 +294,10 @@
     "vue": "^3.4.0",
     "webpack": "^5.89.0",
     "webpack-cli": "^5.1.0"
+  },
+  "dependencies": {
+    "@lancedb/lancedb": "^0.23.0",
+    "apache-arrow": "^18.1.0",
+    "sql.js": "^1.10.3"
   }
 }

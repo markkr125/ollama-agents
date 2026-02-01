@@ -11,7 +11,11 @@ module.exports = {
   },
   devtool: 'source-map',
   externals: {
-    vscode: 'commonjs vscode'
+    vscode: 'commonjs vscode',
+    // LanceDB uses native modules - externalize them
+    '@lancedb/lancedb': 'commonjs @lancedb/lancedb',
+    'apache-arrow': 'commonjs apache-arrow',
+    'sql.js': 'commonjs sql.js'
   },
   resolve: {
     extensions: ['.ts', '.js']

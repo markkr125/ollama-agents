@@ -8,6 +8,7 @@
         <div class="settings-nav-item" :class="{ active: activeSection === 'autocomplete' }" @click="setActiveSection('autocomplete')">Autocomplete</div>
         <div class="settings-nav-item" :class="{ active: activeSection === 'agent' }" @click="setActiveSection('agent')">Agent</div>
         <div class="settings-nav-item" :class="{ active: activeSection === 'tools' }" @click="setActiveSection('tools')">Tools</div>
+        <div class="settings-nav-item" :class="{ active: activeSection === 'advanced' }" @click="setActiveSection('advanced')">Advanced</div>
       </div>
 
       <div class="settings-content">
@@ -136,6 +137,10 @@
               <label class="settings-label">Max Iterations</label>
               <input type="number" v-model.number="settings.maxIterations" />
             </div>
+            <div class="settings-item">
+              <label class="settings-label">Max Active Sessions</label>
+              <input type="number" min="1" max="5" v-model.number="settings.maxActiveSessions" />
+            </div>
                 <div class="settings-item">
                   <label class="settings-label">Tool Timeout (seconds)</label>
                   <input type="number" :value="toolTimeoutSeconds" @input="onToolTimeoutInput" />
@@ -174,6 +179,21 @@
             </div>
           </div>
         </div>
+
+        <!-- Advanced Section -->
+        <div class="settings-section" :class="{ active: activeSection === 'advanced' }">
+          <div class="settings-group">
+            <h3>DB Maintenance</h3>
+            <div class="settings-item">
+              <label class="settings-label">Sync Sessions</label>
+              <div class="settings-desc">
+                Ensures sessions deleted from SQLite are removed from LanceDB messages and vice versa.
+              </div>
+            </div>
+            <button class="btn btn-primary" @click="runDbMaintenance">Run DB Maintenance</button>
+            <div class="status-msg" :class="statusClass(dbMaintenanceStatus)">{{ dbMaintenanceStatus.message }}</div>
+          </div>
+        </div>
       </div>
     </div>
   </div>
@@ -197,6 +217,7 @@ type Settings = {
   completionModel: string;
   maxIterations: number;
   toolTimeout: number;
+  maxActiveSessions: number;
   temperature: number;
 };
 
@@ -224,7 +245,7 @@ type ToolItem = {
 
 const props = defineProps({
   currentPage: {
-    type: String as PropType<'chat' | 'settings'>,
+    type: String as PropType<'chat' | 'settings' | 'sessions'>,
     required: true
   },
   activeSection: {
@@ -337,6 +358,14 @@ const props = defineProps({
   },
   tools: {
     type: Array as PropType<ToolItem[]>,
+    required: true
+  },
+  runDbMaintenance: {
+    type: Function as PropType<() => void>,
+    required: true
+  },
+  dbMaintenanceStatus: {
+    type: Object as PropType<StatusMessage>,
     required: true
   }
 });

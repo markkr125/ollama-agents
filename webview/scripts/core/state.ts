@@ -1,5 +1,5 @@
 import { reactive, ref } from 'vue';
-import type { SessionItem, StatusMessage, TimelineItem } from './types';
+import type { SearchResultGroup, SessionItem, StatusMessage, TimelineItem } from './types';
 
 declare const acquireVsCodeApi: () => { postMessage: (message: any) => void };
 
@@ -10,12 +10,15 @@ export const inputEl = ref<HTMLTextAreaElement | null>(null);
 
 export const timeline = ref<TimelineItem[]>([]);
 export const sessions = ref<SessionItem[]>([]);
+export const sessionsHasMore = ref(false);
+export const sessionsLoading = ref(false);
+export const sessionsCursor = ref<number | null>(null);
 export const modelOptions = ref<string[]>([]);
 export const currentMode = ref('agent');
 export const currentModel = ref('');
-export const currentPage = ref<'chat' | 'settings'>('chat');
+export const currentSessionId = ref<string | null>(null);
+export const currentPage = ref<'chat' | 'settings' | 'sessions'>('chat');
 export const activeSection = ref('connection');
-export const sessionsOpen = ref(false);
 export const isGenerating = ref(false);
 export const inputText = ref('');
 export const contextList = ref<Array<{ fileName: string; content: string }>>([]);
@@ -37,6 +40,7 @@ export const settings = reactive({
   completionModel: '',
   maxIterations: 25,
   toolTimeout: 30000,
+  maxActiveSessions: 1,
   temperature: 0.7
 });
 
@@ -59,6 +63,7 @@ export const agentSettings = reactive({
 export const connectionStatus = reactive<StatusMessage>({ visible: false, success: true, message: '' });
 export const modelsStatus = reactive<StatusMessage>({ visible: false, success: true, message: '' });
 export const agentStatus = reactive<StatusMessage>({ visible: false, success: true, message: '' });
+export const dbMaintenanceStatus = reactive<StatusMessage>({ visible: false, success: true, message: '' });
 
 export const tools = ref([
   { name: 'read_file', icon: '📄', desc: 'Read file contents' },
@@ -74,3 +79,13 @@ export const temperatureSlider = ref(70);
 
 export const currentProgressIndex = ref<number | null>(null);
 export const currentStreamIndex = ref<number | null>(null);
+
+// Session search state
+export const searchQuery = ref('');
+export const searchResults = ref<SearchResultGroup[]>([]);
+export const allSearchResults = ref<SearchResultGroup[]>([]);
+export const searchVisibleCount = ref(20);
+export const searchIsRevealing = ref(false);
+export const isSearching = ref(false);
+export const scrollTargetMessageId = ref<string | null>(null);
+export const autoScrollLocked = ref(false);

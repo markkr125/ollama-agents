@@ -6,7 +6,6 @@
         :header-title="headerTitle"
         :show-page="showPage"
         :new-chat="newChat"
-        :toggle-sessions="toggleSessions"
       />
 
       <ChatPage
@@ -34,6 +33,8 @@
         :resize-input="resizeInput"
         :select-mode="selectMode"
         :select-model="selectModel"
+        :scroll-target-message-id="scrollTargetMessageId"
+        :clear-scroll-target="clearScrollTarget"
       />
 
       <SettingsPage
@@ -65,18 +66,32 @@
         :set-tool-timeout-seconds="setToolTimeoutSecondsValue"
         :save-agent-settings="saveAgentSettings"
         :agent-status="agentStatus"
+        :run-db-maintenance="runDbMaintenance"
+        :db-maintenance-status="dbMaintenanceStatus"
         :tools="tools"
       />
-    </div>
 
-    <SessionsPanel
-      :sessions-open="sessionsOpen"
-      :sessions="sessions"
-      :load-session="loadSession"
-      :delete-session="deleteSession"
-      :format-time="formatTime"
-      :close-sessions="closeSessions"
-    />
+      <SessionsPanel
+        :current-page="currentPage"
+        :sessions="sessions"
+        :has-more-sessions="sessionsHasMore"
+        :is-loading-more="sessionsLoading"
+        :search-query="searchQuery"
+        :search-results="searchResults"
+        :search-has-more="searchHasMore"
+        :is-search-revealing="searchIsRevealing"
+        :is-searching="isSearching"
+        :load-session="loadSession"
+        :delete-session="deleteSession"
+        :format-time="formatTime"
+        :handle-search-input="handleSearchInput"
+        :clear-search="clearSearch"
+        :load-session-with-message="loadSessionWithMessage"
+        :load-more-sessions="loadMoreSessions"
+        :reveal-more-search-results="revealMoreSearchResults"
+        :highlight-snippet="highlightSnippet"
+      />
+    </div>
   </div>
 </template>
 
@@ -87,60 +102,75 @@ import HeaderBar from './components/HeaderBar.vue';
 import SessionsPanel from './components/SessionsPanel.vue';
 import SettingsPage from './components/SettingsPage.vue';
 import {
-    actionStatusClass,
-    activeSection,
-    addContext,
-    agentSettings,
-    agentStatus,
-    autocomplete,
-    bearerToken,
-    chatSettings,
-    connectionStatus,
-    contextList,
-    currentMode,
-    currentModel,
-    currentPage,
-    deleteSession,
-    formatMarkdown,
-    formatTime,
-    handleEnter,
-    handleSend,
-    hasToken,
-    headerTitle,
-    inputEl,
-    inputText,
-    isGenerating,
-    loadSession,
-    messagesEl,
-    modelOptions,
-    modelsStatus,
-    newChat,
-    removeContext,
-    resizeInput,
-    saveAgentSettings,
-    saveBaseUrl,
-    saveBearerToken,
-    saveModelSettings,
-    selectMode,
-    selectModel,
-    sessions,
-    sessionsOpen,
-    settings,
-    showPage,
-    statusClass,
-    temperatureDisplay,
-    temperatureSlider,
-    testConnection,
-    thinking,
-    timeline,
-    toggleAutocomplete,
-    toggleProgress,
-    toggleSessions,
-    toggleToken,
-    tokenVisible,
-    tools,
-    toolTimeoutSeconds,
-    vscode
+  actionStatusClass,
+  activeSection,
+  addContext,
+  agentSettings,
+  agentStatus,
+  autocomplete,
+  bearerToken,
+  chatSettings,
+  clearScrollTarget,
+  clearSearch,
+  connectionStatus,
+  contextList,
+  currentMode,
+  currentModel,
+  currentPage,
+  dbMaintenanceStatus,
+  deleteSession,
+  formatMarkdown,
+  formatTime,
+  handleEnter,
+  handleSearchInput,
+  handleSend,
+  hasToken,
+  headerTitle,
+  highlightSnippet,
+  inputEl,
+  inputText,
+  isGenerating,
+  isSearching,
+  loadMoreSessions,
+  loadSession,
+  loadSessionWithMessage,
+  messagesEl,
+  modelOptions,
+  modelsStatus,
+  newChat,
+  removeContext,
+  resizeInput,
+  revealMoreSearchResults,
+  runDbMaintenance,
+  saveAgentSettings,
+  saveBaseUrl,
+  saveBearerToken,
+  saveModelSettings,
+  scrollTargetMessageId,
+  searchHasMore,
+  searchIsRevealing,
+  searchQuery,
+  searchResults,
+  selectMode,
+  selectModel,
+  sessions,
+  sessionsHasMore,
+  sessionsLoading,
+  settings,
+  showPage,
+  statusClass,
+  temperatureDisplay,
+  temperatureSlider,
+  testConnection,
+  thinking,
+  timeline,
+  toggleAutocomplete,
+  toggleProgress,
+  toggleToken,
+  tokenVisible,
+  tools,
+  toolTimeoutSeconds,
+  vscode
 } from './scripts/app/App';
 
 // Initialize when mounted - send ready message to extension
@@ -185,7 +215,4 @@ const setToolTimeoutSecondsValue = (value: number) => {
   toolTimeoutSeconds.value = value;
 };
 
-const closeSessions = () => {
-  sessionsOpen.value = false;
-};
 </script>

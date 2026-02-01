@@ -31,10 +31,27 @@ export type SessionItem = {
   title: string;
   timestamp: number;
   active: boolean;
+  status: 'idle' | 'generating' | 'completed' | 'error';
 };
 
 export type StatusMessage = {
   visible: boolean;
   success: boolean;
   message: string;
+};
+
+export type SearchResultMessage = {
+  id: string;
+  content: string;
+  snippet: string;
+  role: string;
+};
+
+export type SearchResultGroup = {
+  session: {
+    id: string;
+    title: string;
+    timestamp: number;
+  };
+  messages: SearchResultMessage[];
 };

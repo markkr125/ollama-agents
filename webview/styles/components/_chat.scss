@@ -29,6 +29,11 @@
   margin-bottom: 12px;
   max-width: 100%;
   font-size: 12.5px;
+  scroll-margin-top: 12px;
+
+  &.highlight-flash {
+    animation: highlightFlash 2s ease-out;
+  }
 
   &-user {
     background: var(--vscode-chat-requestBubbleBackground);
@@ -228,4 +233,16 @@
 
 .message-text {
   white-space: pre-wrap;
+}
+
+@keyframes highlightFlash {
+  0% {
+    background-color: var(--vscode-editor-findMatchHighlightBackground, rgba(255, 200, 0, 0.4));
+    box-shadow: 0 0 0 3px var(--vscode-editor-findMatchHighlightBackground, rgba(255, 200, 0, 0.4));
+    border-radius: 6px;
+  }
+  100% {
+    background-color: transparent;
+    box-shadow: none;
+  }
 }

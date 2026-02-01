@@ -2,29 +2,40 @@ import MarkdownIt from 'markdown-it';
 import taskLists from 'markdown-it-task-lists';
 import { nextTick } from 'vue';
 import {
-    agentSettings,
-    agentStatus,
-    bearerToken,
-    contextList,
-    currentMode,
-    currentModel,
-    currentPage,
-    currentProgressIndex,
-    currentStreamIndex,
-    hasToken,
-    inputEl,
-    inputText,
-    isGenerating,
-    messagesEl,
-    modelsStatus,
-    sessionsOpen,
-    settings,
-    thinking,
-    timeline,
-    tokenVisible,
-    vscode
+  agentSettings,
+  agentStatus,
+  allSearchResults,
+  autoScrollLocked,
+  bearerToken,
+  contextList,
+  currentMode,
+  currentModel,
+  currentPage,
+  currentProgressIndex,
+  currentSessionId,
+  currentStreamIndex,
+  dbMaintenanceStatus,
+  hasToken,
+  inputEl,
+  inputText,
+  isGenerating,
+  isSearching,
+  messagesEl,
+  modelsStatus,
+  scrollTargetMessageId,
+  searchIsRevealing,
+  searchQuery,
+  searchResults,
+  searchVisibleCount,
+  sessionsHasMore,
+  sessionsLoading,
+  settings,
+  thinking,
+  timeline,
+  tokenVisible,
+  vscode
 } from './state';
-import type { ActionItem, MessageItem, ProgressItem, StatusMessage } from './types';
+import type { ActionItem, MessageItem, ProgressItem, SearchResultGroup, StatusMessage } from './types';
 
 const markdown = new MarkdownIt({
   html: false,
@@ -72,6 +83,9 @@ export const statusClass = (status: StatusMessage) => {
 
 export const scrollToBottom = () => {
   nextTick(() => {
+    if (scrollTargetMessageId.value || autoScrollLocked.value) {
+      return;
+    }
     if (messagesEl.value) {
       messagesEl.value.scrollTop = messagesEl.value.scrollHeight;
     }
@@ -90,12 +104,8 @@ export const handleEnter = () => {
   }
 };
 
-export const showPage = (page: 'chat' | 'settings') => {
+export const showPage = (page: 'chat' | 'settings' | 'sessions') => {
   currentPage.value = page;
-};
-
-export const toggleSessions = () => {
-  sessionsOpen.value = !sessionsOpen.value;
 };
 
 export const newChat = () => {
@@ -116,7 +126,7 @@ export const selectModel = () => {
 
 export const handleSend = () => {
   if (isGenerating.value) {
-    vscode.postMessage({ type: 'stopGeneration' });
+    vscode.postMessage({ type: 'stopGeneration', sessionId: currentSessionId.value });
     return;
   }
 
@@ -186,11 +196,17 @@ export const saveAgentSettings = () => {
     settings: {
       maxIterations: settings.maxIterations,
       toolTimeout: settings.toolTimeout,
+      maxActiveSessions: settings.maxActiveSessions,
       autoCreateBranch: agentSettings.autoCreateBranch,
       autoCommit: agentSettings.autoCommit
     }
   });
   showStatus(agentStatus, 'Agent settings saved!', true);
+};
+
+export const runDbMaintenance = () => {
+  showStatus(dbMaintenanceStatus, 'Running database maintenance...', true);
+  vscode.postMessage({ type: 'runDbMaintenance' });
 };
 
 export const toggleAutocomplete = () => {
@@ -262,11 +278,18 @@ export const startAssistantMessage = (model?: string) => {
 };
 
 export const loadSession = (id: string) => {
+  showPage('chat');
   vscode.postMessage({ type: 'loadSession', sessionId: id });
 };
 
 export const deleteSession = (id: string) => {
   vscode.postMessage({ type: 'deleteSession', sessionId: id });
+};
+
+export const loadMoreSessions = () => {
+  if (sessionsLoading.value || !sessionsHasMore.value) return;
+  sessionsLoading.value = true;
+  vscode.postMessage({ type: 'loadMoreSessions', offset: sessionsCursor.value ?? 0 });
 };
 
 export const updateThinking = (visible: boolean, message?: string) => {
@@ -302,5 +325,118 @@ export const applySettings = (msg: any) => {
   settings.completionModel = msg.settings.completionModel || '';
   settings.maxIterations = msg.settings.maxIterations || settings.maxIterations;
   settings.toolTimeout = msg.settings.toolTimeout || settings.toolTimeout;
+  settings.maxActiveSessions = msg.settings.maxActiveSessions ?? settings.maxActiveSessions;
   settings.temperature = msg.settings.temperature ?? settings.temperature;
+};
+
+// Session search actions
+let searchDebounceTimer: ReturnType<typeof setTimeout> | null = null;
+const SEARCH_PAGE_SIZE = 20;
+
+const getSearchTotalCount = (groups: SearchResultGroup[]) =>
+  groups.reduce((sum, group) => sum + group.messages.length, 0);
+
+const buildVisibleSearchResults = (groups: SearchResultGroup[], maxMessages: number) => {
+  if (maxMessages <= 0) return [];
+  const visible: SearchResultGroup[] = [];
+  let remaining = maxMessages;
+
+  for (const group of groups) {
+    if (remaining <= 0) break;
+    const messages = group.messages.slice(0, remaining);
+    if (messages.length > 0) {
+      visible.push({ session: group.session, messages });
+      remaining -= messages.length;
+    }
+  }
+
+  return visible;
+};
+
+const updateVisibleSearchResults = () => {
+  searchResults.value = buildVisibleSearchResults(allSearchResults.value, searchVisibleCount.value);
+};
+
+const resetSearchState = () => {
+  allSearchResults.value = [];
+  searchResults.value = [];
+  searchVisibleCount.value = SEARCH_PAGE_SIZE;
+  searchIsRevealing.value = false;
+};
+
+export const applySearchResults = (groups: SearchResultGroup[]) => {
+  allSearchResults.value = groups;
+  const total = getSearchTotalCount(groups);
+  searchVisibleCount.value = Math.min(SEARCH_PAGE_SIZE, total);
+  searchIsRevealing.value = false;
+  updateVisibleSearchResults();
+};
+
+export const revealMoreSearchResults = () => {
+  const total = getSearchTotalCount(allSearchResults.value);
+  if (searchVisibleCount.value >= total) return;
+  searchIsRevealing.value = true;
+  searchVisibleCount.value = Math.min(searchVisibleCount.value + SEARCH_PAGE_SIZE, total);
+  updateVisibleSearchResults();
+  setTimeout(() => {
+    searchIsRevealing.value = false;
+  }, 150);
+};
+
+export const handleSearchInput = (query: string) => {
+  searchQuery.value = query;
+  
+  if (searchDebounceTimer) {
+    clearTimeout(searchDebounceTimer);
+  }
+  
+  if (!query.trim()) {
+    resetSearchState();
+    isSearching.value = false;
+    return;
+  }
+  
+  isSearching.value = true;
+  resetSearchState();
+  searchDebounceTimer = setTimeout(() => {
+    vscode.postMessage({ type: 'searchSessions', query: query.trim() });
+  }, 300);
+};
+
+export const clearSearch = () => {
+  searchQuery.value = '';
+  resetSearchState();
+  isSearching.value = false;
+  if (searchDebounceTimer) {
+    clearTimeout(searchDebounceTimer);
+    searchDebounceTimer = null;
+  }
+};
+
+export const clearScrollTarget = () => {
+  scrollTargetMessageId.value = null;
+  setTimeout(() => {
+    autoScrollLocked.value = false;
+  }, 300);
+};
+
+export const loadSessionWithMessage = (sessionId: string, messageId: string) => {
+  autoScrollLocked.value = true;
+  scrollTargetMessageId.value = messageId;
+  showPage('chat');
+  vscode.postMessage({ type: 'loadSession', sessionId });
+};
+
+export const highlightSnippet = (snippet: string, query: string): string => {
+  if (!query.trim()) return snippet;
+  
+  const words = query.trim().split(/\s+/).filter(w => w.length > 2);
+  let result = snippet;
+  
+  for (const word of words) {
+    const regex = new RegExp(`(${word})`, 'gi');
+    result = result.replace(regex, '<mark>$1</mark>');
+  }
+  
+  return result;
 };
