@@ -77,6 +77,14 @@ window.addEventListener('message', e => {
       sessionsLoading.value = false;
       break;
 
+    case 'updateSessionStatus':
+      sessions.value = sessions.value.map(session =>
+        session.id === msg.sessionId
+          ? { ...session, status: msg.status }
+          : session
+      );
+      break;
+
     case 'loadSessionMessages': {
       const items: any[] = [];
       const messages = msg.messages || [];

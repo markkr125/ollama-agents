@@ -53,7 +53,40 @@
           :class="{ active: session.active }"
           @click="loadSession(session.id)"
         >
-          <span class="session-title">{{ session.title }}</span>
+          <div class="session-details">
+            <span class="session-title">{{ session.title }}</span>
+            <span class="session-status" :class="`status-${session.status}`">
+              <span
+                v-if="session.status === 'generating'"
+                class="status-icon status-spinner"
+                aria-hidden="true"
+              >⟳</span>
+              <span
+                v-else-if="session.status === 'error'"
+                class="status-icon"
+                aria-hidden="true"
+              >✕</span>
+              <span
+                v-else-if="session.status === 'idle'"
+                class="status-icon"
+                aria-hidden="true"
+              >•</span>
+              <span
+                v-else
+                class="status-icon"
+                aria-hidden="true"
+              >✓</span>
+              <span class="status-text">
+                {{ session.status === 'generating'
+                  ? 'Loading...'
+                  : session.status === 'error'
+                    ? 'Error'
+                    : session.status === 'idle'
+                      ? 'Idle'
+                      : 'Completed' }}
+              </span>
+            </span>
+          </div>
           <span class="session-time">{{ formatTime(session.timestamp) }}</span>
           <span class="session-delete" @click.stop="deleteSession(session.id)">✕</span>
         </div>

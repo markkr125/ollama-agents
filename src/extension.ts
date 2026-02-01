@@ -164,8 +164,16 @@ export async function activate(context: vscode.ExtensionContext) {
   }
 }
 
-export function deactivate() {
+export async function deactivate() {
   console.log('Ollama Copilot deactivating...');
+
+  if (databaseService) {
+    try {
+      await databaseService.resetGeneratingSessions('idle');
+    } catch (error) {
+      console.error('Failed to reset generating sessions on deactivate:', error);
+    }
+  }
   
   if (client) {
     client.dispose();

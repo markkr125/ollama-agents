@@ -9,7 +9,7 @@ import { DatabaseService } from '../services/databaseService';
 import { ModelManager } from '../services/modelManager';
 import { OllamaClient } from '../services/ollamaClient';
 import { TokenManager } from '../services/tokenManager';
-import { MessageRecord, SessionRecord } from '../types/session';
+import { ChatSessionStatus, MessageRecord, SessionRecord } from '../types/session';
 import { ChatMessage, ContextItem } from './chatTypes';
 
 export class ChatViewProvider implements vscode.WebviewViewProvider {
@@ -236,7 +236,8 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       id: s.id,
       title: s.title,
       timestamp: s.updated_at,
-      active: s.id === this.currentSessionId
+      active: s.id === this.currentSessionId,
+      status: s.status
     }));
     
     this.view?.webview.postMessage({
@@ -244,6 +245,19 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       sessions: sessionsList,
       hasMore: sessionsPage.hasMore,
       nextOffset: sessionsPage.nextOffset
+    });
+  }
+
+  private async setSessionStatus(status: ChatSessionStatus): Promise<void> {
+    if (!this.currentSessionId) return;
+    await this.databaseService.updateSessionStatus(this.currentSessionId, status);
+    if (this.currentSession && this.currentSession.id === this.currentSessionId) {
+      this.currentSession = { ...this.currentSession, status, updated_at: Date.now() };
+    }
+    this.view?.webview.postMessage({
+      type: 'updateSessionStatus',
+      sessionId: this.currentSessionId,
+      status
     });
   }
 
@@ -505,6 +519,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     }
     this.isGenerating = false;
     this.view?.webview.postMessage({ type: 'generationStopped' });
+    void this.setSessionStatus('completed');
   }
 
   private async handleMessage(text: string, contextItems?: ContextItem[]) {
@@ -516,6 +531,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     this.cancellationTokenSource = new vscode.CancellationTokenSource();
     const token = this.cancellationTokenSource.token;
     this.isGenerating = true;
+    await this.setSessionStatus('generating');
 
     let contextStr = '';
     if (contextItems && contextItems.length > 0) {
@@ -544,12 +560,14 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     this.view?.webview.postMessage({ type: 'generationStarted' });
 
     if (!this.currentModel) {
+      await this.setSessionStatus('error');
       this.view?.webview.postMessage({ type: 'generationStopped' });
       this.isGenerating = false;
       this.view?.webview.postMessage({ type: 'showError', message: 'No model selected' });
       return;
     }
 
+    let finalStatus: ChatSessionStatus = 'completed';
     try {
       if (this.currentMode === 'agent') {
         await this.handleAgentMode(fullPrompt, token);
@@ -557,8 +575,10 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
         await this.handleChatMode(fullPrompt, token);
       }
     } catch (error: any) {
+      finalStatus = 'error';
       this.view?.webview.postMessage({ type: 'showError', message: error.message });
     } finally {
+      await this.setSessionStatus(finalStatus);
       this.isGenerating = false;
       this.view?.webview.postMessage({ type: 'generationStopped' });
     }

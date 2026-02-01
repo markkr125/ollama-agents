@@ -31,6 +31,7 @@ export type SessionItem = {
   title: string;
   timestamp: number;
   active: boolean;
+  status: 'idle' | 'generating' | 'completed' | 'error';
 };
 
 export type StatusMessage = {

@@ -2,6 +2,8 @@ import * as vscode from 'vscode';
 
 export type SessionStatus = 'planned' | 'approved' | 'executing' | 'completed' | 'failed' | 'cancelled';
 
+export type ChatSessionStatus = 'idle' | 'generating' | 'completed' | 'error';
+
 export interface ToolExecution {
   tool: string;
   input: Record<string, any>;
@@ -39,6 +41,7 @@ export interface SessionRecord {
   title: string;
   mode: string;
   model: string;
+  status: ChatSessionStatus;
   created_at: number;
   updated_at: number;
 }

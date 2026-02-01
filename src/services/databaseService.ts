@@ -1,6 +1,6 @@
 import { randomUUID } from 'crypto';
 import * as vscode from 'vscode';
-import { MessageRecord, SessionRecord, SessionsPage } from '../types/session';
+import { ChatSessionStatus, MessageRecord, SessionRecord, SessionsPage } from '../types/session';
 import { OllamaClient } from './ollamaClient';
 import { SessionIndexService } from './sessionIndexService';
 
@@ -307,7 +307,10 @@ export class DatabaseService {
         .filter(session => session.id && session.id !== '__schema__');
 
       for (const session of sessions) {
-        await this.sessionIndex.upsertSession(session);
+        await this.sessionIndex.upsertSession({
+          ...session,
+          status: session.status ?? 'completed'
+        });
       }
 
       await this.db.dropTable('sessions');
@@ -436,6 +439,7 @@ export class DatabaseService {
       title,
       mode,
       model,
+      status: 'idle',
       created_at: Date.now(),
       updated_at: Date.now()
     };
@@ -452,6 +456,10 @@ export class DatabaseService {
     await this.sessionIndex.updateSession(id, updates);
   }
 
+  async updateSessionStatus(id: string, status: ChatSessionStatus): Promise<void> {
+    await this.sessionIndex.updateSession(id, { status });
+  }
+
   async deleteSession(id: string): Promise<void> {
     if (!this.messagesTable) {
       return;
@@ -466,6 +474,10 @@ export class DatabaseService {
 
   async listSessions(limit = 50, offset = 0): Promise<SessionsPage> {
     return this.sessionIndex.listSessions(limit, offset);
+  }
+
+  async resetGeneratingSessions(status: ChatSessionStatus = 'idle'): Promise<void> {
+    await this.sessionIndex.resetGeneratingSessions(status);
   }
 
   // --------------------------------------------------------------------------
