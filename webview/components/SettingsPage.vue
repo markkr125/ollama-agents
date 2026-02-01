@@ -137,6 +137,10 @@
               <label class="settings-label">Max Iterations</label>
               <input type="number" v-model.number="settings.maxIterations" />
             </div>
+            <div class="settings-item">
+              <label class="settings-label">Max Active Sessions</label>
+              <input type="number" min="1" max="5" v-model.number="settings.maxActiveSessions" />
+            </div>
                 <div class="settings-item">
                   <label class="settings-label">Tool Timeout (seconds)</label>
                   <input type="number" :value="toolTimeoutSeconds" @input="onToolTimeoutInput" />
@@ -213,6 +217,7 @@ type Settings = {
   completionModel: string;
   maxIterations: number;
   toolTimeout: number;
+  maxActiveSessions: number;
   temperature: number;
 };
 

@@ -34,7 +34,8 @@ export function getConfig(): ExtensionConfig {
     },
     agent: {
       maxIterations: config.get('agent.maxIterations', 25),
-      toolTimeout: config.get('agent.toolTimeout', 30000)
+      toolTimeout: config.get('agent.toolTimeout', 30000),
+      maxActiveSessions: config.get('agent.maxActiveSessions', 1)
     }
   };
 }

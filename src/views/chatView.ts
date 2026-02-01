@@ -20,8 +20,8 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
   private currentMessages: MessageRecord[] = [];
   private currentMode: string = 'agent';
   private currentModel: string = '';
-  private isGenerating = false;
   private cancellationTokenSource?: vscode.CancellationTokenSource;
+  private activeSessions = new Map<string, vscode.CancellationTokenSource>();
   private configChangeDisposable?: vscode.Disposable;
   
   private toolRegistry: ToolRegistry;
@@ -112,7 +112,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
           await this.handleMessage(data.text, data.context);
           break;
         case 'stopGeneration':
-          this.stopGeneration();
+          this.stopGeneration(data.sessionId);
           break;
         case 'selectModel':
           await this.handleModelChange(data.model);
@@ -122,7 +122,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
           break;
         case 'newChat':
           await this.createNewSession();
-          this.view?.webview.postMessage({ type: 'clearMessages' });
+          this.view?.webview.postMessage({ type: 'clearMessages', sessionId: this.currentSessionId });
           await this.sendSessionsList();
           break;
         case 'addContext':
@@ -214,6 +214,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       completionModel: config.completionMode.model,
       maxIterations: config.agent.maxIterations,
       toolTimeout: config.agent.toolTimeout,
+      maxActiveSessions: config.agent.maxActiveSessions,
       temperature: config.agentMode.temperature
     };
   }
@@ -248,15 +249,16 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     });
   }
 
-  private async setSessionStatus(status: ChatSessionStatus): Promise<void> {
-    if (!this.currentSessionId) return;
-    await this.databaseService.updateSessionStatus(this.currentSessionId, status);
-    if (this.currentSession && this.currentSession.id === this.currentSessionId) {
+  private async setSessionStatus(status: ChatSessionStatus, sessionId?: string): Promise<void> {
+    const targetSessionId = sessionId || this.currentSessionId;
+    if (!targetSessionId) return;
+    await this.databaseService.updateSessionStatus(targetSessionId, status);
+    if (this.currentSession && this.currentSession.id === targetSessionId) {
       this.currentSession = { ...this.currentSession, status, updated_at: Date.now() };
     }
     this.view?.webview.postMessage({
       type: 'updateSessionStatus',
-      sessionId: this.currentSessionId,
+      sessionId: targetSessionId,
       status
     });
   }
@@ -282,7 +284,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
   private async loadSession(sessionId: string) {
     const session = await this.databaseService.getSession(sessionId);
     if (!session) {
-      this.view?.webview.postMessage({ type: 'clearMessages' });
+      this.view?.webview.postMessage({ type: 'clearMessages', sessionId });
       await this.sendSessionsList();
       return;
     }
@@ -292,7 +294,11 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     try {
       this.currentMessages = await this.databaseService.getSessionMessages(sessionId);
     } catch (error: any) {
-      this.view?.webview.postMessage({ type: 'showError', message: error.message || 'Failed to load session.' });
+      this.view?.webview.postMessage({
+        type: 'showError',
+        message: error.message || 'Failed to load session.',
+        sessionId
+      });
       this.view?.webview.postMessage({ type: 'clearMessages' });
       await this.sendSessionsList();
       return;
@@ -354,8 +360,14 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     
     this.view?.webview.postMessage({
       type: 'loadSessionMessages',
-      messages
+      messages,
+      sessionId
     });
+    if (session.status === 'generating' && this.activeSessions.has(sessionId)) {
+      this.view?.webview.postMessage({ type: 'generationStarted', sessionId });
+    } else {
+      this.view?.webview.postMessage({ type: 'generationStopped', sessionId });
+    }
     await this.sendSessionsList();
   }
 
@@ -363,7 +375,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     await this.databaseService.deleteSession(sessionId);
     if (sessionId === this.currentSessionId) {
       await this.createNewSession();
-      this.view?.webview.postMessage({ type: 'clearMessages' });
+      this.view?.webview.postMessage({ type: 'clearMessages', sessionId: this.currentSessionId });
     }
     await this.sendSessionsList();
   }
@@ -452,6 +464,15 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     if (settings.completionModel !== undefined) {
       await config.update('completionMode.model', settings.completionModel, vscode.ConfigurationTarget.Global);
     }
+    if (settings.maxIterations !== undefined) {
+      await config.update('agent.maxIterations', settings.maxIterations, vscode.ConfigurationTarget.Global);
+    }
+    if (settings.toolTimeout !== undefined) {
+      await config.update('agent.toolTimeout', settings.toolTimeout, vscode.ConfigurationTarget.Global);
+    }
+    if (settings.maxActiveSessions !== undefined) {
+      await config.update('agent.maxActiveSessions', settings.maxActiveSessions, vscode.ConfigurationTarget.Global);
+    }
     
     this.view?.webview.postMessage({ type: 'settingsSaved' });
     await this.sendSettingsUpdate();
@@ -512,26 +533,51 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     }
   }
 
-  private stopGeneration() {
-    if (this.cancellationTokenSource) {
-      this.cancellationTokenSource.cancel();
+  private stopGeneration(sessionId?: string) {
+    const targetSessionId = sessionId || this.currentSessionId;
+    const tokenSource = targetSessionId ? this.activeSessions.get(targetSessionId) : undefined;
+    if (tokenSource) {
+      tokenSource.cancel();
+      this.activeSessions.delete(targetSessionId);
+    }
+    if (this.cancellationTokenSource === tokenSource) {
       this.cancellationTokenSource = undefined;
     }
-    this.isGenerating = false;
-    this.view?.webview.postMessage({ type: 'generationStopped' });
-    void this.setSessionStatus('completed');
+    this.view?.webview.postMessage({ type: 'generationStopped', sessionId: targetSessionId });
+    void this.setSessionStatus('completed', targetSessionId);
   }
 
   private async handleMessage(text: string, contextItems?: ContextItem[]) {
-    if (!text.trim() || this.isGenerating) return;
+    if (!text.trim()) return;
 
     const session = await this.getCurrentSession();
-    if (!session) return;
+    if (!session || !this.currentSessionId) return;
 
-    this.cancellationTokenSource = new vscode.CancellationTokenSource();
-    const token = this.cancellationTokenSource.token;
-    this.isGenerating = true;
-    await this.setSessionStatus('generating');
+    const sessionIdAtStart = this.currentSessionId;
+    const sessionMessagesSnapshot = [...this.currentMessages];
+    const { agent } = getConfig();
+
+    if (this.activeSessions.has(sessionIdAtStart)) {
+      return;
+    }
+
+    if (this.activeSessions.size >= agent.maxActiveSessions) {
+      this.view?.webview.postMessage({
+        type: 'addMessage',
+        sessionId: sessionIdAtStart,
+        message: {
+          role: 'assistant',
+          content: 'Too many sessions are running. Stop a session or increase the limit in Settings → Agent → Max Active Sessions.'
+        }
+      });
+      return;
+    }
+
+    const tokenSource = new vscode.CancellationTokenSource();
+    this.cancellationTokenSource = tokenSource;
+    this.activeSessions.set(sessionIdAtStart, tokenSource);
+    const token = tokenSource.token;
+    await this.setSessionStatus('generating', sessionIdAtStart);
 
     let contextStr = '';
     if (contextItems && contextItems.length > 0) {
@@ -542,58 +588,60 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
 
     // Add user message to database
     const userMessage = await this.databaseService.addMessage(
-      this.currentSessionId,
+      sessionIdAtStart,
       'user',
       text
     );
-    this.currentMessages.push(userMessage);
+    if (this.currentSessionId === sessionIdAtStart) {
+      this.currentMessages.push(userMessage);
+    }
     
     // Update session title if first message
-    if (this.currentMessages.length === 1) {
+    if (sessionMessagesSnapshot.length === 0) {
       const newTitle = text.substring(0, 40) + (text.length > 40 ? '...' : '');
-      await this.databaseService.updateSession(this.currentSessionId, { title: newTitle });
+      await this.databaseService.updateSession(sessionIdAtStart, { title: newTitle });
       await this.sendSessionsList();
     }
     
     const chatMessage: ChatMessage = { role: 'user', content: text, timestamp: userMessage.timestamp };
-    this.view?.webview.postMessage({ type: 'addMessage', message: chatMessage });
-    this.view?.webview.postMessage({ type: 'generationStarted' });
+    this.view?.webview.postMessage({ type: 'addMessage', message: chatMessage, sessionId: sessionIdAtStart });
+    this.view?.webview.postMessage({ type: 'generationStarted', sessionId: sessionIdAtStart });
 
     if (!this.currentModel) {
-      await this.setSessionStatus('error');
-      this.view?.webview.postMessage({ type: 'generationStopped' });
-      this.isGenerating = false;
-      this.view?.webview.postMessage({ type: 'showError', message: 'No model selected' });
+      await this.setSessionStatus('error', sessionIdAtStart);
+      this.activeSessions.delete(sessionIdAtStart);
+      this.view?.webview.postMessage({ type: 'generationStopped', sessionId: sessionIdAtStart });
+      this.view?.webview.postMessage({ type: 'showError', message: 'No model selected', sessionId: sessionIdAtStart });
       return;
     }
 
     let finalStatus: ChatSessionStatus = 'completed';
     try {
       if (this.currentMode === 'agent') {
-        await this.handleAgentMode(fullPrompt, token);
+        await this.handleAgentMode(fullPrompt, token, sessionIdAtStart);
       } else {
-        await this.handleChatMode(fullPrompt, token);
+        await this.handleChatMode(fullPrompt, token, sessionIdAtStart, sessionMessagesSnapshot);
       }
     } catch (error: any) {
       finalStatus = 'error';
-      this.view?.webview.postMessage({ type: 'showError', message: error.message });
+      this.view?.webview.postMessage({ type: 'showError', message: error.message, sessionId: sessionIdAtStart });
     } finally {
-      await this.setSessionStatus(finalStatus);
-      this.isGenerating = false;
-      this.view?.webview.postMessage({ type: 'generationStopped' });
+      await this.setSessionStatus(finalStatus, sessionIdAtStart);
+      this.activeSessions.delete(sessionIdAtStart);
+      this.view?.webview.postMessage({ type: 'generationStopped', sessionId: sessionIdAtStart });
     }
   }
 
-  private async handleAgentMode(prompt: string, token: vscode.CancellationToken) {
+  private async handleAgentMode(prompt: string, token: vscode.CancellationToken, sessionId: string) {
     const workspace = vscode.workspace.workspaceFolders?.[0];
     if (!workspace) {
-      this.view?.webview.postMessage({ type: 'showError', message: 'No workspace folder open' });
+      this.view?.webview.postMessage({ type: 'showError', message: 'No workspace folder open', sessionId });
       return;
     }
 
     const agentSession = this.sessionManager.createSession(prompt, this.currentModel, workspace);
 
-    this.view?.webview.postMessage({ type: 'showThinking', message: 'Analyzing request...' });
+    this.view?.webview.postMessage({ type: 'showThinking', message: 'Analyzing request...', sessionId });
 
     const hasGit = await this.gitOps.validateGit();
     if (hasGit) {
@@ -605,7 +653,8 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
           type: 'showToolAction',
           status: 'success',
           icon: '📌',
-          text: `Created branch: ${newBranch}`
+          text: `Created branch: ${newBranch}`,
+          sessionId
         });
       } catch {
         // Continue without branch
@@ -613,13 +662,14 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     }
 
     const config: ExecutorConfig = { maxIterations: 20, toolTimeout: 30000, temperature: 0.7 };
-    await this.executeAgent(agentSession, config, token);
+    await this.executeAgent(agentSession, config, token, sessionId);
   }
 
   private async executeAgent(
     agentSession: any,
     config: ExecutorConfig,
-    token: vscode.CancellationToken
+    token: vscode.CancellationToken,
+    sessionId: string
   ) {
     const context = { workspace: agentSession.workspace, token, outputChannel: this.outputChannel };
 
@@ -640,7 +690,8 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
 
         this.view?.webview.postMessage({
           type: 'showThinking',
-          message: iteration === 1 ? 'Thinking...' : 'Working...'
+          message: iteration === 1 ? 'Thinking...' : 'Working...',
+          sessionId
         });
 
         // Collect the full response first - don't stream partial content
@@ -654,7 +705,8 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
             if (partialTool) {
               this.view?.webview.postMessage({
                 type: 'showThinking',
-                message: `Preparing to use ${partialTool}...`
+                message: `Preparing to use ${partialTool}...`,
+                sessionId
               });
             }
           }
@@ -676,7 +728,12 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
           accumulatedExplanation += cleanedText.trim();
           
           // Stream the cleaned response to the UI
-          this.view?.webview.postMessage({ type: 'streamChunk', content: accumulatedExplanation, model: this.currentModel });
+          this.view?.webview.postMessage({
+            type: 'streamChunk',
+            content: accumulatedExplanation,
+            model: this.currentModel,
+            sessionId
+          });
         }
 
         if (response.includes('[TASK_COMPLETE]') || response.toLowerCase().includes('task is complete')) {
@@ -698,7 +755,8 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
         const groupTitle = this.getProgressGroupTitle(toolCalls);
         this.view?.webview.postMessage({
           type: 'startProgressGroup',
-          title: groupTitle
+          title: groupTitle,
+          sessionId
         });
 
         // Execute each tool call
@@ -713,7 +771,8 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
             status: 'running',
             icon: actionIcon,
             text: actionText,
-            detail: actionDetail
+            detail: actionDetail,
+            sessionId
           });
 
           try {
@@ -726,9 +785,9 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
             }
 
             // Store tool execution in database
-            if (this.currentSessionId) {
+            if (sessionId) {
               await this.databaseService.addMessage(
-                this.currentSessionId,
+                sessionId,
                 'tool',
                 result.output || '',
                 {
@@ -748,7 +807,8 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
               status: 'success',
               icon: actionIcon,
               text: successText,
-              detail: successDetail
+              detail: successDetail,
+              sessionId
             });
 
             messages.push({ role: 'assistant', content: response });
@@ -761,14 +821,15 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
               status: 'error',
               icon: actionIcon,
               text: actionText,
-              detail: error.message
+              detail: error.message,
+              sessionId
             });
             agentSession.errors.push(error.message);
 
             // Store failed tool execution in database
-            if (this.currentSessionId) {
+            if (sessionId) {
               await this.databaseService.addMessage(
-                this.currentSessionId,
+                sessionId,
                 'tool',
                 `Error: ${error.message}`,
                 {
@@ -787,13 +848,13 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
         }
 
       } catch (error: any) {
-        this.view?.webview.postMessage({ type: 'showError', message: error.message });
+        this.view?.webview.postMessage({ type: 'showError', message: error.message, sessionId });
         break;
       }
     }
 
     // Finish the progress group
-    this.view?.webview.postMessage({ type: 'finishProgressGroup' });
+    this.view?.webview.postMessage({ type: 'finishProgressGroup', sessionId });
     this.sessionManager.updateSession(agentSession.id, { status: 'completed' });
 
     const filesChanged = agentSession.filesChanged?.length || 0;
@@ -810,7 +871,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       .join('\n');
 
     if (!accumulatedExplanation.trim()) {
-      this.view?.webview.postMessage({ type: 'showThinking', message: 'Working...' });
+      this.view?.webview.postMessage({ type: 'showThinking', message: 'Working...', sessionId });
       const toolResults = (agentSession.toolCalls || [])
         .slice(-6)
         .map((tool: any) => `Tool: ${tool.tool || tool.name}\nOutput:\n${(tool.output || '').toString().slice(0, 2000)}`)
@@ -842,7 +903,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
       } catch {
         // fall back to default message if summarization fails
       }
-      this.view?.webview.postMessage({ type: 'hideThinking' });
+      this.view?.webview.postMessage({ type: 'hideThinking', sessionId });
     }
 
     if (!accumulatedExplanation.trim() && toolSummaryLines) {
@@ -853,15 +914,17 @@ export class ChatViewProvider implements vscode.WebviewViewProvider {
     
     // Save assistant message to database
     const assistantMessage = await this.databaseService.addMessage(
-      this.currentSessionId,
+      sessionId,
       'assistant',
       summary,
       { model: this.currentModel }
     );
-    this.currentMessages.push(assistantMessage);
+    if (this.currentSessionId === sessionId) {
+      this.currentMessages.push(assistantMessage);
+    }
     
-    this.view?.webview.postMessage({ type: 'finalMessage', content: summary, model: this.currentModel });
-    this.view?.webview.postMessage({ type: 'hideThinking' });
+    this.view?.webview.postMessage({ type: 'finalMessage', content: summary, model: this.currentModel, sessionId });
+    this.view?.webview.postMessage({ type: 'hideThinking', sessionId });
   }
 
   private getProgressGroupTitle(toolCalls: Array<{name: string, args: any}>): string {
@@ -1028,11 +1091,16 @@ RULES:
 3. Use [TASK_COMPLETE] when done`;
   }
 
-  private async handleChatMode(prompt: string, token: vscode.CancellationToken) {
+  private async handleChatMode(
+    prompt: string,
+    token: vscode.CancellationToken,
+    sessionId: string,
+    sessionMessages: MessageRecord[]
+  ) {
     let fullResponse = '';
     
     // Build chat messages from current session messages
-    const chatMessages = this.currentMessages
+    const chatMessages = sessionMessages
       .filter(m => m.role !== 'tool')
       .map(m => ({ role: m.role as 'user' | 'assistant', content: m.content }));
     
@@ -1053,20 +1121,22 @@ RULES:
       if (token.isCancellationRequested) break;
       if (chunk.message?.content) {
         fullResponse += chunk.message.content;
-        this.view?.webview.postMessage({ type: 'streamChunk', content: fullResponse, model: this.currentModel });
+        this.view?.webview.postMessage({ type: 'streamChunk', content: fullResponse, model: this.currentModel, sessionId });
       }
     }
 
     // Save assistant message to database
     const assistantMessage = await this.databaseService.addMessage(
-      this.currentSessionId,
+      sessionId,
       'assistant',
       fullResponse,
       { model: this.currentModel }
     );
-    this.currentMessages.push(assistantMessage);
+    if (this.currentSessionId === sessionId) {
+      this.currentMessages.push(assistantMessage);
+    }
     
-    this.view?.webview.postMessage({ type: 'finalMessage', content: fullResponse, model: this.currentModel });
+    this.view?.webview.postMessage({ type: 'finalMessage', content: fullResponse, model: this.currentModel, sessionId });
   }
 
   private async handleModelChange(modelName: string) {

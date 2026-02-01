@@ -219,6 +219,13 @@
           "maximum": 300000,
           "description": "Timeout for tool execution in milliseconds"
         },
+        "ollamaCopilot.agent.maxActiveSessions": {
+          "type": "number",
+          "default": 1,
+          "minimum": 1,
+          "maximum": 5,
+          "description": "Maximum number of active chat sessions that can run concurrently"
+        },
         "ollamaCopilot.contextWindow": {
           "type": "number",
           "default": 16000,

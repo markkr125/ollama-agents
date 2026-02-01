@@ -12,6 +12,7 @@ import {
   currentModel,
   currentPage,
   currentProgressIndex,
+  currentSessionId,
   currentStreamIndex,
   dbMaintenanceStatus,
   hasToken,
@@ -125,7 +126,7 @@ export const selectModel = () => {
 
 export const handleSend = () => {
   if (isGenerating.value) {
-    vscode.postMessage({ type: 'stopGeneration' });
+    vscode.postMessage({ type: 'stopGeneration', sessionId: currentSessionId.value });
     return;
   }
 
@@ -195,6 +196,7 @@ export const saveAgentSettings = () => {
     settings: {
       maxIterations: settings.maxIterations,
       toolTimeout: settings.toolTimeout,
+      maxActiveSessions: settings.maxActiveSessions,
       autoCreateBranch: agentSettings.autoCreateBranch,
       autoCommit: agentSettings.autoCommit
     }
@@ -323,6 +325,7 @@ export const applySettings = (msg: any) => {
   settings.completionModel = msg.settings.completionModel || '';
   settings.maxIterations = msg.settings.maxIterations || settings.maxIterations;
   settings.toolTimeout = msg.settings.toolTimeout || settings.toolTimeout;
+  settings.maxActiveSessions = msg.settings.maxActiveSessions ?? settings.maxActiveSessions;
   settings.temperature = msg.settings.temperature ?? settings.temperature;
 };
 

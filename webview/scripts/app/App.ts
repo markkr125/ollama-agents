@@ -17,6 +17,7 @@ import {
   currentMode,
   currentModel,
   currentProgressIndex,
+  currentSessionId,
   currentStreamIndex,
   dbMaintenanceStatus,
   hasToken,
@@ -68,6 +69,12 @@ window.addEventListener('message', e => {
       sessionsHasMore.value = !!msg.hasMore;
       sessionsCursor.value = typeof msg.nextOffset === 'number' ? msg.nextOffset : null;
       sessionsLoading.value = false;
+      if (Array.isArray(sessions.value)) {
+        const active = sessions.value.find(session => session.active);
+        if (active) {
+          currentSessionId.value = active.id;
+        }
+      }
       break;
 
     case 'appendSessions':
@@ -88,6 +95,9 @@ window.addEventListener('message', e => {
     case 'loadSessionMessages': {
       const items: any[] = [];
       const messages = msg.messages || [];
+      if (msg.sessionId) {
+        currentSessionId.value = msg.sessionId;
+      }
 
       const getProgressTitleForTools = (toolNames: string[]) => {
         const hasRead = toolNames.includes('read_file');
@@ -167,30 +177,44 @@ window.addEventListener('message', e => {
     }
 
     case 'addMessage':
-      if (msg.message?.role === 'user') {
+      if (msg.sessionId && currentSessionId.value && msg.sessionId !== currentSessionId.value) {
+        break;
+      }
+      if (msg.message?.role) {
         timeline.value.push({
           id: `msg_${Date.now()}`,
           type: 'message',
-          role: 'user',
-          content: msg.message.content
+          role: msg.message.role,
+          content: msg.message.content,
+          model: msg.message.model
         });
         scrollToBottom();
       }
       break;
 
     case 'showThinking':
-      updateThinking(true, msg.message || 'Thinking...');
+      if (!msg.sessionId || msg.sessionId === currentSessionId.value) {
+        updateThinking(true, msg.message || 'Thinking...');
+      }
       break;
 
     case 'hideThinking':
-      updateThinking(false);
+      if (!msg.sessionId || msg.sessionId === currentSessionId.value) {
+        updateThinking(false);
+      }
       break;
 
     case 'startProgressGroup':
+      if (msg.sessionId && msg.sessionId !== currentSessionId.value) {
+        break;
+      }
       ensureProgressGroup(msg.title || 'Working on task');
       break;
 
     case 'showToolAction':
+      if (msg.sessionId && msg.sessionId !== currentSessionId.value) {
+        break;
+      }
       ensureProgressGroup('Working on task');
       if (currentProgressIndex.value !== null) {
         const group = timeline.value[currentProgressIndex.value] as ProgressItem;
@@ -230,6 +254,9 @@ window.addEventListener('message', e => {
       break;
 
     case 'finishProgressGroup':
+      if (msg.sessionId && msg.sessionId !== currentSessionId.value) {
+        break;
+      }
       if (currentProgressIndex.value !== null) {
         const group = timeline.value[currentProgressIndex.value] as ProgressItem;
         group.status = 'done';
@@ -241,6 +268,9 @@ window.addEventListener('message', e => {
       break;
 
     case 'streamChunk':
+      if (msg.sessionId && msg.sessionId !== currentSessionId.value) {
+        break;
+      }
       if (currentStreamIndex.value === null) {
         startAssistantMessage(msg.model);
       }
@@ -255,6 +285,9 @@ window.addEventListener('message', e => {
       break;
 
     case 'finalMessage':
+      if (msg.sessionId && msg.sessionId !== currentSessionId.value) {
+        break;
+      }
       if (currentStreamIndex.value === null) {
         startAssistantMessage(msg.model);
       }
@@ -270,11 +303,15 @@ window.addEventListener('message', e => {
       break;
 
     case 'generationStarted':
-      setGenerating(true);
+      if (!msg.sessionId || msg.sessionId === currentSessionId.value) {
+        setGenerating(true);
+      }
       break;
 
     case 'generationStopped':
-      setGenerating(false);
+      if (!msg.sessionId || msg.sessionId === currentSessionId.value) {
+        setGenerating(false);
+      }
       break;
 
     case 'addContextItem':
@@ -284,6 +321,9 @@ window.addEventListener('message', e => {
       break;
 
     case 'showError':
+      if (msg.sessionId && msg.sessionId !== currentSessionId.value) {
+        break;
+      }
       ensureProgressGroup('Working on task');
       if (currentProgressIndex.value !== null) {
         const group = timeline.value[currentProgressIndex.value] as ProgressItem;
@@ -306,6 +346,10 @@ window.addEventListener('message', e => {
       timeline.value = [];
       currentStreamIndex.value = null;
       currentProgressIndex.value = null;
+      if (msg.sessionId) {
+        currentSessionId.value = msg.sessionId;
+      }
+      setGenerating(false);
       break;
 
     case 'connectionTestResult':

@@ -16,6 +16,7 @@ export const sessionsCursor = ref<number | null>(null);
 export const modelOptions = ref<string[]>([]);
 export const currentMode = ref('agent');
 export const currentModel = ref('');
+export const currentSessionId = ref<string | null>(null);
 export const currentPage = ref<'chat' | 'settings' | 'sessions'>('chat');
 export const activeSection = ref('connection');
 export const isGenerating = ref(false);
@@ -39,6 +40,7 @@ export const settings = reactive({
   completionModel: '',
   maxIterations: 25,
   toolTimeout: 30000,
+  maxActiveSessions: 1,
   temperature: 0.7
 });
 
