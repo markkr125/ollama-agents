@@ -10,7 +10,11 @@ export const toolTimeoutSeconds = computed({
   }
 });
 
-export const headerTitle = computed(() => (currentPage.value === 'settings' ? 'Settings' : 'Copilot'));
+export const headerTitle = computed(() => {
+  if (currentPage.value === 'settings') return 'Settings';
+  if (currentPage.value === 'sessions') return 'Sessions';
+  return 'Copilot';
+});
 
 export const searchTotalCount = computed(() =>
   allSearchResults.value.reduce((sum, group) => sum + group.messages.length, 0)

@@ -114,7 +114,7 @@ type ContextItem = {
 
 const props = defineProps({
   currentPage: {
-    type: String as PropType<'chat' | 'settings'>,
+    type: String as PropType<'chat' | 'settings' | 'sessions'>,
     required: true
   },
   setMessagesEl: {

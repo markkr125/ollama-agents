@@ -175,6 +175,8 @@ Settings are defined in `package.json` under `contributes.configuration`:
 
 Chat session metadata lives in SQLite via `SessionIndexService` (`sessions.sqlite`), while messages and semantic search stay in LanceDB (`ollama-copilot.lance`).
 
+- **Storage scope**: Data is stored per-workspace using `ExtensionContext.storageUri` with a fallback to `globalStorageUri` when no workspace is open.
+
 - **Session index**: `SessionIndexService` (sql.js, offset pagination, sorted by `updated_at DESC`).
 - **Messages**: LanceDB `messages` table only (no `sessions` table). Legacy LanceDB sessions are migrated to SQLite on startup.
 - **Deletion**: `deleteSession()` removes from SQLite and deletes messages in LanceDB.
@@ -283,6 +285,16 @@ The chat UI uses VS Code's CSS variables for theming:
   - `border-top: 1px dashed var(--vscode-chat-checkpointSeparator);`
   - `margin: 15px 0;`
 
+### Responsive Sessions Panel (Webview)
+
+- The sessions panel is responsive and auto-opens/closes based on webview width.
+- The sessions panel width is `17.5rem` in `webview/styles/components/_sessions.scss`.
+- The auto-close threshold is rem-based (currently `34rem`) and is enforced in `webview/App.vue` using a `ResizeObserver`.
+- Manual toggles trigger sidebar resize via a `resizeSidebar` message from webview to the extension.
+- Extension handles `resizeSidebar` in `src/views/chatView.ts` by executing:
+  - `workbench.action.increaseSideBarWidth`
+  - `workbench.action.decreaseSideBarWidth`
+
 ---
 
 ## Development Guidelines
@@ -302,6 +314,11 @@ Keep the current folder layout clean and consistent. Do not reintroduce flat, mi
 - Styles use SCSS with an entry file at `webview/styles/styles.scss` and partials grouped under `webview/styles/` (base/layout/components/utils).
 
 If you add new functionality, place it in the appropriate folder above and keep files small and single-purpose. Avoid creating new “catch-all” files.
+
+### Build Validation (Required)
+
+- After making code changes, ensure the project still compiles successfully.
+- Use `npm run compile` to verify the extension and webview build.
 
 ### Adding a New Tool
 

@@ -28,7 +28,6 @@ import {
   searchVisibleCount,
   sessionsHasMore,
   sessionsLoading,
-  sessionsOpen,
   settings,
   thinking,
   timeline,
@@ -104,12 +103,8 @@ export const handleEnter = () => {
   }
 };
 
-export const showPage = (page: 'chat' | 'settings') => {
+export const showPage = (page: 'chat' | 'settings' | 'sessions') => {
   currentPage.value = page;
-};
-
-export const toggleSessions = () => {
-  sessionsOpen.value = !sessionsOpen.value;
 };
 
 export const newChat = () => {
@@ -281,6 +276,7 @@ export const startAssistantMessage = (model?: string) => {
 };
 
 export const loadSession = (id: string) => {
+  showPage('chat');
   vscode.postMessage({ type: 'loadSession', sessionId: id });
 };
 
@@ -424,6 +420,7 @@ export const clearScrollTarget = () => {
 export const loadSessionWithMessage = (sessionId: string, messageId: string) => {
   autoScrollLocked.value = true;
   scrollTargetMessageId.value = messageId;
+  showPage('chat');
   vscode.postMessage({ type: 'loadSession', sessionId });
 };
 

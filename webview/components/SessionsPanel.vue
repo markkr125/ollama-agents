@@ -1,12 +1,8 @@
 <template>
-  <div class="sessions-panel" :class="{ open: sessionsOpen }">
-    <div class="sessions-header">
-      <span>Sessions</span>
-      <button class="icon-btn" @click="closeSessions">✕</button>
-    </div>
-    
-    <!-- Search input -->
-    <div class="sessions-search">
+  <div class="page" :class="{ active: currentPage === 'sessions' }">
+    <div class="sessions-page">
+      <!-- Search input -->
+      <div class="sessions-search">
       <input
         type="text"
         class="search-input"
@@ -20,10 +16,10 @@
         @click="onClearSearch"
       >✕</button>
       <span v-if="isSearching" class="search-spinner">⟳</span>
-    </div>
+      </div>
 
     <!-- Search results -->
-    <div v-if="searchResults.length > 0" class="search-results" @scroll="onSearchResultsScroll">
+      <div v-if="searchResults.length > 0" class="search-results" @scroll="onSearchResultsScroll">
       <div 
         class="search-result-group" 
         v-for="group in searchResults" 
@@ -44,10 +40,10 @@
         </div>
       </div>
       <div v-if="isSearchRevealing" class="search-loading">Loading more...</div>
-    </div>
+      </div>
 
     <!-- Regular sessions list (when not searching) -->
-    <div v-else class="sessions-list" ref="sessionsListRef" @scroll="onSessionsScroll">
+      <div v-else class="sessions-list" ref="sessionsListRef" @scroll="onSessionsScroll">
       <div class="sessions-group" v-for="group in categorizedSessions" :key="group.key">
         <div class="sessions-group-title">{{ group.label }}</div>
         <div
@@ -63,6 +59,7 @@
         </div>
       </div>
       <div v-if="isLoadingMore" class="sessions-loading">Loading...</div>
+      </div>
     </div>
   </div>
 </template>
@@ -73,8 +70,8 @@ import { computed, ref } from 'vue';
 import type { SearchResultGroup, SessionItem } from '../scripts/core/types';
 
 const props = defineProps({
-  sessionsOpen: {
-    type: Boolean,
+  currentPage: {
+    type: String as PropType<'chat' | 'settings' | 'sessions'>,
     required: true
   },
   sessions: {
@@ -119,10 +116,6 @@ const props = defineProps({
   },
   formatTime: {
     type: Function as PropType<(timestamp: number) => string>,
-    required: true
-  },
-  closeSessions: {
-    type: Function as PropType<() => void>,
     required: true
   },
   handleSearchInput: {
