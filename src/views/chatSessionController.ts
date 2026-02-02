@@ -110,7 +110,8 @@ export class ChatSessionController {
       if (m.tool_input) {
         try {
           toolArgs = JSON.parse(m.tool_input);
-        } catch {
+        } catch (error) {
+          console.debug('Failed to parse tool input JSON:', error);
           toolArgs = undefined;
         }
       }
@@ -156,7 +157,8 @@ export class ChatSessionController {
     this.emitter.postMessage({
       type: 'loadSessionMessages',
       messages,
-      sessionId
+      sessionId,
+      autoApproveCommands: !!session.auto_approve_commands
     });
 
     if (session.status === 'generating' && this.isSessionActive(sessionId)) {
@@ -173,6 +175,13 @@ export class ChatSessionController {
     if (sessionId === this.currentSessionId) {
       await this.createNewSession(mode, model);
       this.emitter.postMessage({ type: 'clearMessages', sessionId: this.currentSessionId });
+    }
+    await this.sendSessionsList();
+  }
+
+  async updateSessionAutoApprove(sessionId: string, enabled: boolean): Promise<void> {
+    if (this.currentSession && this.currentSession.id === sessionId) {
+      this.currentSession = { ...this.currentSession, auto_approve_commands: enabled, updated_at: Date.now() };
     }
     await this.sendSessionsList();
   }

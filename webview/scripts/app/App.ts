@@ -12,6 +12,8 @@ import {
   updateThinking
 } from '../core/actions';
 import {
+  autoApproveCommands,
+  autoApproveConfirmVisible,
   connectionStatus,
   contextList,
   currentMode,
@@ -32,7 +34,7 @@ import {
   temperatureSlider,
   timeline
 } from '../core/state';
-import type { ActionItem, MessageItem, ProgressItem, SearchResultGroup } from '../core/types';
+import type { ActionItem, CommandApprovalItem, MessageItem, ProgressItem, SearchResultGroup } from '../core/types';
 
 export * from '../core/actions';
 export * from '../core/computed';
@@ -93,10 +95,19 @@ window.addEventListener('message', e => {
       break;
 
     case 'loadSessionMessages': {
+      console.log('[loadSessionMessages]', {
+        sessionId: msg.sessionId,
+        messageCount: msg.messages?.length || 0,
+        autoApprove: msg.autoApproveCommands
+      });
       const items: any[] = [];
       const messages = msg.messages || [];
       if (msg.sessionId) {
         currentSessionId.value = msg.sessionId;
+      }
+      if (typeof msg.autoApproveCommands === 'boolean') {
+        autoApproveCommands.value = msg.autoApproveCommands;
+        autoApproveConfirmVisible.value = false;
       }
 
       const getProgressTitleForTools = (toolNames: string[]) => {
@@ -116,6 +127,36 @@ window.addEventListener('message', e => {
         return 'Executing task';
       };
 
+      const buildCommandApprovalItem = (toolMessage: any): CommandApprovalItem | null => {
+        let toolInput: any = {};
+        if (toolMessage.toolInput) {
+          try {
+            toolInput = JSON.parse(toolMessage.toolInput);
+          } catch {
+            toolInput = {};
+          }
+        }
+        const command = toolInput?.command || '';
+        if (!command) return null;
+        const output = toolMessage.toolOutput || toolMessage.content || '';
+        const skipped = (output || '').toLowerCase().includes('skipped by user');
+        const exitMatch = (output || '').match(/Exit code:\s*(\d+)/i);
+        const exitCode = exitMatch ? Number(exitMatch[1]) : null;
+
+        return {
+          id: `approval_${toolMessage.id}`,
+          type: 'commandApproval',
+          command,
+          cwd: toolInput?.cwd || '',
+          severity: 'medium',
+          reason: toolMessage.actionDetail || undefined,
+          status: skipped ? 'skipped' : 'approved',
+          timestamp: toolMessage.timestamp || Date.now(),
+          output,
+          exitCode
+        };
+      };
+
       for (let i = 0; i < messages.length; i++) {
         const m = messages[i];
         if (m.role === 'tool') {
@@ -126,35 +167,53 @@ window.addEventListener('message', e => {
             j++;
           }
 
-          const toolNames = toolBlock
-            .map(toolMessage => toolMessage.toolName)
-            .filter(Boolean);
-          const storedTitle = toolBlock.find(toolMessage => toolMessage.progressTitle)?.progressTitle;
-          const groupTitle = storedTitle || getProgressTitleForTools(toolNames);
+          const commandItems = toolBlock
+            .filter(toolMessage => toolMessage.toolName === 'run_terminal_command' || toolMessage.toolName === 'run_command')
+            .map(buildCommandApprovalItem)
+            .filter(Boolean) as CommandApprovalItem[];
 
-          const progressGroup = {
-            id: `progress_${m.id}`,
-            type: 'progress',
-            title: groupTitle,
-            status: 'done',
-            collapsed: true,
-            actions: [] as ActionItem[]
-          };
-
-          for (const toolMessage of toolBlock) {
-            const isError = toolMessage.actionStatus
-              ? toolMessage.actionStatus === 'error'
-              : toolMessage.content?.startsWith('Error:');
-            progressGroup.actions.push({
-              id: toolMessage.id,
-              status: isError ? 'error' : 'success',
-              icon: toolMessage.actionIcon || '📄',
-              text: toolMessage.actionText || toolMessage.toolName || 'Tool',
-              detail: toolMessage.actionDetail || toolMessage.content?.split('\n')[0]?.substring(0, 50) || null
-            });
+          for (const commandItem of commandItems) {
+            items.push(commandItem);
           }
 
-          items.push(progressGroup);
+          const nonCommandTools = toolBlock.filter(toolMessage =>
+            toolMessage.toolName !== 'run_terminal_command' && toolMessage.toolName !== 'run_command'
+          );
+
+          if (nonCommandTools.length > 0) {
+            const toolNames = nonCommandTools
+              .map(toolMessage => toolMessage.toolName)
+              .filter(Boolean);
+            const storedTitle = nonCommandTools.find(toolMessage => toolMessage.progressTitle)?.progressTitle;
+            const groupTitle = storedTitle || getProgressTitleForTools(toolNames);
+
+            const progressGroup = {
+              id: `progress_${m.id}`,
+              type: 'progress',
+              title: groupTitle,
+              status: nonCommandTools.some(toolMessage =>
+                (toolMessage.actionStatus ? toolMessage.actionStatus === 'error' : toolMessage.content?.startsWith('Error:'))
+              ) ? 'error' : 'done',
+              collapsed: true,
+              actions: [] as ActionItem[]
+            };
+
+            for (const toolMessage of nonCommandTools) {
+              const isError = toolMessage.actionStatus
+                ? toolMessage.actionStatus === 'error'
+                : toolMessage.content?.startsWith('Error:');
+              progressGroup.actions.push({
+                id: toolMessage.id,
+                status: isError ? 'error' : 'success',
+                icon: toolMessage.actionIcon || '📄',
+                text: toolMessage.actionText || toolMessage.toolName || 'Tool',
+                detail: toolMessage.actionDetail || toolMessage.content?.split('\n')[0]?.substring(0, 50) || null
+              });
+            }
+
+            items.push(progressGroup);
+          }
+
           i = j - 1;
         } else {
           items.push({
@@ -167,6 +226,7 @@ window.addEventListener('message', e => {
         }
       }
       
+      console.log('[loadSessionMessages] Reconstructed timeline items:', items.length);
       timeline.value = items;
       currentProgressIndex.value = null;
       currentStreamIndex.value = null;
@@ -175,6 +235,79 @@ window.addEventListener('message', e => {
       }
       break;
     }
+
+    case 'requestToolApproval':
+      if (msg.sessionId && msg.sessionId !== currentSessionId.value) {
+        break;
+      }
+      if (msg.approval) {
+        const item: CommandApprovalItem = {
+          id: msg.approval.id,
+          type: 'commandApproval',
+          command: msg.approval.command,
+          cwd: msg.approval.cwd,
+          severity: msg.approval.severity || 'medium',
+          reason: msg.approval.reason,
+          status: 'pending',
+          timestamp: msg.approval.timestamp || Date.now(),
+          output: undefined,
+          exitCode: null,
+          autoApproved: false
+        };
+        timeline.value.push(item);
+        scrollToBottom();
+      }
+      break;
+
+    case 'toolApprovalResult': {
+      if (msg.sessionId && msg.sessionId !== currentSessionId.value) {
+        break;
+      }
+      const existing = timeline.value.find(item => item.type === 'commandApproval' && item.id === msg.approvalId) as CommandApprovalItem | undefined;
+      if (existing) {
+        existing.status = msg.status || existing.status;
+        existing.output = msg.output ?? existing.output;
+        existing.autoApproved = !!msg.autoApproved || existing.autoApproved;
+        if (typeof msg.exitCode === 'number') {
+          existing.exitCode = msg.exitCode;
+        }
+      } else {
+        const item: CommandApprovalItem = {
+          id: msg.approvalId || `approval_${Date.now()}`,
+          type: 'commandApproval',
+          command: msg.command || '',
+          cwd: msg.cwd,
+          severity: msg.severity || 'medium',
+          reason: msg.reason,
+          status: msg.status || 'approved',
+          timestamp: Date.now(),
+          output: msg.output,
+          exitCode: typeof msg.exitCode === 'number' ? msg.exitCode : null,
+          autoApproved: !!msg.autoApproved
+        };
+        timeline.value.push(item);
+      }
+      if (currentProgressIndex.value !== null && msg.status && msg.status !== 'pending') {
+        const group = timeline.value[currentProgressIndex.value] as ProgressItem;
+        group.status = msg.status === 'skipped' ? 'done' : 'done';
+        group.actions = group.actions.map(action =>
+          action.status === 'running' || action.status === 'pending'
+            ? { ...action, status: msg.status === 'skipped' ? 'error' : 'success' }
+            : action
+        );
+        group.lastActionStatus = group.actions[group.actions.length - 1]?.status || 'success';
+        group.collapsed = true;
+        currentProgressIndex.value = null;
+      }
+      scrollToBottom();
+      break;
+    }
+
+    case 'sessionApprovalSettings':
+      if (!msg.sessionId || msg.sessionId === currentSessionId.value) {
+        autoApproveCommands.value = !!msg.autoApproveCommands;
+      }
+      break;
 
     case 'addMessage':
       if (msg.sessionId && currentSessionId.value && msg.sessionId !== currentSessionId.value) {
@@ -244,6 +377,12 @@ window.addEventListener('message', e => {
           } else {
             group.actions.push(action);
           }
+          const hasActive = group.actions.some(
+            actionItem => actionItem.status === 'running' || actionItem.status === 'pending'
+          );
+          if (!hasActive) {
+            group.status = action.status === 'error' ? 'error' : 'done';
+          }
         } else {
           group.actions.push(action);
           group.status = 'running';
@@ -261,6 +400,11 @@ window.addEventListener('message', e => {
         const group = timeline.value[currentProgressIndex.value] as ProgressItem;
         group.status = 'done';
         group.collapsed = true;
+        group.actions = group.actions.map(action =>
+          action.status === 'running' || action.status === 'pending'
+            ? { ...action, status: 'success' }
+            : action
+        );
         const lastAction = group.actions[group.actions.length - 1];
         group.lastActionStatus = lastAction?.status || 'success';
       }

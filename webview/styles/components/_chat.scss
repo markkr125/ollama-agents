@@ -1,4 +1,122 @@
 /* Chat Page */
+.chat-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 6px 12px;
+  border-bottom: 1px solid var(--surface-border);
+  background: var(--panel-bg);
+  font-size: 11px;
+  color: var(--muted);
+}
+
+.chat-toolbar-title {
+  font-weight: 600;
+  color: var(--fg);
+}
+
+.chat-toolbar-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.chat-toolbar-label {
+  font-size: 11px;
+  color: var(--muted);
+}
+
+.auto-approve-confirm-overlay {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background: rgba(0, 0, 0, 0.6);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 1000;
+  animation: fadeIn 0.15s ease-out;
+}
+
+.auto-approve-confirm-dialog {
+  background: var(--panel-bg);
+  border: 1px solid var(--surface-border);
+  border-radius: 6px;
+  padding: 20px;
+  max-width: 460px;
+  width: 90%;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.4);
+  animation: slideIn 0.2s ease-out;
+}
+
+.confirm-dialog-icon {
+  font-size: 32px;
+  text-align: center;
+  margin-bottom: 12px;
+}
+
+.confirm-dialog-title {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--fg);
+  text-align: center;
+  margin-bottom: 12px;
+}
+
+.confirm-dialog-message {
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--muted);
+  margin-bottom: 20px;
+  text-align: center;
+
+  strong {
+    color: var(--vscode-errorForeground);
+    font-weight: 600;
+  }
+
+  code {
+    background: var(--surface-bg);
+    padding: 2px 6px;
+    border-radius: 3px;
+    font-family: var(--vscode-editor-font-family);
+    font-size: 11px;
+  }
+}
+
+.confirm-dialog-actions {
+  display: flex;
+  gap: 8px;
+  justify-content: center;
+
+  button {
+    flex: 1;
+    max-width: 160px;
+  }
+}
+
+@keyframes fadeIn {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+@keyframes slideIn {
+  from {
+    transform: translateY(-20px);
+    opacity: 0;
+  }
+  to {
+    transform: translateY(0);
+    opacity: 1;
+  }
+}
+
 .messages {
   flex: 1;
   overflow-y: auto;

@@ -42,6 +42,7 @@ export interface SessionRecord {
   mode: string;
   model: string;
   status: ChatSessionStatus;
+  auto_approve_commands?: boolean;
   created_at: number;
   updated_at: number;
 }

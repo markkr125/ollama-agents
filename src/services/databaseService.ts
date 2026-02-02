@@ -241,14 +241,14 @@ export class DatabaseService {
 
     try {
       await this.db.dropTable('messages');
-    } catch {
-      // ignore if missing
+    } catch (error) {
+      console.debug('Drop messages table skipped:', error);
     }
 
     try {
       await this.db.dropTable('sessions');
-    } catch {
-      // ignore if missing
+    } catch (error) {
+      console.debug('Drop sessions table skipped:', error);
     }
 
     this.legacySessionsTable = null;
@@ -492,6 +492,7 @@ export class DatabaseService {
       mode,
       model,
       status: 'idle',
+      auto_approve_commands: false,
       created_at: Date.now(),
       updated_at: Date.now()
     };
@@ -513,15 +514,21 @@ export class DatabaseService {
   }
 
   async deleteSession(id: string): Promise<void> {
-    if (!this.messagesTable) {
-      return;
-    }
-
     // Delete the session from SQLite
     await this.sessionIndex.deleteSession(id);
 
-    // Delete all messages for this session
-    await this.messagesTable.delete(`session_id = "${id}"`);
+    // Delete all messages for this session (best-effort)
+    const table = this.messagesTable || (this.db ? await this.db.openTable('messages').catch(() => null) : null);
+    this.messagesTable = table;
+    if (!table) {
+      return;
+    }
+
+    try {
+      await table.delete(`session_id = "${id}"`);
+    } catch (error) {
+      console.error('Failed to delete session messages:', error);
+    }
   }
 
   async listSessions(limit = 50, offset = 0): Promise<SessionsPage> {
@@ -548,6 +555,20 @@ export class DatabaseService {
       progressTitle?: string;
     } = {}
   ): Promise<MessageRecord> {
+    // Ensure table is available, try to open it if not
+    if (!this.messagesTable && this.db) {
+      try {
+        const tableNames = await this.db.tableNames();
+        if (tableNames.includes('messages')) {
+          this.messagesTable = await this.db.openTable('messages');
+        } else {
+          await this.createMessagesTable();
+        }
+      } catch {
+        // fall through to initialized check
+      }
+    }
+
     if (!this.messagesTable) {
       throw new Error('Messages table not initialized');
     }
@@ -581,17 +602,90 @@ export class DatabaseService {
   }
 
   async getSessionMessages(sessionId: string): Promise<MessageRecord[]> {
+    // Ensure table is available
+    if (!this.messagesTable && this.db) {
+      try {
+        const tableNames = await this.db.tableNames();
+        if (tableNames.includes('messages')) {
+          this.messagesTable = await this.db.openTable('messages');
+        } else {
+          await this.createMessagesTable();
+          return []; // New table, no messages
+        }
+      } catch {
+        return [];
+      }
+    }
+
+    if (!this.db) {
+      return [];
+    }
+
     if (!this.messagesTable) {
       return [];
     }
 
-    const results = await this.messagesTable
-      .query()
-      .where(`session_id = "${sessionId}"`)
-      .toArray();
+    // Re-open table to ensure we get fresh data (LanceDB caching issue)
+    try {
+      this.messagesTable = await this.db.openTable('messages');
+    } catch {
+      // Use cached reference
+    }
 
-    const messages = results as unknown as MessageRecord[];
-    return messages.sort((a, b) => a.timestamp - b.timestamp);
+    const fetchMessages = async (): Promise<MessageRecord[]> => {
+      const table = this.messagesTable;
+      if (!table) {
+        return [];
+      }
+      let results: MessageRecord[] = [];
+      const clauses = [
+        `session_id = '${sessionId}'`,
+        `session_id == '${sessionId}'`,
+        `session_id = "${sessionId}"`
+      ];
+
+      for (const clause of clauses) {
+        try {
+          const queried = await table
+            .query()
+            .where(clause)
+            .toArray();
+          results = queried as unknown as MessageRecord[];
+        } catch {
+          results = [];
+        }
+
+        if (results.length > 0) {
+          break;
+        }
+      }
+
+      if (results.length === 0) {
+        try {
+          const allRows = await table.query().toArray();
+          results = (allRows as unknown as MessageRecord[]).filter(
+            row => row.session_id === sessionId
+          );
+        } catch {
+          results = [];
+        }
+      }
+
+      return results;
+    };
+
+    let results = await fetchMessages();
+    if (results.length === 0) {
+      await new Promise(resolve => setTimeout(resolve, 75));
+      try {
+        this.messagesTable = await this.db.openTable('messages');
+      } catch {
+        // Use cached reference
+      }
+      results = await fetchMessages();
+    }
+
+    return results.sort((a, b) => a.timestamp - b.timestamp);
   }
 
   async deleteMessage(id: string): Promise<void> {

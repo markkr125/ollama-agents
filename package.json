@@ -9,7 +9,7 @@
     "url": "https://github.com/your-username/ollama-copilot"
   },
   "engines": {
-    "vscode": "^1.85.0"
+    "vscode": "^1.93.0"
   },
   "categories": [
     "AI",
@@ -282,7 +282,7 @@
   },
   "devDependencies": {
     "@types/node": "^20.10.0",
-    "@types/vscode": "^1.85.0",
+    "@types/vscode": "^1.93.0",
     "@vitejs/plugin-vue": "^5.0.0",
     "@vscode/vsce": "^2.22.0",
     "markdown-it": "^14.1.0",

@@ -9,6 +9,7 @@ import { AgentChatExecutor } from '../services/agentChatExecutor';
 import { DatabaseService } from '../services/databaseService';
 import { ModelManager } from '../services/modelManager';
 import { OllamaClient } from '../services/ollamaClient';
+import { TerminalManager } from '../services/terminalManager';
 import { TokenManager } from '../services/tokenManager';
 import { ChatSessionStatus, MessageRecord } from '../types/session';
 import { ChatSessionController } from './chatSessionController';
@@ -32,6 +33,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider, WebviewMess
   private sessionController: ChatSessionController;
   private settingsHandler: SettingsHandler;
   private agentExecutor: AgentChatExecutor;
+  private terminalManager: TerminalManager;
 
   constructor(
     private readonly extensionUri: vscode.Uri,
@@ -46,6 +48,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider, WebviewMess
     this.toolRegistry.registerBuiltInTools();
     this.outputChannel = vscode.window.createOutputChannel('Ollama Copilot Agent');
     this.gitOps = new GitOperations();
+    this.terminalManager = new TerminalManager();
 
     this.sessionController = new ChatSessionController(
       this.databaseService,
@@ -60,7 +63,8 @@ export class ChatViewProvider implements vscode.WebviewViewProvider, WebviewMess
       this.sessionManager,
       this.outputChannel,
       this,
-      () => this.refreshExplorer()
+      () => this.refreshExplorer(),
+      this.terminalManager
     );
 
     this.configChangeDisposable = vscode.workspace.onDidChangeConfiguration(async e => {
@@ -88,6 +92,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider, WebviewMess
     webviewView.onDidDispose(() => {
       this.configChangeDisposable?.dispose();
       this.configChangeDisposable = undefined;
+      this.terminalManager.dispose();
     });
 
     webviewView.onDidChangeVisibility(() => {
@@ -125,6 +130,11 @@ export class ChatViewProvider implements vscode.WebviewViewProvider, WebviewMess
         case 'newChat':
           await this.sessionController.createNewSession(this.currentMode, this.currentModel);
           this.postMessage({ type: 'clearMessages', sessionId: this.sessionController.getCurrentSessionId() });
+          this.postMessage({
+            type: 'sessionApprovalSettings',
+            sessionId: this.sessionController.getCurrentSessionId(),
+            autoApproveCommands: false
+          });
           await this.sessionController.sendSessionsList();
           break;
         case 'addContext':
@@ -154,7 +164,24 @@ export class ChatViewProvider implements vscode.WebviewViewProvider, WebviewMess
         case 'runDbMaintenance':
           await this.settingsHandler.runDbMaintenance();
           break;
+        case 'toolApprovalResponse':
+          this.agentExecutor.handleToolApprovalResponse(data.approvalId, !!data.approved);
+          break;
+        case 'setAutoApprove':
+          await this.handleSetAutoApprove(data.sessionId, !!data.enabled);
+          break;
       }
+    });
+  }
+
+  private async handleSetAutoApprove(sessionId: string, enabled: boolean) {
+    if (!sessionId) return;
+    await this.databaseService.updateSession(sessionId, { auto_approve_commands: enabled });
+    await this.sessionController.updateSessionAutoApprove(sessionId, enabled);
+    this.postMessage({
+      type: 'sessionApprovalSettings',
+      sessionId,
+      autoApproveCommands: enabled
     });
   }
 
@@ -240,6 +267,12 @@ export class ChatViewProvider implements vscode.WebviewViewProvider, WebviewMess
     const session = await this.sessionController.getCurrentSession();
     if (!session || !sessionIdAtStart) return;
 
+    console.log('handleMessage received user input:', {
+      sessionId: sessionIdAtStart,
+      textLength: text.length,
+      mode: this.currentMode
+    });
+
     const sessionMessagesSnapshot = [...this.sessionController.getCurrentMessages()];
     const { agent } = getConfig();
 
@@ -272,6 +305,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider, WebviewMess
 
     const fullPrompt = contextStr ? `${contextStr}\n\n${text}` : text;
 
+    console.log('Persisting user message to database:', { sessionId: sessionIdAtStart });
     const userMessage = await this.databaseService.addMessage(sessionIdAtStart, 'user', text);
     if (this.sessionController.getCurrentSessionId() === sessionIdAtStart) {
       this.sessionController.pushMessage(userMessage);

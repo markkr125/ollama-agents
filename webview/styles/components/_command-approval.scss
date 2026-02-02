@@ -1,0 +1,154 @@
+.command-approval {
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  margin: 12px 0;
+  background: var(--surface-bg);
+  overflow: hidden;
+
+  &.severity-critical {
+    border-color: var(--error);
+  }
+
+  &.severity-high {
+    border-color: var(--vscode-charts-orange);
+  }
+
+  &.severity-medium {
+    border-color: var(--vscode-charts-yellow);
+  }
+}
+
+.command-approval-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 12px;
+  background: var(--panel-bg);
+  font-size: 12px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.02em;
+}
+
+.command-approval-icon {
+  font-size: 14px;
+}
+
+.command-approval-title {
+  color: var(--fg);
+}
+
+.command-approval-tag {
+  margin-left: auto;
+  padding: 2px 6px;
+  border-radius: 6px;
+  background: var(--btn-bg);
+  color: var(--btn-fg);
+  font-size: 10px;
+  text-transform: none;
+}
+
+.command-approval-severity {
+  padding: 2px 6px;
+  border-radius: 6px;
+  background: var(--border);
+  color: var(--muted);
+  font-size: 10px;
+  text-transform: uppercase;
+}
+
+.command-approval-command {
+  padding: 12px;
+  border-top: 1px solid var(--border);
+  border-bottom: 1px solid var(--border);
+  background: var(--vscode-input-background);
+
+  code {
+    font-family: var(--vscode-editor-font-family);
+    font-size: 12px;
+    color: var(--vscode-input-foreground);
+    white-space: pre-wrap;
+    word-break: break-all;
+  }
+}
+
+.command-approval-detail {
+  display: flex;
+  gap: 8px;
+  padding: 6px 12px;
+  font-size: 11px;
+  color: var(--muted);
+
+  .detail-label {
+    font-weight: 600;
+    color: var(--fg);
+  }
+}
+
+.command-approval-output {
+  padding: 10px 12px;
+  background: var(--panel-bg);
+  border-top: 1px solid var(--border);
+  max-height: 220px;
+  overflow: auto;
+
+  pre {
+    margin: 0;
+    white-space: pre-wrap;
+    font-family: var(--vscode-editor-font-family);
+    font-size: 11px;
+    color: var(--fg);
+  }
+}
+
+.command-approval-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 12px;
+  border-top: 1px solid var(--border);
+}
+
+.command-approval-auto {
+  margin-left: auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 11px;
+  color: var(--muted);
+  cursor: pointer;
+}
+
+.approve-btn,
+.skip-btn {
+  border-radius: 6px;
+  padding: 6px 12px;
+  font-size: 12px;
+  border: none;
+  cursor: pointer;
+}
+
+.approve-btn {
+  background: var(--btn-bg);
+  color: var(--btn-fg);
+}
+
+.skip-btn {
+  background: transparent;
+  color: var(--fg);
+  border: 1px solid var(--border);
+}
+
+.command-approval-status {
+  padding: 10px 12px;
+  border-top: 1px solid var(--border);
+  font-size: 12px;
+}
+
+.status-approved {
+  color: var(--success);
+}
+
+.status-skipped {
+  color: var(--error);
+}

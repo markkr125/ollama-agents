@@ -44,6 +44,7 @@ export class SessionIndexService {
         mode TEXT NOT NULL,
         model TEXT NOT NULL,
         status TEXT NOT NULL DEFAULT 'completed',
+        auto_approve_commands INTEGER NOT NULL DEFAULT 0,
         created_at INTEGER NOT NULL,
         updated_at INTEGER NOT NULL
       );
@@ -55,6 +56,7 @@ export class SessionIndexService {
     `);
 
     await this.ensureStatusColumn();
+    await this.ensureAutoApproveColumn();
 
     this.initialized = true;
     await this.persist();
@@ -79,7 +81,8 @@ export class SessionIndexService {
       if (!result || result.length === 0) return false;
       const rows = result[0].values || [];
       return rows.some((row: any[]) => String(row[1]) === column);
-    } catch {
+    } catch (error) {
+      console.error('Failed to check table column:', { table, column, error });
       return false;
     }
   }
@@ -95,6 +98,17 @@ export class SessionIndexService {
     await this.persist();
   }
 
+  private async ensureAutoApproveColumn(): Promise<void> {
+    if (!this.db) return;
+    if (this.hasColumn('sessions', 'auto_approve_commands')) {
+      return;
+    }
+
+    this.db.run('ALTER TABLE sessions ADD COLUMN auto_approve_commands INTEGER NOT NULL DEFAULT 0;');
+    this.db.run('UPDATE sessions SET auto_approve_commands = 0 WHERE auto_approve_commands IS NULL;');
+    await this.persist();
+  }
+
   private mapRow(row: Record<string, any>): SessionRecord {
     return {
       id: String(row.id),
@@ -102,6 +116,7 @@ export class SessionIndexService {
       mode: String(row.mode ?? ''),
       model: String(row.model ?? ''),
       status: (String(row.status ?? 'completed') as ChatSessionStatus),
+      auto_approve_commands: Boolean(row.auto_approve_commands ?? 0),
       created_at: Number(row.created_at ?? 0),
       updated_at: Number(row.updated_at ?? 0)
     };
@@ -110,14 +125,15 @@ export class SessionIndexService {
   async createSession(record: SessionRecord): Promise<void> {
     this.ensureReady();
     this.db.run(
-      `INSERT INTO sessions (id, title, mode, model, status, created_at, updated_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?);`,
+      `INSERT INTO sessions (id, title, mode, model, status, auto_approve_commands, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?);`,
       [
         record.id,
         record.title,
         record.mode,
         record.model,
         record.status ?? 'completed',
+        record.auto_approve_commands ? 1 : 0,
         record.created_at,
         record.updated_at
       ]
@@ -128,13 +144,14 @@ export class SessionIndexService {
   async upsertSession(record: SessionRecord): Promise<void> {
     this.ensureReady();
     this.db.run(
-      `INSERT INTO sessions (id, title, mode, model, status, created_at, updated_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?)
+      `INSERT INTO sessions (id, title, mode, model, status, auto_approve_commands, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?)
        ON CONFLICT(id) DO UPDATE SET
          title = excluded.title,
          mode = excluded.mode,
          model = excluded.model,
          status = excluded.status,
+         auto_approve_commands = excluded.auto_approve_commands,
          created_at = excluded.created_at,
          updated_at = excluded.updated_at;`,
       [
@@ -143,6 +160,7 @@ export class SessionIndexService {
         record.mode,
         record.model,
         record.status ?? 'completed',
+        record.auto_approve_commands ? 1 : 0,
         record.created_at,
         record.updated_at
       ]
@@ -153,7 +171,7 @@ export class SessionIndexService {
   async getSession(id: string): Promise<SessionRecord | null> {
     this.ensureReady();
     const stmt = this.db.prepare(
-      'SELECT id, title, mode, model, status, created_at, updated_at FROM sessions WHERE id = ? LIMIT 1;'
+      'SELECT id, title, mode, model, status, auto_approve_commands, created_at, updated_at FROM sessions WHERE id = ? LIMIT 1;'
     );
     stmt.bind([id]);
     let result: SessionRecord | null = null;
@@ -185,6 +203,10 @@ export class SessionIndexService {
       fields.push('status = ?');
       values.push(updates.status);
     }
+    if (updates.auto_approve_commands !== undefined) {
+      fields.push('auto_approve_commands = ?');
+      values.push(updates.auto_approve_commands ? 1 : 0);
+    }
 
     const updatedAt = typeof updates.updated_at === 'number' ? updates.updated_at : Date.now();
     fields.push('updated_at = ?');
@@ -205,7 +227,7 @@ export class SessionIndexService {
   async listSessions(limit = 50, offset = 0): Promise<SessionsPage> {
     this.ensureReady();
     const stmt = this.db.prepare(
-      'SELECT id, title, mode, model, status, created_at, updated_at FROM sessions ORDER BY updated_at DESC LIMIT ? OFFSET ?;'
+      'SELECT id, title, mode, model, status, auto_approve_commands, created_at, updated_at FROM sessions ORDER BY updated_at DESC LIMIT ? OFFSET ?;'
     );
     stmt.bind([limit + 1, offset]);
 
@@ -225,7 +247,7 @@ export class SessionIndexService {
   async listAllSessions(): Promise<SessionRecord[]> {
     this.ensureReady();
     const stmt = this.db.prepare(
-      'SELECT id, title, mode, model, status, created_at, updated_at FROM sessions;'
+      'SELECT id, title, mode, model, status, auto_approve_commands, created_at, updated_at FROM sessions;'
     );
     const rows: SessionRecord[] = [];
     while (stmt.step()) {

@@ -1,5 +1,35 @@
 <template>
   <div class="page" :class="{ active: currentPage === 'chat' }">
+    <div v-if="currentMode === 'agent'" class="chat-toolbar">
+      <div class="chat-toolbar-title">Session controls</div>
+      <div
+        class="chat-toolbar-item"
+        title="Auto-approve commands for this session (critical commands still require approval)"
+      >
+        <span class="chat-toolbar-label">Auto-approve commands</span>
+        <div class="toggle" :class="{ on: autoApproveCommands }" @click="toggleAutoApproveCommands"></div>
+      </div>
+    </div>
+    <div
+      v-if="currentMode === 'agent' && autoApproveConfirmVisible"
+      class="auto-approve-confirm-overlay"
+      @click.self="cancelAutoApproveCommands"
+    >
+      <div class="auto-approve-confirm-dialog">
+        <div class="confirm-dialog-icon">⚠️</div>
+        <div class="confirm-dialog-title">Enable Auto-Approve Commands?</div>
+        <div class="confirm-dialog-message">
+          Commands will run automatically without asking for approval.
+          <strong>This can be risky</strong> as it allows the agent to execute terminal commands without your review.
+          <br><br>
+          Critical commands (like <code>rm -rf</code>, <code>sudo</code>) will still require approval.
+        </div>
+        <div class="confirm-dialog-actions">
+          <button class="approve-btn" @click="confirmAutoApproveCommands">Enable Auto-Approve</button>
+          <button class="skip-btn" @click="cancelAutoApproveCommands">Cancel</button>
+        </div>
+      </div>
+    </div>
     <div class="messages" ref="localMessagesEl">
       <div v-if="timeline.length === 0" class="empty-state">
         <h3>How can I help you today?</h3>
@@ -22,6 +52,16 @@
             v-if="item.role === 'assistant' && index < timeline.length - 1"
             class="message-divider"
           ></div>
+        </template>
+
+        <template v-else-if="item.type === 'commandApproval'">
+          <CommandApproval
+            :item="item"
+            :on-approve="handleApproveCommand"
+            :on-skip="handleSkipCommand"
+            :auto-approve-enabled="autoApproveCommands"
+            :on-toggle-auto-approve="toggleAutoApproveCommands"
+          />
         </template>
 
         <div v-else class="progress-group" :class="{ collapsed: item.collapsed }">
@@ -100,7 +140,8 @@
 <script setup lang="ts">
 import type { PropType } from 'vue';
 import { nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue';
-import type { ActionItem, ProgressItem, TimelineItem } from '../scripts/core/types';
+import type { ActionItem, CommandApprovalItem, ProgressItem, TimelineItem } from '../scripts/core/types';
+import CommandApproval from './CommandApproval.vue';
 
 type ThinkingState = {
   visible: boolean;
@@ -165,6 +206,34 @@ const props = defineProps({
     type: Array as PropType<string[]>,
     required: true
   },
+  autoApproveCommands: {
+    type: Boolean,
+    required: true
+  },
+  autoApproveConfirmVisible: {
+    type: Boolean,
+    required: true
+  },
+  toggleAutoApproveCommands: {
+    type: Function as PropType<() => void>,
+    required: true
+  },
+  confirmAutoApproveCommands: {
+    type: Function as PropType<() => void>,
+    required: true
+  },
+  cancelAutoApproveCommands: {
+    type: Function as PropType<() => void>,
+    required: true
+  },
+  approveCommand: {
+    type: Function as PropType<(approvalId: string) => void>,
+    required: true
+  },
+  skipCommand: {
+    type: Function as PropType<(approvalId: string) => void>,
+    required: true
+  },
   isGenerating: {
     type: Boolean,
     required: true
@@ -223,13 +292,13 @@ const localMessagesEl = ref<HTMLDivElement | null>(null);
 const localInputEl = ref<HTMLTextAreaElement | null>(null);
 
 const progressStatus = (item: ProgressItem) => {
+  if (item.status === 'error') return 'error';
+  if (item.status === 'done') return 'success';
   if (item.status === 'running') return 'running';
   const hasRunning = item.actions.some(action => action.status === 'running' || action.status === 'pending');
   if (hasRunning) return 'running';
   if (item.actions.some(action => action.status === 'error')) return 'error';
   if (item.lastActionStatus) return item.lastActionStatus;
-  if (item.status === 'error') return 'error';
-  if (item.status === 'done') return 'success';
   return 'running';
 };
 
@@ -258,6 +327,26 @@ const copyText = async (text: string) => {
   textarea.select();
   document.execCommand('copy');
   document.body.removeChild(textarea);
+};
+
+const handleApproveCommand = (approvalId: string) => {
+  const item = props.timeline.find(
+    entry => entry.type === 'commandApproval' && entry.id === approvalId
+  ) as CommandApprovalItem | undefined;
+  if (item) {
+    item.status = 'approved';
+  }
+  props.approveCommand(approvalId);
+};
+
+const handleSkipCommand = (approvalId: string) => {
+  const item = props.timeline.find(
+    entry => entry.type === 'commandApproval' && entry.id === approvalId
+  ) as CommandApprovalItem | undefined;
+  if (item) {
+    item.status = 'skipped';
+  }
+  props.skipCommand(approvalId);
 };
 
 const onMessagesClick = async (event: MouseEvent) => {

@@ -24,7 +24,21 @@ export type ProgressItem = {
   lastActionStatus?: ActionItem['status'];
 };
 
-export type TimelineItem = MessageItem | ProgressItem;
+export type CommandApprovalItem = {
+  id: string;
+  type: 'commandApproval';
+  command: string;
+  cwd?: string;
+  severity: 'critical' | 'high' | 'medium';
+  reason?: string;
+  status: 'pending' | 'approved' | 'skipped';
+  timestamp: number;
+  output?: string;
+  exitCode?: number | null;
+  autoApproved?: boolean;
+};
+
+export type TimelineItem = MessageItem | ProgressItem | CommandApprovalItem;
 
 export type SessionItem = {
   id: string;
