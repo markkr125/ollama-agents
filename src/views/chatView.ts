@@ -168,7 +168,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider, WebviewMess
           await this.settingsHandler.recreateMessagesTable();
           break;
         case 'toolApprovalResponse':
-          this.agentExecutor.handleToolApprovalResponse(data.approvalId, !!data.approved);
+          this.agentExecutor.handleToolApprovalResponse(data.approvalId, !!data.approved, data.command);
           break;
         case 'setAutoApprove':
           await this.handleSetAutoApprove(data.sessionId, !!data.enabled);

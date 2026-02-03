@@ -160,8 +160,8 @@ export const cancelAutoApproveCommands = () => {
   autoApproveConfirmVisible.value = false;
 };
 
-export const approveCommand = (approvalId: string) => {
-  vscode.postMessage({ type: 'toolApprovalResponse', approvalId, approved: true });
+export const approveCommand = (approvalId: string, command?: string) => {
+  vscode.postMessage({ type: 'toolApprovalResponse', approvalId, approved: true, command });
 };
 
 export const skipCommand = (approvalId: string) => {

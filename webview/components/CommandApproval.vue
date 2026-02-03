@@ -8,7 +8,20 @@
     </div>
 
     <div class="command-approval-command">
-      <code>$ {{ item.command }}</code>
+      <template v-if="item.status === 'pending'">
+        <div class="command-approval-edit">
+          <span class="command-prefix">$</span>
+          <input
+            v-model="editableCommand"
+            class="command-approval-input"
+            type="text"
+            spellcheck="false"
+          />
+        </div>
+      </template>
+      <template v-else>
+        <code>$ {{ item.command }}</code>
+      </template>
     </div>
 
     <div v-if="item.cwd" class="command-approval-detail">
@@ -26,7 +39,7 @@
     </div>
 
     <div v-if="item.status === 'pending'" class="command-approval-actions">
-      <button class="approve-btn" @click="onApprove(item.id)">Run (⌘↵)</button>
+      <button class="approve-btn" @click="onApprove(item.id, editableCommand)">Run (⌘↵)</button>
       <button class="skip-btn" @click="onSkip(item.id)">Skip (⎋)</button>
       <label class="command-approval-auto">
         <span>Auto-approve commands (session)</span>
@@ -42,13 +55,23 @@
 </template>
 
 <script setup lang="ts">
+import { ref, watch } from 'vue';
 import type { CommandApprovalItem } from '../scripts/core/types';
 
-defineProps<{
+const props = defineProps<{
   item: CommandApprovalItem;
-  onApprove: (id: string) => void;
+  onApprove: (id: string, command: string) => void;
   onSkip: (id: string) => void;
   autoApproveEnabled: boolean;
   onToggleAutoApprove: () => void;
 }>();
+
+const editableCommand = ref(props.item.command);
+
+watch(
+  () => props.item.command,
+  (value) => {
+    editableCommand.value = value;
+  }
+);
 </script>

@@ -11,7 +11,7 @@ import { WebviewMessageEmitter } from '../views/chatTypes';
 import { getProgressGroupTitle, getToolActionInfo, getToolSuccessInfo } from '../views/toolUIFormatter';
 
 export class AgentChatExecutor {
-  private pendingApprovals = new Map<string, { resolve: (approved: boolean) => void }>();
+  private pendingApprovals = new Map<string, { resolve: (result: { approved: boolean; command?: string }) => void }>();
 
   constructor(
     private readonly client: OllamaClient,
@@ -24,10 +24,10 @@ export class AgentChatExecutor {
     private readonly terminalManager: TerminalManager
   ) {}
 
-  handleToolApprovalResponse(approvalId: string, approved: boolean): void {
+  handleToolApprovalResponse(approvalId: string, approved: boolean, command?: string): void {
     const pending = this.pendingApprovals.get(approvalId);
     if (!pending) return;
-    pending.resolve(approved);
+    pending.resolve({ approved, command });
     this.pendingApprovals.delete(approvalId);
   }
 
@@ -426,8 +426,8 @@ export class AgentChatExecutor {
         sessionId
       });
 
-      const approved = await this.waitForApproval(approvalId, token);
-      if (!approved) {
+      const approval = await this.waitForApproval(approvalId, token);
+      if (!approval.approved) {
         const skippedOutput = 'Command skipped by user.';
 
         this.emitter.postMessage({
@@ -446,12 +446,17 @@ export class AgentChatExecutor {
         };
       }
 
+      if (approval.command && approval.command.trim()) {
+        args.command = approval.command.trim();
+      }
+      const finalCommand = String(args?.command || '').trim();
+
       this.emitter.postMessage({
         type: 'showToolAction',
         status: 'running',
         icon: actionIcon,
         text: actionText,
-        detail: command.substring(0, 60),
+        detail: finalCommand.substring(0, 60),
         sessionId
       });
     } else {
@@ -488,24 +493,28 @@ export class AgentChatExecutor {
       approvalId,
       status: 'approved',
       output: result.output,
-      exitCode
+      exitCode,
+      command: String(args?.command || '').trim()
     });
 
     return result;
   }
 
-  private waitForApproval(approvalId: string, token: vscode.CancellationToken): Promise<boolean> {
+  private waitForApproval(
+    approvalId: string,
+    token: vscode.CancellationToken
+  ): Promise<{ approved: boolean; command?: string }> {
     return new Promise(resolve => {
       const onCancel = token.onCancellationRequested(() => {
         onCancel.dispose();
         this.pendingApprovals.delete(approvalId);
-        resolve(false);
+        resolve({ approved: false });
       });
 
       this.pendingApprovals.set(approvalId, {
-        resolve: (approved: boolean) => {
+        resolve: (result: { approved: boolean; command?: string }) => {
           onCancel.dispose();
-          resolve(approved);
+          resolve(result);
         }
       });
     });

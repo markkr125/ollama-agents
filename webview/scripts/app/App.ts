@@ -373,6 +373,9 @@ window.addEventListener('message', e => {
         existing.status = msg.status || existing.status;
         existing.output = msg.output ?? existing.output;
         existing.autoApproved = !!msg.autoApproved || existing.autoApproved;
+        if (typeof msg.command === 'string' && msg.command.trim()) {
+          existing.command = msg.command;
+        }
         if (typeof msg.exitCode === 'number') {
           existing.exitCode = msg.exitCode;
         }

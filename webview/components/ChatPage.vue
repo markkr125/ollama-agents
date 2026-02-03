@@ -287,7 +287,7 @@ const props = defineProps({
     required: true
   },
   approveCommand: {
-    type: Function as PropType<(approvalId: string) => void>,
+    type: Function as PropType<(approvalId: string, command: string) => void>,
     required: true
   },
   skipCommand: {
@@ -389,20 +389,32 @@ const copyText = async (text: string) => {
   document.body.removeChild(textarea);
 };
 
-const handleApproveCommand = (approvalId: string) => {
-  const item = props.timeline.find(
-    entry => entry.type === 'commandApproval' && entry.id === approvalId
-  ) as CommandApprovalItem | undefined;
+const findCommandApprovalItem = (approvalId: string) => {
+  for (const entry of props.timeline) {
+    if (entry.type === 'commandApproval' && entry.id === approvalId) {
+      return entry as CommandApprovalItem;
+    }
+    if (entry.type === 'assistantThread') {
+      const match = entry.tools.find(
+        tool => tool.type === 'commandApproval' && tool.id === approvalId
+      ) as CommandApprovalItem | undefined;
+      if (match) return match;
+    }
+  }
+  return undefined;
+};
+
+const handleApproveCommand = (approvalId: string, command: string) => {
+  const item = findCommandApprovalItem(approvalId);
   if (item) {
     item.status = 'approved';
+    item.command = command;
   }
-  props.approveCommand(approvalId);
+  props.approveCommand(approvalId, command);
 };
 
 const handleSkipCommand = (approvalId: string) => {
-  const item = props.timeline.find(
-    entry => entry.type === 'commandApproval' && entry.id === approvalId
-  ) as CommandApprovalItem | undefined;
+  const item = findCommandApprovalItem(approvalId);
   if (item) {
     item.status = 'skipped';
   }
