@@ -504,6 +504,16 @@ The chat UI uses VS Code's CSS variables for theming:
 
 ## Development Guidelines
 
+### Critical Meta (Non-Negotiable)
+
+- Keep this file (`.github/copilot-instructions.md`) up to date whenever behavior, message payloads, settings, storage, or UI contracts change.
+- Build or update automated tests whenever features are added/updated.
+  - Use Vitest for webview core logic/components (`webview/tests`).
+  - Use `@vscode/test-electron` for VS Code/extension integration (`src/test`).
+- Do not land changes unless the project is green:
+  - Run `npm run test:all` locally when practical.
+  - CI must pass (webview tests + extension-host tests).
+
 ### Maintain Clean Structure (Important)
 
 Keep the current folder layout clean and consistent. Do not reintroduce flat, mixed files. Follow these rules:
