@@ -100,7 +100,7 @@
 <script setup lang="ts">
 import type { PropType } from 'vue';
 import { computed, ref } from 'vue';
-import { loadSession, loadSessionWithMessage } from '../scripts/core/actions';
+import { loadSession, loadSessionWithMessage } from '../scripts/core/actions/index';
 import type { SearchResultGroup, SessionItem } from '../scripts/core/types';
 
 const props = defineProps({
