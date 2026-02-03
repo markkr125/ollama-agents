@@ -7,6 +7,7 @@ export class ChatSessionController {
   private currentSessionId: string = '';
   private currentSession: SessionRecord | null = null;
   private currentMessages: MessageRecord[] = [];
+  private loadRequestId = 0;
 
   constructor(
     private readonly databaseService: DatabaseService,
@@ -78,29 +79,45 @@ export class ChatSessionController {
   }
 
   async loadSession(sessionId: string) {
+    const requestId = ++this.loadRequestId;
     const session = await this.databaseService.getSession(sessionId);
+    if (!this.isLatestRequest(requestId)) {
+      return;
+    }
     if (!session) {
       this.emitter.postMessage({ type: 'clearMessages', sessionId });
       await this.sendSessionsList();
       return;
     }
 
-    this.currentSessionId = sessionId;
-    this.currentSession = session;
+    let messages: MessageRecord[] = [];
     try {
-      this.currentMessages = await this.databaseService.getSessionMessages(sessionId);
+      messages = await this.databaseService.getSessionMessages(sessionId);
     } catch (error: any) {
-      this.emitter.postMessage({
-        type: 'showError',
-        message: error.message || 'Failed to load session.',
-        sessionId
-      });
-      this.emitter.postMessage({ type: 'clearMessages' });
-      await this.sendSessionsList();
+      if (!this.isLatestRequest(requestId)) {
+        return;
+      }
+      await this.handleLoadSessionError(sessionId, error);
       return;
     }
 
-    const messages: ChatMessage[] = this.currentMessages.map(m => {
+    if (!this.isLatestRequest(requestId)) {
+      return;
+    }
+
+    this.currentSessionId = sessionId;
+    this.currentSession = session;
+    this.currentMessages = messages;
+
+    // Debug: Log message order before sending to UI
+    console.log('[loadSession] Message order:', messages.map(m => ({
+      id: m.id.substring(0, 8),
+      role: m.role,
+      timestamp: m.timestamp,
+      tool: m.tool_name || '-'
+    })));
+
+    const chatMessages: ChatMessage[] = messages.map(m => {
       let actionText: string | undefined;
       let actionDetail: string | undefined;
       let actionIcon: string | undefined;
@@ -156,7 +173,7 @@ export class ChatSessionController {
 
     this.emitter.postMessage({
       type: 'loadSessionMessages',
-      messages,
+      messages: chatMessages,
       sessionId,
       autoApproveCommands: !!session.auto_approve_commands
     });
@@ -167,6 +184,20 @@ export class ChatSessionController {
       this.emitter.postMessage({ type: 'generationStopped', sessionId });
     }
 
+    await this.sendSessionsList();
+  }
+
+  private isLatestRequest(requestId: number): boolean {
+    return requestId === this.loadRequestId;
+  }
+
+  private async handleLoadSessionError(sessionId: string, error: any): Promise<void> {
+    this.emitter.postMessage({
+      type: 'showError',
+      message: error?.message || 'Failed to load session.',
+      sessionId
+    });
+    this.emitter.postMessage({ type: 'clearMessages', sessionId });
     await this.sendSessionsList();
   }
 

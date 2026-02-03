@@ -134,7 +134,82 @@ export class DatabaseService {
   private sessionIndex: SessionIndexService;
   private embeddingDimensions = 384; // sentence-transformers default
   private initialized = false;
+  private initializing: Promise<void> | null = null;
   private rebuildingMessagesTable = false;
+  private lastTimestamp = 0; // Ensures strictly increasing timestamps
+  private lastTimestampSessionId: string | null = null; // Session for which lastTimestamp is valid
+
+  /**
+   * Get a strictly increasing timestamp to ensure correct message ordering.
+   * On first call for a session, queries DB for max timestamp to avoid conflicts.
+   */
+  private async getNextTimestamp(sessionId: string): Promise<number> {
+    // If switching sessions or first call, sync lastTimestamp from DB
+    if (this.lastTimestampSessionId !== sessionId) {
+      this.lastTimestamp = await this.getMaxTimestampForSession(sessionId);
+      this.lastTimestampSessionId = sessionId;
+    }
+
+    const now = Date.now();
+    const timestamp = now <= this.lastTimestamp ? this.lastTimestamp + 1 : now;
+    this.lastTimestamp = timestamp;
+    return timestamp;
+  }
+
+  /**
+   * Get the max timestamp from existing messages in a session.
+   */
+  private async getMaxTimestampForSession(sessionId: string): Promise<number> {
+    try {
+      const table = await this.getMessagesTable();
+      const escapedSessionId = this.escapeSingleQuotes(sessionId);
+      const results = await table
+        .query()
+        .where(`session_id = '${escapedSessionId}'`)
+        .toArray();
+      
+      if (results.length === 0) {
+        return 0;
+      }
+      
+      let max = 0;
+      for (const row of results) {
+        const ts = (row as any).timestamp;
+        if (typeof ts === 'number' && ts > max) {
+          max = ts;
+        }
+      }
+      return max;
+    } catch {
+      return 0;
+    }
+  }
+
+  private escapeSingleQuotes(value: string): string {
+    return value.replace(/'/g, "''");
+  }
+
+  private async getMessagesTable(): Promise<LanceDbTable> {
+    await this.ensureReady();
+
+    if (!this.db) {
+      throw new Error('Database not connected');
+    }
+
+    // Return cached table if available
+    if (this.messagesTable) {
+      return this.messagesTable;
+    }
+
+    const tableNames = await this.db.tableNames();
+    if (!tableNames.includes('messages')) {
+      await this.createMessagesTable();
+    } else {
+      this.messagesTable = await this.db.openTable('messages');
+    }
+
+    return this.messagesTable!;
+  }
 
   constructor(context: vscode.ExtensionContext) {
     this.context = context;
@@ -191,6 +266,21 @@ export class DatabaseService {
     console.log('DatabaseService initialized successfully');
   }
 
+  private async ensureReady(): Promise<void> {
+    if (this.initialized) {
+      return;
+    }
+
+    if (!this.initializing) {
+      this.initializing = this.initialize(this.ollamaClient ?? undefined)
+        .finally(() => {
+          this.initializing = null;
+        });
+    }
+
+    await this.initializing;
+  }
+
   private async initializeTables(): Promise<void> {
     if (!this.db || !this.lancedb) {
       throw new Error('Database not connected');
@@ -198,11 +288,17 @@ export class DatabaseService {
     try {
       await this.setupTables();
     } catch (error) {
-      console.error('LanceDB appears corrupted. Recreating database tables.', error);
-      void vscode.window.showWarningMessage(
-        'Ollama Copilot: Database appears corrupted. Recreating it now.'
-      );
-      await this.recreateTables();
+      // Log the error but DO NOT wipe the database - that destroys user data
+      console.error('Error during table setup (NOT wiping database):', error);
+      // Try to at least open existing tables
+      try {
+        const tableNames = await this.db.tableNames();
+        if (tableNames.includes('messages')) {
+          this.messagesTable = await this.db.openTable('messages');
+        }
+      } catch (e) {
+        console.error('Failed to recover tables:', e);
+      }
     }
   }
 
@@ -216,15 +312,8 @@ export class DatabaseService {
     // Messages table with vector column
     if (tableNames.includes('messages')) {
       this.messagesTable = await this.db.openTable('messages');
-
-      // Validate vector schema; if incompatible, drop and recreate the table
-      try {
-        await this.validateMessageVectorSchema();
-      } catch (e) {
-        console.log('Detected incompatible vector schema, recreating messages table:', e);
-        await this.db.dropTable('messages');
-        this.messagesTable = null;
-      }
+      // Skip destructive validation - just use the table as-is
+      // Vector schema issues will be handled gracefully in updateMessageVector
     }
 
     if (!this.messagesTable) {
@@ -436,45 +525,10 @@ export class DatabaseService {
   }
 
   private async recoverMessagesTableForVectorMismatch(): Promise<void> {
-    if (!this.db || !this.messagesTable || this.rebuildingMessagesTable) {
-      return;
-    }
-
-    this.rebuildingMessagesTable = true;
-    try {
-      const existingMessages = await this.messagesTable.query().toArray();
-      const messages = (existingMessages as unknown as MessageRecord[])
-        .filter(m => m.id && m.id !== '__schema__');
-
-      await this.db.dropTable('messages');
-      this.messagesTable = null;
-      await this.createMessagesTable();
-
-      const messagesTable = await this.db.openTable('messages');
-      this.messagesTable = messagesTable;
-      if (messages.length > 0) {
-        const zeroVector = new Array(this.embeddingDimensions).fill(0.0);
-        zeroVector[0] = 0.5;
-        const rows = messages.map(m => ({
-          ...m,
-          vector: zeroVector
-        }));
-
-        await messagesTable.add(rows as unknown as Record<string, unknown>[]);
-
-        if (this.embeddingQueue) {
-          for (const message of messages) {
-            if (message.content) {
-              this.embeddingQueue.enqueue(message.id, message.content);
-            }
-          }
-        }
-      }
-    } catch (error) {
-      console.error('Failed to recover messages table after vector mismatch:', error);
-    } finally {
-      this.rebuildingMessagesTable = false;
-    }
+    // DISABLED: This function was dropping the messages table and could lose data.
+    // Vector mismatches are not critical - just log and skip embedding updates.
+    console.warn('Vector mismatch detected - skipping embedding update (data preserved)');
+    return;
   }
 
   // --------------------------------------------------------------------------
@@ -555,24 +609,6 @@ export class DatabaseService {
       progressTitle?: string;
     } = {}
   ): Promise<MessageRecord> {
-    // Ensure table is available, try to open it if not
-    if (!this.messagesTable && this.db) {
-      try {
-        const tableNames = await this.db.tableNames();
-        if (tableNames.includes('messages')) {
-          this.messagesTable = await this.db.openTable('messages');
-        } else {
-          await this.createMessagesTable();
-        }
-      } catch {
-        // fall through to initialized check
-      }
-    }
-
-    if (!this.messagesTable) {
-      throw new Error('Messages table not initialized');
-    }
-
     const message: MessageRecord = {
       id: generateId(),
       session_id: sessionId,
@@ -583,16 +619,28 @@ export class DatabaseService {
       tool_input: options.toolInput,
       tool_output: options.toolOutput,
       progress_title: options.progressTitle,
-      timestamp: Date.now(),
-      // Use 0.0 to ensure Float64 type for compatibility with embeddings
+      timestamp: await this.getNextTimestamp(sessionId),
       vector: new Array(this.embeddingDimensions).fill(0.0)
     };
 
-    await this.messagesTable.add([message as unknown as Record<string, unknown>]);
-
-    // Queue embedding generation in background
-    if (content && this.embeddingQueue) {
-      this.embeddingQueue.enqueue(message.id, content);
+    try {
+      const table = await this.getMessagesTable();
+      await table.add([message as unknown as Record<string, unknown>]);
+    } catch (error: any) {
+      const errorMsg = error?.message || String(error);
+      console.error(`[addMessage] ERROR: ${errorMsg}`);
+      
+      // Detect LanceDB corruption (missing files only - NOT schema mismatch)
+      if (errorMsg.includes('Not found:') && errorMsg.includes('.lance')) {
+        console.warn('[addMessage] LanceDB file corruption detected - recreating messages table');
+        await this.handleCorruptedMessagesTable();
+        
+        // Retry adding message after recovery
+        const table = await this.getMessagesTable();
+        await table.add([message as unknown as Record<string, unknown>]);
+      } else {
+        throw error;
+      }
     }
 
     // Update session's updated_at
@@ -602,90 +650,87 @@ export class DatabaseService {
   }
 
   async getSessionMessages(sessionId: string): Promise<MessageRecord[]> {
-    // Ensure table is available
-    if (!this.messagesTable && this.db) {
-      try {
-        const tableNames = await this.db.tableNames();
-        if (tableNames.includes('messages')) {
-          this.messagesTable = await this.db.openTable('messages');
-        } else {
-          await this.createMessagesTable();
-          return []; // New table, no messages
-        }
-      } catch {
-        return [];
-      }
-    }
-
-    if (!this.db) {
-      return [];
-    }
-
-    if (!this.messagesTable) {
-      return [];
-    }
-
-    // Re-open table to ensure we get fresh data (LanceDB caching issue)
     try {
-      this.messagesTable = await this.db.openTable('messages');
-    } catch {
-      // Use cached reference
+      const table = await this.getMessagesTable();
+      const escapedSessionId = this.escapeSingleQuotes(sessionId);
+      
+      const results = await table
+        .query()
+        .where(`session_id = '${escapedSessionId}'`)
+        .toArray();
+
+      return (results as unknown as MessageRecord[])
+        .sort((a, b) => a.timestamp - b.timestamp);
+    } catch (error: any) {
+      const errorMsg = error?.message || String(error);
+      console.error(`[getSessionMessages] ERROR: ${errorMsg}`);
+      
+      // Detect LanceDB corruption (missing files only - NOT schema mismatch)
+      if (errorMsg.includes('Not found:') && errorMsg.includes('.lance')) {
+        console.warn('[getSessionMessages] LanceDB file corruption detected - recreating messages table');
+        await this.handleCorruptedMessagesTable();
+        return []; // Return empty after recovery
+      }
+      
+      throw error;
+    }
+  }
+
+  /**
+   * Handle corrupted messages table by deleting and recreating it.
+   * This loses existing messages but allows the extension to function.
+   */
+  private async handleCorruptedMessagesTable(): Promise<void> {
+    if (!this.db) {
+      return;
     }
 
-    const fetchMessages = async (): Promise<MessageRecord[]> => {
-      const table = this.messagesTable;
-      if (!table) {
-        return [];
+    try {
+      // Drop the corrupted table
+      const tableNames = await this.db.tableNames();
+      if (tableNames.includes('messages')) {
+        await this.db.dropTable('messages');
+        console.log('[handleCorruptedMessagesTable] Dropped corrupted messages table');
       }
-      let results: MessageRecord[] = [];
-      const clauses = [
-        `session_id = '${sessionId}'`,
-        `session_id == '${sessionId}'`,
-        `session_id = "${sessionId}"`
-      ];
+      
+      this.messagesTable = null;
+      
+      // Recreate it fresh
+      await this.createMessagesTable();
+      console.log('[handleCorruptedMessagesTable] Created fresh messages table');
+    } catch (error: any) {
+      console.error('[handleCorruptedMessagesTable] Failed to recover:', error?.message || error);
+    }
+  }
 
-      for (const clause of clauses) {
-        try {
-          const queried = await table
-            .query()
-            .where(clause)
-            .toArray();
-          results = queried as unknown as MessageRecord[];
-        } catch {
-          results = [];
-        }
-
-        if (results.length > 0) {
-          break;
-        }
-      }
-
-      if (results.length === 0) {
-        try {
-          const allRows = await table.query().toArray();
-          results = (allRows as unknown as MessageRecord[]).filter(
-            row => row.session_id === sessionId
-          );
-        } catch {
-          results = [];
-        }
-      }
-
-      return results;
-    };
-
-    let results = await fetchMessages();
-    if (results.length === 0) {
-      await new Promise(resolve => setTimeout(resolve, 75));
-      try {
-        this.messagesTable = await this.db.openTable('messages');
-      } catch {
-        // Use cached reference
-      }
-      results = await fetchMessages();
+  /**
+   * Manually recreate the messages table and clear all sessions.
+   * This is a destructive operation that deletes all chat history.
+   * Called from Advanced Settings UI.
+   */
+  async recreateMessagesTable(): Promise<void> {
+    if (!this.db) {
+      throw new Error('Database not connected');
     }
 
-    return results.sort((a, b) => a.timestamp - b.timestamp);
+    console.log('[recreateMessagesTable] Starting manual table recreation...');
+    
+    // Drop existing messages table
+    const tableNames = await this.db.tableNames();
+    if (tableNames.includes('messages')) {
+      await this.db.dropTable('messages');
+      console.log('[recreateMessagesTable] Dropped existing messages table');
+    }
+    
+    this.messagesTable = null;
+    
+    // Create fresh messages table
+    await this.createMessagesTable();
+    console.log('[recreateMessagesTable] Created fresh messages table');
+
+    // Also clear all sessions from SQLite
+    await this.sessionIndex.clearAllSessions();
+    console.log('[recreateMessagesTable] Cleared all sessions');
   }
 
   async deleteMessage(id: string): Promise<void> {

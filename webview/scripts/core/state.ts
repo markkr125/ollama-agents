@@ -66,6 +66,7 @@ export const connectionStatus = reactive<StatusMessage>({ visible: false, succes
 export const modelsStatus = reactive<StatusMessage>({ visible: false, success: true, message: '' });
 export const agentStatus = reactive<StatusMessage>({ visible: false, success: true, message: '' });
 export const dbMaintenanceStatus = reactive<StatusMessage>({ visible: false, success: true, message: '' });
+export const recreateMessagesStatus = reactive<StatusMessage>({ visible: false, success: true, message: '' });
 
 export const tools = ref([
   { name: 'read_file', icon: '📄', desc: 'Read file contents' },

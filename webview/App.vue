@@ -75,6 +75,8 @@
         :agent-status="agentStatus"
         :run-db-maintenance="runDbMaintenance"
         :db-maintenance-status="dbMaintenanceStatus"
+        :recreate-messages-table="recreateMessagesTable"
+        :recreate-messages-status="recreateMessagesStatus"
         :tools="tools"
       />
 
@@ -150,6 +152,8 @@ import {
   modelOptions,
   modelsStatus,
   newChat,
+  recreateMessagesStatus,
+  recreateMessagesTable,
   removeContext,
   resizeInput,
   revealMoreSearchResults,

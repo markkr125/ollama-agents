@@ -262,4 +262,11 @@ export class SessionIndexService {
     this.db.run('UPDATE sessions SET status = ? WHERE status = ?;', [status, 'generating']);
     await this.persist();
   }
+
+  async clearAllSessions(): Promise<void> {
+    this.ensureReady();
+    this.db.run('DELETE FROM sessions;');
+    await this.persist();
+    console.log('[SessionIndexService] All sessions cleared');
+  }
 }

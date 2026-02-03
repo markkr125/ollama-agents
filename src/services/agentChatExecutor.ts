@@ -122,6 +122,19 @@ export class AgentChatExecutor {
           continue;
         }
 
+        // Save the assistant's explanation BEFORE executing tools
+        // This ensures proper message ordering when loading from history
+        if (accumulatedExplanation.trim() && sessionId) {
+          await this.databaseService.addMessage(
+            sessionId,
+            'assistant',
+            accumulatedExplanation.trim(),
+            { model }
+          );
+          // Don't clear accumulatedExplanation - we'll append to it after tools
+          // Don't send finalMessage here - that would split the message in UI
+        }
+
         const groupTitle = getProgressGroupTitle(toolCalls);
         this.emitter.postMessage({
           type: 'startProgressGroup',

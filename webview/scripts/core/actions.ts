@@ -24,6 +24,7 @@ import {
   isSearching,
   messagesEl,
   modelsStatus,
+  recreateMessagesStatus,
   scrollTargetMessageId,
   searchIsRevealing,
   searchQuery,
@@ -37,7 +38,7 @@ import {
   tokenVisible,
   vscode
 } from './state';
-import type { ActionItem, MessageItem, ProgressItem, SearchResultGroup, StatusMessage } from './types';
+import type { ActionItem, ProgressItem, SearchResultGroup, StatusMessage } from './types';
 
 const markdown = new MarkdownIt({
   html: false,
@@ -252,6 +253,11 @@ export const runDbMaintenance = () => {
   vscode.postMessage({ type: 'runDbMaintenance' });
 };
 
+export const recreateMessagesTable = () => {
+  showStatus(recreateMessagesStatus, 'Recreating messages table...', true);
+  vscode.postMessage({ type: 'recreateMessagesTable' });
+};
+
 export const toggleAutocomplete = () => {
   settings.enableAutoComplete = !settings.enableAutoComplete;
   vscode.postMessage({
@@ -308,12 +314,14 @@ export const ensureProgressGroup = (title = 'Working on task') => {
 };
 
 export const startAssistantMessage = (model?: string) => {
-  const message: MessageItem = {
+  const message = {
     id: `msg_${Date.now()}`,
-    type: 'message',
-    role: 'assistant',
-    content: '',
-    model
+    type: 'assistantThread' as const,
+    role: 'assistant' as const,
+    contentBefore: '',
+    contentAfter: '',
+    model,
+    tools: []
   };
   timeline.value.push(message);
   currentStreamIndex.value = timeline.value.length - 1;

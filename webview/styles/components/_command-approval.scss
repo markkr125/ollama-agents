@@ -4,6 +4,9 @@
   margin: 12px 0;
   background: var(--surface-bg);
   overflow: hidden;
+  min-height: 120px;
+  display: flex;
+  flex-direction: column;
 
   &.severity-critical {
     border-color: var(--error);
@@ -62,6 +65,7 @@
   border-top: 1px solid var(--border);
   border-bottom: 1px solid var(--border);
   background: var(--vscode-input-background);
+  min-height: 36px;
 
   code {
     font-family: var(--vscode-editor-font-family);
@@ -89,6 +93,7 @@
   padding: 10px 12px;
   background: var(--panel-bg);
   border-top: 1px solid var(--border);
+  min-height: 36px;
   max-height: 220px;
   overflow: auto;
 

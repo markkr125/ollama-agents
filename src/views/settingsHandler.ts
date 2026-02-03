@@ -137,4 +137,44 @@ export class SettingsHandler {
       });
     }
   }
+
+  async recreateMessagesTable() {
+    // Show VS Code confirmation dialog
+    const confirmed = await vscode.window.showWarningMessage(
+      '⚠️ This will permanently delete ALL chat history! Are you sure?',
+      { modal: true },
+      'Delete All Messages'
+    );
+
+    if (confirmed !== 'Delete All Messages') {
+      this.emitter.postMessage({
+        type: 'recreateMessagesResult',
+        success: false,
+        message: 'Operation cancelled.'
+      });
+      return;
+    }
+
+    try {
+      await this.databaseService.recreateMessagesTable();
+      this.emitter.postMessage({
+        type: 'recreateMessagesResult',
+        success: true,
+        message: 'Messages table recreated successfully. All message history has been cleared.'
+      });
+      // Refresh UI: clear sessions list
+      this.emitter.postMessage({
+        type: 'loadSessions',
+        sessions: [],
+        hasMore: false,
+        nextOffset: null
+      });
+    } catch (error: any) {
+      this.emitter.postMessage({
+        type: 'recreateMessagesResult',
+        success: false,
+        message: error?.message || 'Failed to recreate messages table.'
+      });
+    }
+  }
 }

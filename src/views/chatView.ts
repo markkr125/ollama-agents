@@ -164,6 +164,9 @@ export class ChatViewProvider implements vscode.WebviewViewProvider, WebviewMess
         case 'runDbMaintenance':
           await this.settingsHandler.runDbMaintenance();
           break;
+        case 'recreateMessagesTable':
+          await this.settingsHandler.recreateMessagesTable();
+          break;
         case 'toolApprovalResponse':
           this.agentExecutor.handleToolApprovalResponse(data.approvalId, !!data.approved);
           break;

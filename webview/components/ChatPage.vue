@@ -37,7 +37,67 @@
       </div>
 
       <template v-for="(item, index) in timeline" :key="item.id">
-        <template v-if="item.type === 'message'">
+        <template v-if="item.type === 'assistantThread'">
+          <div
+            class="message"
+            :class="item.role === 'user' ? 'message-user' : 'message-assistant'"
+            :id="`message-${item.id}`"
+            :data-message-id="item.id"
+          >
+            <div class="markdown-body" v-html="formatMarkdown(item.contentBefore)"></div>
+
+            <div v-if="item.tools && item.tools.length" class="assistant-tools">
+              <template v-for="toolItem in item.tools" :key="toolItem.id">
+                <template v-if="toolItem.type === 'commandApproval'">
+                  <CommandApproval
+                    :item="toolItem"
+                    :on-approve="handleApproveCommand"
+                    :on-skip="handleSkipCommand"
+                    :auto-approve-enabled="autoApproveCommands"
+                    :on-toggle-auto-approve="toggleAutoApproveCommands"
+                  />
+                </template>
+
+                <div v-else class="progress-group" :class="{ collapsed: toolItem.collapsed }">
+                  <div class="progress-header" @click="toggleProgress(toolItem)">
+                    <span class="progress-chevron">▼</span>
+                    <span class="progress-status" :class="progressStatusClass(toolItem)">
+                      <span v-if="progressStatus(toolItem) === 'running'" class="spinner"></span>
+                      <span v-else-if="progressStatus(toolItem) === 'success'">✓</span>
+                      <span v-else-if="progressStatus(toolItem) === 'error'">✗</span>
+                      <span v-else>○</span>
+                    </span>
+                    <span class="progress-title">{{ toolItem.title }}</span>
+                  </div>
+                  <div class="progress-actions">
+                    <div class="action-item" v-for="action in toolItem.actions" :key="action.id">
+                      <span class="action-status" :class="actionStatusClass(action.status)">
+                        <span v-if="action.status === 'running'" class="spinner"></span>
+                        <span v-else-if="action.status === 'success'">✓</span>
+                        <span v-else-if="action.status === 'error'">✗</span>
+                        <span v-else>○</span>
+                      </span>
+                      <span class="file-icon">{{ action.icon }}</span>
+                      <span class="action-text">
+                        <span class="filename">{{ action.text }}</span>
+                        <span v-if="action.detail" class="detail">, {{ action.detail }}</span>
+                      </span>
+                    </div>
+                  </div>
+                </div>
+              </template>
+            </div>
+
+            <div v-if="item.contentAfter" class="markdown-body" v-html="formatMarkdown(item.contentAfter)"></div>
+            <div v-if="item.model" class="message-model">{{ item.model }}</div>
+          </div>
+          <div
+            v-if="index < timeline.length - 1"
+            class="message-divider"
+          ></div>
+        </template>
+
+        <template v-else-if="item.type === 'message'">
           <div
             class="message"
             :class="item.role === 'user' ? 'message-user' : 'message-assistant'"

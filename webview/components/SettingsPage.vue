@@ -193,6 +193,19 @@
             <button class="btn btn-primary" @click="runDbMaintenance">Run DB Maintenance</button>
             <div class="status-msg" :class="statusClass(dbMaintenanceStatus)">{{ dbMaintenanceStatus.message }}</div>
           </div>
+
+          <div class="settings-group danger-zone">
+            <h3>⚠️ Danger Zone</h3>
+            <div class="settings-item">
+              <label class="settings-label">Recreate Messages Table</label>
+              <div class="settings-desc danger-desc">
+                Completely deletes and recreates the messages table. Use this to fix schema errors like "Found field not in schema".
+                <strong>WARNING: This will permanently delete all chat history!</strong>
+              </div>
+            </div>
+            <button class="btn btn-danger" @click="confirmRecreateMessagesTable">Recreate Messages Table</button>
+            <div class="status-msg" :class="statusClass(recreateMessagesStatus)">{{ recreateMessagesStatus.message }}</div>
+          </div>
         </div>
       </div>
     </div>
@@ -367,6 +380,14 @@ const props = defineProps({
   dbMaintenanceStatus: {
     type: Object as PropType<StatusMessage>,
     required: true
+  },
+  recreateMessagesTable: {
+    type: Function as PropType<() => void>,
+    required: true
+  },
+  recreateMessagesStatus: {
+    type: Object as PropType<StatusMessage>,
+    required: true
   }
 });
 
@@ -383,5 +404,10 @@ const onTemperatureInput = (event: Event) => {
 const onToolTimeoutInput = (event: Event) => {
   const value = Number((event.target as HTMLInputElement).value);
   props.setToolTimeoutSeconds(value);
+};
+
+const confirmRecreateMessagesTable = () => {
+  // Use backend confirmation since webview sandbox blocks confirm()
+  props.recreateMessagesTable();
 };
 </script>

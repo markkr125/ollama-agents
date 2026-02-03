@@ -6,6 +6,16 @@ export type MessageItem = {
   model?: string;
 };
 
+export type AssistantThreadItem = {
+  id: string;
+  type: 'assistantThread';
+  role: 'assistant';
+  contentBefore: string;
+  contentAfter: string;
+  model?: string;
+  tools: Array<ProgressItem | CommandApprovalItem>;
+};
+
 export type ActionItem = {
   id: string;
   status: 'running' | 'success' | 'error' | 'pending';
@@ -38,7 +48,7 @@ export type CommandApprovalItem = {
   autoApproved?: boolean;
 };
 
-export type TimelineItem = MessageItem | ProgressItem | CommandApprovalItem;
+export type TimelineItem = MessageItem | AssistantThreadItem | ProgressItem | CommandApprovalItem;
 
 export type SessionItem = {
   id: string;
