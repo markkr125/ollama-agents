@@ -64,7 +64,9 @@ src/
 │   │   ├── app/
 │   │   │   └── App.ts      # Entry/wiring for message handling
 │   │   └── core/
-│   │       ├── actions.ts  # UI actions + helpers
+│   │       ├── actions/    # UI actions split by concern (+ index.ts barrel)
+│   │       ├── messageHandlers/ # Webview message handlers split by concern
+│   │       ├── timelineBuilder.ts # Rebuild timeline from stored messages
 │   │       ├── computed.ts # Derived state
 │   │       ├── state.ts    # Reactive state/refs
 │   │       └── types.ts    # Shared types
@@ -524,9 +526,17 @@ Keep the current folder layout clean and consistent. Do not reintroduce flat, mi
 - Shared logic lives in `webview/scripts/core/`:
   - State/refs: `state.ts`
   - Computed values: `computed.ts`
-  - Actions/helpers: `actions.ts`
+  - Actions/helpers: `actions/` (split modules + `actions/index.ts` barrel)
+  - Message handlers: `messageHandlers/` (split modules + `messageHandlers/index.ts` router)
+  - Timeline rebuild: `timelineBuilder.ts`
   - Types: `types.ts`
 - Styles use SCSS with an entry file at `webview/styles/styles.scss` and partials grouped under `webview/styles/` (base/layout/components/utils).
+
+**Do not reintroduce monoliths**:
+- ❌ Avoid resurrecting `webview/scripts/core/actions.ts` or `messageHandlers.ts` as large single files.
+- ✅ Add new actions in `webview/scripts/core/actions/*` and export from `actions/index.ts`.
+- ✅ Add new message handlers in `webview/scripts/core/messageHandlers/*` and register in `messageHandlers/index.ts`.
+- ✅ `App.ts` should only route messages and export barrels.
 
 If you add new functionality, place it in the appropriate folder above and keep files small and single-purpose. Avoid creating new “catch-all” files.
 

@@ -79,3 +79,54 @@ export type SearchResultGroup = {
   };
   messages: SearchResultMessage[];
 };
+
+export type InitMessage = {
+  type: 'init';
+  models?: { name: string }[];
+  currentMode?: string;
+  settings?: Record<string, any>;
+  hasToken?: boolean;
+};
+
+export type LoadSessionMessagesMessage = {
+  type: 'loadSessionMessages';
+  sessionId?: string;
+  messages?: any[];
+  autoApproveCommands?: boolean;
+};
+
+export type StreamChunkMessage = {
+  type: 'streamChunk' | 'finalMessage';
+  sessionId?: string;
+  content?: string;
+  model?: string;
+};
+
+export type StartProgressGroupMessage = {
+  type: 'startProgressGroup';
+  sessionId?: string;
+  title?: string;
+};
+
+export type ShowToolActionMessage = {
+  type: 'showToolAction';
+  sessionId?: string;
+  status?: ActionItem['status'];
+  icon?: string;
+  text?: string;
+  detail?: string | null;
+};
+
+export type ToolApprovalResultMessage = {
+  type: 'toolApprovalResult';
+  approvalId?: string;
+  sessionId?: string;
+  status?: CommandApprovalItem['status'];
+  output?: string;
+  autoApproved?: boolean;
+  command?: string;
+  exitCode?: number;
+  cwd?: string;
+  severity?: CommandApprovalItem['severity'];
+  reason?: string;
+};
