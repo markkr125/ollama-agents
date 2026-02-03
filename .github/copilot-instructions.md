@@ -286,6 +286,31 @@ For each **single user prompt**, the UI must show **exactly one assistant messag
 
 **History loading must match real-time**: When loading from the database, assistant explanations before tools and summaries after tools must be merged into the **same assistant message** with tool blocks embedded between them.
 
+### Assistant Thread UI Structure (Webview)
+
+The webview represents each assistant response as a **single assistant thread item** with three parts:
+1. `contentBefore` (assistant explanation)
+2. `tools` (progress groups + command approvals embedded inside the same message)
+3. `contentAfter` (final summary)
+
+**Rules**:
+- The assistant thread is the only container for tool UI blocks during an assistant response.
+- Never render tool blocks as standalone timeline items outside the assistant thread.
+- During streaming, update `contentBefore` until tools start; after tools start, update `contentAfter`.
+
+### Editable Command Approvals
+
+Users can edit terminal commands before approval. The edited command must be sent to the backend and executed exactly as edited.
+
+**Required behavior**:
+- The command input is editable **only while status is `pending`**.
+- Approving sends `{ approvalId, approved: true, command }` to the backend.
+- Backend must execute the edited command and echo the final command back in `toolApprovalResult` so the UI reflects what was run.
+
+**Forbidden**:
+- ❌ Do NOT ignore user edits and run the original command.
+- ❌ Do NOT allow editing after approval.
+
 ### Clearing All Data
 
 When implementing "clear all data" functionality:
@@ -499,6 +524,71 @@ If you add new functionality, place it in the appropriate folder above and keep 
 
 - After making code changes, ensure the project still compiles successfully.
 - Use `npm run compile` to verify the extension and webview build.
+
+### Automated Testing (Required)
+
+This repo uses two complementary test harnesses:
+
+1) **Extension host tests (integration-ish)**
+- Runner: `@vscode/test-electron` + Mocha
+- Command: `npm test`
+- Location:
+  - Test harness + mocks: `src/test/`
+  - Test suites: `src/test/suite/`
+    - `src/test/suite/utils/` for pure utilities
+    - `src/test/suite/services/` for service-level integration tests
+
+2) **Webview tests (fast unit/component)**
+- Runner: Vitest + jsdom + Vue Test Utils
+- Command: `npm run test:webview`
+- Location: `webview/tests/`
+- Config: `webview/vitest.config.ts`
+
+To run everything locally (recommended before pushing): `npm run test:all`.
+
+#### What to test with Vitest vs `@vscode/test-electron`
+
+Use the two harnesses for different risk profiles:
+
+**Prefer Vitest (webview/tests) when:**
+- You’re testing UI “business logic” that should be fast, deterministic, and not depend on VS Code.
+- The target lives in `webview/scripts/core/*` (state/actions/computed) or a Vue component with clear props/events.
+- You want tight coverage on edge cases that are painful to validate via a full VS Code host.
+
+Good Vitest targets:
+- `webview/scripts/core/actions.ts`: debounced search, context packaging for send, tool/approval UI updates, message/thread merging behavior.
+- `webview/scripts/core/computed.ts`: header/title selection, derived counts, tool timeout conversions.
+- Vue components with important contracts:
+  - `webview/components/CommandApproval.vue`: editable command only when `status === 'pending'`; approve sends edited command.
+  - `webview/components/SessionsPanel.vue`: pagination (`loadMoreSessions`) + selection (`loadSession`) + loading flags.
+
+**Prefer `@vscode/test-electron` (src/test) when:**
+- You need real VS Code APIs (`vscode`), extension activation, commands, view registration, or storage URIs.
+- You’re validating backend/service behavior (SQLite sessions, LanceDB messages, ordering/maintenance, tool execution).
+- You want to cover multi-module integration flows end-to-end (even if the UI is mocked).
+
+Good `@vscode/test-electron` targets:
+- Extension activation and message routing (`ChatViewProvider` → controllers/services).
+- `DatabaseService` invariants (timestamps strictly increasing; maintenance never deletes sessions; delete cascades).
+- Mocked Ollama/OpenWebUI HTTP interactions (streaming NDJSON, retry, connection test) using the local mock server.
+
+**Rule of thumb:**
+- If the bug would show up as “wrong state / wrong UI rendering / wrong postMessage payload”, write Vitest.
+- If the bug would show up as “VS Code integration broken / storage broken / commands missing / streaming broken”, write `@vscode/test-electron`.
+
+**High-ROI next webview tests to add (Vitest):**
+- Message-handling invariants: one user prompt must map to exactly one assistant thread item with tool blocks embedded between `contentBefore` and `contentAfter` (test via `webview/scripts/core/actions.ts` helpers and/or the message-assembly logic).
+- Sessions UI: `SessionsPanel.vue` pagination and selection behavior (load more, click session, correct postMessage payloads).
+
+#### Webview test rules (important)
+
+- The webview runtime provides `acquireVsCodeApi()`. Our webview state module calls it **at import-time** in `webview/scripts/core/state.ts`.
+- Therefore, tests MUST stub `acquireVsCodeApi` before importing any webview core modules.
+  - This is handled centrally in `webview/tests/setup.ts` via Vitest `setupFiles`.
+- Prefer testing logic in `webview/scripts/core/*` (state/actions/computed) over directly testing `webview/scripts/app/App.ts`.
+  - `App.ts` wires `window.addEventListener('message', ...)` and is intentionally more integration-heavy.
+- When asserting message sends to the extension, assert calls to the stubbed `postMessage` function.
+- Keep tests deterministic: use `vi.useFakeTimers()` for debounced functions (e.g. search) and `vi.setSystemTime()` when IDs/timestamps are time-based.
 
 ### Adding a New Tool
 

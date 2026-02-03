@@ -32,7 +32,11 @@ export async function* parseNDJSON(reader: ReadableStreamDefaultReader<Uint8Arra
           try {
             yield JSON.parse(trimmed);
           } catch (e) {
-            console.error('Failed to parse JSON line:', trimmed, e);
+            // NDJSON streams can contain transient/incomplete lines; avoid noisy logs by default.
+            // Enable by setting OLLAMA_COPILOT_DEBUG_NDJSON=1.
+            if (process.env.OLLAMA_COPILOT_DEBUG_NDJSON === '1') {
+              console.error('Failed to parse JSON line:', trimmed, e);
+            }
           }
         }
       }
