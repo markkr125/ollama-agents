@@ -3,5 +3,8 @@ out
 dist
 *.vsix
 .vscode-test
+.vscode-test/
+.vscode-test-extensions/
+.vscode-test-user-data/
 *.log
 media

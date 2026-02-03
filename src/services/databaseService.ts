@@ -851,25 +851,21 @@ export class DatabaseService {
     const messageRecords = messages as unknown as MessageRecord[];
 
     let deletedMessages = 0;
-    const messageSessionIds = new Set<string>();
 
     for (const message of messageRecords) {
-      messageSessionIds.add(message.session_id);
-      if (!sessionIdSet.has(message.session_id)) {
+      const sessionId = message.session_id;
+      if (typeof sessionId !== 'string' || !sessionId) {
+        continue;
+      }
+
+      if (!sessionIdSet.has(sessionId)) {
         await this.messagesTable.delete(`id = "${message.id}"`);
         deletedMessages++;
       }
     }
 
-    let deletedSessions = 0;
-    for (const session of sessions) {
-      if (!messageSessionIds.has(session.id)) {
-        await this.sessionIndex.deleteSession(session.id);
-        deletedSessions++;
-      }
-    }
-
-    return { deletedSessions, deletedMessages };
+    // Never auto-delete sessions. A session with zero messages is still valid user data.
+    return { deletedSessions: 0, deletedMessages };
   }
 
   private async enrichSearchResults(messages: MessageRecord[]): Promise<SearchResult[]> {

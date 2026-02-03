@@ -7,6 +7,8 @@ import { OllamaClient } from '../services/ollamaClient';
 import { TerminalManager } from '../services/terminalManager';
 import { MessageRecord } from '../types/session';
 import { analyzeDangerousCommand } from '../utils/commandSafety';
+import { computeTerminalApprovalDecision } from '../utils/terminalApproval';
+import { detectPartialToolCall, extractToolCalls, removeToolCalls } from '../utils/toolCallParser';
 import { WebviewMessageEmitter } from '../views/chatTypes';
 import { getProgressGroupTitle, getToolActionInfo, getToolSuccessInfo } from '../views/toolUIFormatter';
 
@@ -72,7 +74,7 @@ export class AgentChatExecutor {
           if (chunk.message?.content) {
             response += chunk.message.content;
 
-            const partialTool = this.detectPartialToolCall(response);
+            const partialTool = detectPartialToolCall(response);
             if (partialTool) {
               this.emitter.postMessage({
                 type: 'showThinking',
@@ -88,7 +90,7 @@ export class AgentChatExecutor {
           break;
         }
 
-        const cleanedText = this.removeToolCalls(response);
+        const cleanedText = removeToolCalls(response);
 
         if (cleanedText.trim() && !cleanedText.includes('[TASK_COMPLETE]')) {
           if (accumulatedExplanation) {
@@ -109,7 +111,7 @@ export class AgentChatExecutor {
           break;
         }
 
-        const toolCalls = this.extractToolCalls(response);
+        const toolCalls = extractToolCalls(response);
 
         if (toolCalls.length === 0) {
           messages.push({ role: 'assistant', content: response });
@@ -328,55 +330,6 @@ export class AgentChatExecutor {
     return { summary, assistantMessage };
   }
 
-  private detectPartialToolCall(response: string): string | null {
-    const match = response.match(/<tool_call>\s*\{\s*"name"\s*:\s*"([^"]+)"/);
-    return match ? match[1] : null;
-  }
-
-  private removeToolCalls(response: string): string {
-    return response
-      .replace(/<tool_call>[\s\S]*?<\/tool_call>/g, '')
-      .replace(/<tool_call>[\s\S]*$/g, '')
-      .replace(/```json\s*\{[\s\S]*?"name"[\s\S]*?\}[\s\S]*?```/g, '')
-      .replace(/\{"name"\s*:\s*"[^"]+"\s*,\s*"arguments"\s*:\s*\{[\s\S]*?\}\s*\}/g, '')
-      .replace(/^\[TOOL_CALLS\][\s\S]*?(?:\n|$)/gm, '')
-      .replace(/\[TASK_COMPLETE\]/g, '')
-      .trim();
-  }
-
-  private extractToolCalls(response: string): Array<{ name: string; args: any }> {
-    const toolCalls: Array<{ name: string; args: any }> = [];
-    const toolCallRegex = /<tool_call>\s*(\{[\s\S]*?\})\s*<\/tool_call>/g;
-    let match;
-
-    while ((match = toolCallRegex.exec(response)) !== null) {
-      try {
-        const parsed = JSON.parse(match[1]);
-        if (parsed.name && parsed.arguments) {
-          toolCalls.push({ name: parsed.name, args: parsed.arguments });
-        }
-      } catch {
-        // skip
-      }
-    }
-
-    const bracketToolCallRegex = /\[TOOL_CALLS\]\s*([^\[]+)\[ARGS\]\s*(\{[\s\S]*?\})(?:\n|$)/g;
-    while ((match = bracketToolCallRegex.exec(response)) !== null) {
-      const name = (match[1] || '').trim();
-      const rawArgs = (match[2] || '').trim().replace(/[“”]/g, '"');
-      try {
-        const args = rawArgs ? JSON.parse(rawArgs) : {};
-        if (name) {
-          toolCalls.push({ name, args });
-        }
-      } catch {
-        // skip
-      }
-    }
-
-    return toolCalls;
-  }
-
   private async executeTerminalCommand(
     toolName: string,
     args: any,
@@ -396,11 +349,8 @@ export class AgentChatExecutor {
     const analysis = analyzeDangerousCommand(command);
     const sessionRecord = sessionId ? await this.databaseService.getSession(sessionId) : null;
     const autoApproveEnabled = !!sessionRecord?.auto_approve_commands;
-    const requiresApproval = analysis.severity === 'critical' || !autoApproveEnabled;
-
+    const { requiresApproval, severity, reason } = computeTerminalApprovalDecision(analysis, autoApproveEnabled);
     const approvalId = `approval_${Date.now()}_${Math.random().toString(36).slice(2)}`;
-    const severity = analysis.severity === 'none' ? 'medium' : analysis.severity;
-    const reason = analysis.reason || 'Command requires approval';
 
     if (requiresApproval) {
       this.emitter.postMessage({
