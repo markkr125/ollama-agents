@@ -6,6 +6,16 @@ export type MessageItem = {
   model?: string;
 };
 
+export type AssistantThreadItem = {
+  id: string;
+  type: 'assistantThread';
+  role: 'assistant';
+  contentBefore: string;
+  contentAfter: string;
+  model?: string;
+  tools: Array<ProgressItem | CommandApprovalItem>;
+};
+
 export type ActionItem = {
   id: string;
   status: 'running' | 'success' | 'error' | 'pending';
@@ -24,7 +34,21 @@ export type ProgressItem = {
   lastActionStatus?: ActionItem['status'];
 };
 
-export type TimelineItem = MessageItem | ProgressItem;
+export type CommandApprovalItem = {
+  id: string;
+  type: 'commandApproval';
+  command: string;
+  cwd?: string;
+  severity: 'critical' | 'high' | 'medium';
+  reason?: string;
+  status: 'pending' | 'approved' | 'skipped';
+  timestamp: number;
+  output?: string;
+  exitCode?: number | null;
+  autoApproved?: boolean;
+};
+
+export type TimelineItem = MessageItem | AssistantThreadItem | ProgressItem | CommandApprovalItem;
 
 export type SessionItem = {
   id: string;

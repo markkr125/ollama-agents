@@ -5,6 +5,8 @@ import {
   agentSettings,
   agentStatus,
   allSearchResults,
+  autoApproveCommands,
+  autoApproveConfirmVisible,
   autoScrollLocked,
   bearerToken,
   contextList,
@@ -22,6 +24,7 @@ import {
   isSearching,
   messagesEl,
   modelsStatus,
+  recreateMessagesStatus,
   scrollTargetMessageId,
   searchIsRevealing,
   searchQuery,
@@ -35,7 +38,7 @@ import {
   tokenVisible,
   vscode
 } from './state';
-import type { ActionItem, MessageItem, ProgressItem, SearchResultGroup, StatusMessage } from './types';
+import type { ActionItem, ProgressItem, SearchResultGroup, StatusMessage } from './types';
 
 const markdown = new MarkdownIt({
   html: false,
@@ -124,6 +127,47 @@ export const selectModel = () => {
   vscode.postMessage({ type: 'selectModel', model: currentModel.value });
 };
 
+export const toggleAutoApproveCommands = () => {
+  const nextValue = !autoApproveCommands.value;
+  if (nextValue) {
+    autoApproveConfirmVisible.value = true;
+    return;
+  }
+  autoApproveConfirmVisible.value = false;
+  autoApproveCommands.value = false;
+  if (currentSessionId.value) {
+    vscode.postMessage({
+      type: 'setAutoApprove',
+      sessionId: currentSessionId.value,
+      enabled: false
+    });
+  }
+};
+
+export const confirmAutoApproveCommands = () => {
+  autoApproveConfirmVisible.value = false;
+  autoApproveCommands.value = true;
+  if (currentSessionId.value) {
+    vscode.postMessage({
+      type: 'setAutoApprove',
+      sessionId: currentSessionId.value,
+      enabled: true
+    });
+  }
+};
+
+export const cancelAutoApproveCommands = () => {
+  autoApproveConfirmVisible.value = false;
+};
+
+export const approveCommand = (approvalId: string, command?: string) => {
+  vscode.postMessage({ type: 'toolApprovalResponse', approvalId, approved: true, command });
+};
+
+export const skipCommand = (approvalId: string) => {
+  vscode.postMessage({ type: 'toolApprovalResponse', approvalId, approved: false });
+};
+
 export const handleSend = () => {
   if (isGenerating.value) {
     vscode.postMessage({ type: 'stopGeneration', sessionId: currentSessionId.value });
@@ -209,6 +253,11 @@ export const runDbMaintenance = () => {
   vscode.postMessage({ type: 'runDbMaintenance' });
 };
 
+export const recreateMessagesTable = () => {
+  showStatus(recreateMessagesStatus, 'Recreating messages table...', true);
+  vscode.postMessage({ type: 'recreateMessagesTable' });
+};
+
 export const toggleAutocomplete = () => {
   settings.enableAutoComplete = !settings.enableAutoComplete;
   vscode.postMessage({
@@ -265,12 +314,14 @@ export const ensureProgressGroup = (title = 'Working on task') => {
 };
 
 export const startAssistantMessage = (model?: string) => {
-  const message: MessageItem = {
+  const message = {
     id: `msg_${Date.now()}`,
-    type: 'message',
-    role: 'assistant',
-    content: '',
-    model
+    type: 'assistantThread' as const,
+    role: 'assistant' as const,
+    contentBefore: '',
+    contentAfter: '',
+    model,
+    tools: []
   };
   timeline.value.push(message);
   currentStreamIndex.value = timeline.value.length - 1;

@@ -51,7 +51,7 @@
           v-for="session in group.items"
           :key="session.id"
           :class="{ active: session.active }"
-          @click="loadSession(session.id)"
+          @click="onLoadSession(session.id)"
         >
           <div class="session-details">
             <span class="session-title">{{ session.title }}</span>
@@ -100,6 +100,7 @@
 <script setup lang="ts">
 import type { PropType } from 'vue';
 import { computed, ref } from 'vue';
+import { loadSession, loadSessionWithMessage } from '../scripts/core/actions';
 import type { SearchResultGroup, SessionItem } from '../scripts/core/types';
 
 const props = defineProps({
@@ -218,11 +219,11 @@ const onClearSearch = () => {
 };
 
 const onLoadWithMessage = (sessionId: string, messageId: string) => {
-  props.loadSessionWithMessage(sessionId, messageId);
+  loadSessionWithMessage(sessionId, messageId);
 };
 
 const onLoadSession = (sessionId: string) => {
-  props.loadSession(sessionId);
+  loadSession(sessionId);
 };
 
 const onSessionsScroll = (event: Event) => {

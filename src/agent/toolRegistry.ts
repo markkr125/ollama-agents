@@ -1,4 +1,5 @@
 import * as vscode from 'vscode';
+import type { TerminalManager } from '../services/terminalManager';
 import { ToolExecution } from '../types/session';
 
 export interface Tool {
@@ -16,6 +17,8 @@ export interface ToolContext {
   workspace: vscode.WorkspaceFolder;
   token: vscode.CancellationToken;
   outputChannel: vscode.OutputChannel;
+  sessionId?: string;
+  terminalManager?: TerminalManager;
 }
 
 export class ToolRegistry {
@@ -150,16 +153,18 @@ export class ToolRegistry {
         required: ['command']
       },
       execute: async (params, context) => {
-        const terminal = vscode.window.createTerminal({
-          name: 'Ollama Copilot',
-          cwd: params.cwd || context.workspace.uri.fsPath
-        });
-        
-        terminal.show();
-        terminal.sendText(params.command);
-        
-        // Note: Can't directly capture terminal output, return command sent
-        return `Executed: ${params.command}`;
+        if (!context.terminalManager || !context.sessionId) {
+          throw new Error('Terminal manager not available for this session.');
+        }
+
+        const cwd = params.cwd || context.workspace.uri.fsPath;
+        const result = await context.terminalManager.executeCommand(
+          context.sessionId,
+          params.command,
+          cwd
+        );
+
+        return result.output;
       }
     });
 

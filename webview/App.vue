@@ -22,6 +22,13 @@
         :current-model="currentModel"
         :set-current-model="setCurrentModelValue"
         :model-options="modelOptions"
+        :auto-approve-commands="autoApproveCommands"
+        :toggle-auto-approve-commands="toggleAutoApproveCommands"
+        :auto-approve-confirm-visible="autoApproveConfirmVisible"
+        :confirm-auto-approve-commands="confirmAutoApproveCommands"
+        :cancel-auto-approve-commands="cancelAutoApproveCommands"
+        :approve-command="approveCommand"
+        :skip-command="skipCommand"
         :is-generating="isGenerating"
         :format-markdown="formatMarkdown"
         :toggle-progress="toggleProgress"
@@ -68,6 +75,8 @@
         :agent-status="agentStatus"
         :run-db-maintenance="runDbMaintenance"
         :db-maintenance-status="dbMaintenanceStatus"
+        :recreate-messages-table="recreateMessagesTable"
+        :recreate-messages-status="recreateMessagesStatus"
         :tools="tools"
       />
 
@@ -107,11 +116,16 @@ import {
   addContext,
   agentSettings,
   agentStatus,
+  approveCommand,
+  autoApproveCommands,
+  autoApproveConfirmVisible,
   autocomplete,
   bearerToken,
+  cancelAutoApproveCommands,
   chatSettings,
   clearScrollTarget,
   clearSearch,
+  confirmAutoApproveCommands,
   connectionStatus,
   contextList,
   currentMode,
@@ -138,6 +152,8 @@ import {
   modelOptions,
   modelsStatus,
   newChat,
+  recreateMessagesStatus,
+  recreateMessagesTable,
   removeContext,
   resizeInput,
   revealMoreSearchResults,
@@ -158,12 +174,14 @@ import {
   sessionsLoading,
   settings,
   showPage,
+  skipCommand,
   statusClass,
   temperatureDisplay,
   temperatureSlider,
   testConnection,
   thinking,
   timeline,
+  toggleAutoApproveCommands,
   toggleAutocomplete,
   toggleProgress,
   toggleToken,

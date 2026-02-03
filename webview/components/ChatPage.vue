@@ -1,5 +1,35 @@
 <template>
   <div class="page" :class="{ active: currentPage === 'chat' }">
+    <div v-if="currentMode === 'agent'" class="chat-toolbar">
+      <div class="chat-toolbar-title">Session controls</div>
+      <div
+        class="chat-toolbar-item"
+        title="Auto-approve commands for this session (critical commands still require approval)"
+      >
+        <span class="chat-toolbar-label">Auto-approve commands</span>
+        <div class="toggle" :class="{ on: autoApproveCommands }" @click="toggleAutoApproveCommands"></div>
+      </div>
+    </div>
+    <div
+      v-if="currentMode === 'agent' && autoApproveConfirmVisible"
+      class="auto-approve-confirm-overlay"
+      @click.self="cancelAutoApproveCommands"
+    >
+      <div class="auto-approve-confirm-dialog">
+        <div class="confirm-dialog-icon">⚠️</div>
+        <div class="confirm-dialog-title">Enable Auto-Approve Commands?</div>
+        <div class="confirm-dialog-message">
+          Commands will run automatically without asking for approval.
+          <strong>This can be risky</strong> as it allows the agent to execute terminal commands without your review.
+          <br><br>
+          Critical commands (like <code>rm -rf</code>, <code>sudo</code>) will still require approval.
+        </div>
+        <div class="confirm-dialog-actions">
+          <button class="approve-btn" @click="confirmAutoApproveCommands">Enable Auto-Approve</button>
+          <button class="skip-btn" @click="cancelAutoApproveCommands">Cancel</button>
+        </div>
+      </div>
+    </div>
     <div class="messages" ref="localMessagesEl">
       <div v-if="timeline.length === 0" class="empty-state">
         <h3>How can I help you today?</h3>
@@ -7,7 +37,67 @@
       </div>
 
       <template v-for="(item, index) in timeline" :key="item.id">
-        <template v-if="item.type === 'message'">
+        <template v-if="item.type === 'assistantThread'">
+          <div
+            class="message"
+            :class="item.role === 'user' ? 'message-user' : 'message-assistant'"
+            :id="`message-${item.id}`"
+            :data-message-id="item.id"
+          >
+            <div class="markdown-body" v-html="formatMarkdown(item.contentBefore)"></div>
+
+            <div v-if="item.tools && item.tools.length" class="assistant-tools">
+              <template v-for="toolItem in item.tools" :key="toolItem.id">
+                <template v-if="toolItem.type === 'commandApproval'">
+                  <CommandApproval
+                    :item="toolItem"
+                    :on-approve="handleApproveCommand"
+                    :on-skip="handleSkipCommand"
+                    :auto-approve-enabled="autoApproveCommands"
+                    :on-toggle-auto-approve="toggleAutoApproveCommands"
+                  />
+                </template>
+
+                <div v-else class="progress-group" :class="{ collapsed: toolItem.collapsed }">
+                  <div class="progress-header" @click="toggleProgress(toolItem)">
+                    <span class="progress-chevron">▼</span>
+                    <span class="progress-status" :class="progressStatusClass(toolItem)">
+                      <span v-if="progressStatus(toolItem) === 'running'" class="spinner"></span>
+                      <span v-else-if="progressStatus(toolItem) === 'success'">✓</span>
+                      <span v-else-if="progressStatus(toolItem) === 'error'">✗</span>
+                      <span v-else>○</span>
+                    </span>
+                    <span class="progress-title">{{ toolItem.title }}</span>
+                  </div>
+                  <div class="progress-actions">
+                    <div class="action-item" v-for="action in toolItem.actions" :key="action.id">
+                      <span class="action-status" :class="actionStatusClass(action.status)">
+                        <span v-if="action.status === 'running'" class="spinner"></span>
+                        <span v-else-if="action.status === 'success'">✓</span>
+                        <span v-else-if="action.status === 'error'">✗</span>
+                        <span v-else>○</span>
+                      </span>
+                      <span class="file-icon">{{ action.icon }}</span>
+                      <span class="action-text">
+                        <span class="filename">{{ action.text }}</span>
+                        <span v-if="action.detail" class="detail">, {{ action.detail }}</span>
+                      </span>
+                    </div>
+                  </div>
+                </div>
+              </template>
+            </div>
+
+            <div v-if="item.contentAfter" class="markdown-body" v-html="formatMarkdown(item.contentAfter)"></div>
+            <div v-if="item.model" class="message-model">{{ item.model }}</div>
+          </div>
+          <div
+            v-if="index < timeline.length - 1"
+            class="message-divider"
+          ></div>
+        </template>
+
+        <template v-else-if="item.type === 'message'">
           <div
             class="message"
             :class="item.role === 'user' ? 'message-user' : 'message-assistant'"
@@ -22,6 +112,16 @@
             v-if="item.role === 'assistant' && index < timeline.length - 1"
             class="message-divider"
           ></div>
+        </template>
+
+        <template v-else-if="item.type === 'commandApproval'">
+          <CommandApproval
+            :item="item"
+            :on-approve="handleApproveCommand"
+            :on-skip="handleSkipCommand"
+            :auto-approve-enabled="autoApproveCommands"
+            :on-toggle-auto-approve="toggleAutoApproveCommands"
+          />
         </template>
 
         <div v-else class="progress-group" :class="{ collapsed: item.collapsed }">
@@ -100,7 +200,8 @@
 <script setup lang="ts">
 import type { PropType } from 'vue';
 import { nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue';
-import type { ActionItem, ProgressItem, TimelineItem } from '../scripts/core/types';
+import type { ActionItem, CommandApprovalItem, ProgressItem, TimelineItem } from '../scripts/core/types';
+import CommandApproval from './CommandApproval.vue';
 
 type ThinkingState = {
   visible: boolean;
@@ -165,6 +266,34 @@ const props = defineProps({
     type: Array as PropType<string[]>,
     required: true
   },
+  autoApproveCommands: {
+    type: Boolean,
+    required: true
+  },
+  autoApproveConfirmVisible: {
+    type: Boolean,
+    required: true
+  },
+  toggleAutoApproveCommands: {
+    type: Function as PropType<() => void>,
+    required: true
+  },
+  confirmAutoApproveCommands: {
+    type: Function as PropType<() => void>,
+    required: true
+  },
+  cancelAutoApproveCommands: {
+    type: Function as PropType<() => void>,
+    required: true
+  },
+  approveCommand: {
+    type: Function as PropType<(approvalId: string, command: string) => void>,
+    required: true
+  },
+  skipCommand: {
+    type: Function as PropType<(approvalId: string) => void>,
+    required: true
+  },
   isGenerating: {
     type: Boolean,
     required: true
@@ -223,13 +352,13 @@ const localMessagesEl = ref<HTMLDivElement | null>(null);
 const localInputEl = ref<HTMLTextAreaElement | null>(null);
 
 const progressStatus = (item: ProgressItem) => {
+  if (item.status === 'error') return 'error';
+  if (item.status === 'done') return 'success';
   if (item.status === 'running') return 'running';
   const hasRunning = item.actions.some(action => action.status === 'running' || action.status === 'pending');
   if (hasRunning) return 'running';
   if (item.actions.some(action => action.status === 'error')) return 'error';
   if (item.lastActionStatus) return item.lastActionStatus;
-  if (item.status === 'error') return 'error';
-  if (item.status === 'done') return 'success';
   return 'running';
 };
 
@@ -258,6 +387,38 @@ const copyText = async (text: string) => {
   textarea.select();
   document.execCommand('copy');
   document.body.removeChild(textarea);
+};
+
+const findCommandApprovalItem = (approvalId: string) => {
+  for (const entry of props.timeline) {
+    if (entry.type === 'commandApproval' && entry.id === approvalId) {
+      return entry as CommandApprovalItem;
+    }
+    if (entry.type === 'assistantThread') {
+      const match = entry.tools.find(
+        tool => tool.type === 'commandApproval' && tool.id === approvalId
+      ) as CommandApprovalItem | undefined;
+      if (match) return match;
+    }
+  }
+  return undefined;
+};
+
+const handleApproveCommand = (approvalId: string, command: string) => {
+  const item = findCommandApprovalItem(approvalId);
+  if (item) {
+    item.status = 'approved';
+    item.command = command;
+  }
+  props.approveCommand(approvalId, command);
+};
+
+const handleSkipCommand = (approvalId: string) => {
+  const item = findCommandApprovalItem(approvalId);
+  if (item) {
+    item.status = 'skipped';
+  }
+  props.skipCommand(approvalId);
 };
 
 const onMessagesClick = async (event: MouseEvent) => {

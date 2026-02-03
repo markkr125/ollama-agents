@@ -2,7 +2,7 @@ export function getProgressGroupTitle(toolCalls: Array<{ name: string; args: any
   const hasRead = toolCalls.some(t => t.name === 'read_file');
   const hasWrite = toolCalls.some(t => t.name === 'write_file' || t.name === 'create_file');
   const hasSearch = toolCalls.some(t => t.name === 'search_workspace');
-  const hasCommand = toolCalls.some(t => t.name === 'run_command');
+  const hasCommand = toolCalls.some(t => t.name === 'run_terminal_command' || t.name === 'run_command');
   const hasListFiles = toolCalls.some(t => t.name === 'list_files');
 
   if (hasSearch) return 'Searching codebase';
@@ -54,6 +54,7 @@ export function getToolActionInfo(
         actionIcon: '🔍'
       };
     case 'run_command':
+    case 'run_terminal_command':
       return {
         actionText: 'Run command',
         actionDetail: (args?.command || '').substring(0, 30),
@@ -105,10 +106,14 @@ export function getToolSuccessInfo(
       };
     }
     case 'run_command':
+    case 'run_terminal_command': {
+      const exitCodeMatch = (output || '').match(/Exit code:\s*(\d+)/i);
+      const exitCode = exitCodeMatch ? exitCodeMatch[1] : '';
       return {
         actionText: 'Command completed',
-        actionDetail: ''
+        actionDetail: exitCode ? `exit ${exitCode}` : ''
       };
+    }
     default:
       return {
         actionText: toolName,

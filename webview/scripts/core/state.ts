@@ -17,6 +17,8 @@ export const modelOptions = ref<string[]>([]);
 export const currentMode = ref('agent');
 export const currentModel = ref('');
 export const currentSessionId = ref<string | null>(null);
+export const autoApproveCommands = ref(false);
+export const autoApproveConfirmVisible = ref(false);
 export const currentPage = ref<'chat' | 'settings' | 'sessions'>('chat');
 export const activeSection = ref('connection');
 export const isGenerating = ref(false);
@@ -64,6 +66,7 @@ export const connectionStatus = reactive<StatusMessage>({ visible: false, succes
 export const modelsStatus = reactive<StatusMessage>({ visible: false, success: true, message: '' });
 export const agentStatus = reactive<StatusMessage>({ visible: false, success: true, message: '' });
 export const dbMaintenanceStatus = reactive<StatusMessage>({ visible: false, success: true, message: '' });
+export const recreateMessagesStatus = reactive<StatusMessage>({ visible: false, success: true, message: '' });
 
 export const tools = ref([
   { name: 'read_file', icon: '📄', desc: 'Read file contents' },

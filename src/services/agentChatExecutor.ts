@@ -4,11 +4,15 @@ import { SessionManager } from '../agent/sessionManager';
 import { ToolRegistry } from '../agent/toolRegistry';
 import { DatabaseService } from '../services/databaseService';
 import { OllamaClient } from '../services/ollamaClient';
+import { TerminalManager } from '../services/terminalManager';
 import { MessageRecord } from '../types/session';
+import { analyzeDangerousCommand } from '../utils/commandSafety';
 import { WebviewMessageEmitter } from '../views/chatTypes';
 import { getProgressGroupTitle, getToolActionInfo, getToolSuccessInfo } from '../views/toolUIFormatter';
 
 export class AgentChatExecutor {
+  private pendingApprovals = new Map<string, { resolve: (result: { approved: boolean; command?: string }) => void }>();
+
   constructor(
     private readonly client: OllamaClient,
     private readonly toolRegistry: ToolRegistry,
@@ -16,8 +20,16 @@ export class AgentChatExecutor {
     private readonly sessionManager: SessionManager,
     private readonly outputChannel: vscode.OutputChannel,
     private readonly emitter: WebviewMessageEmitter,
-    private readonly refreshExplorer: () => void
+    private readonly refreshExplorer: () => void,
+    private readonly terminalManager: TerminalManager
   ) {}
+
+  handleToolApprovalResponse(approvalId: string, approved: boolean, command?: string): void {
+    const pending = this.pendingApprovals.get(approvalId);
+    if (!pending) return;
+    pending.resolve({ approved, command });
+    this.pendingApprovals.delete(approvalId);
+  }
 
   async execute(
     agentSession: any,
@@ -26,7 +38,13 @@ export class AgentChatExecutor {
     sessionId: string,
     model: string
   ): Promise<{ summary: string; assistantMessage: MessageRecord }> {
-    const context = { workspace: agentSession.workspace, token, outputChannel: this.outputChannel };
+    const context = {
+      workspace: agentSession.workspace,
+      token,
+      outputChannel: this.outputChannel,
+      sessionId,
+      terminalManager: this.terminalManager
+    };
 
     const messages: any[] = [
       { role: 'system', content: this.buildAgentSystemPrompt() },
@@ -104,6 +122,19 @@ export class AgentChatExecutor {
           continue;
         }
 
+        // Save the assistant's explanation BEFORE executing tools
+        // This ensures proper message ordering when loading from history
+        if (accumulatedExplanation.trim() && sessionId) {
+          await this.databaseService.addMessage(
+            sessionId,
+            'assistant',
+            accumulatedExplanation.trim(),
+            { model }
+          );
+          // Don't clear accumulatedExplanation - we'll append to it after tools
+          // Don't send finalMessage here - that would split the message in UI
+        }
+
         const groupTitle = getProgressGroupTitle(toolCalls);
         this.emitter.postMessage({
           type: 'startProgressGroup',
@@ -115,18 +146,23 @@ export class AgentChatExecutor {
           if (token.isCancellationRequested) break;
 
           const { actionText, actionDetail, actionIcon } = getToolActionInfo(toolCall.name, toolCall.args);
+          const isTerminalCommand = toolCall.name === 'run_terminal_command' || toolCall.name === 'run_command';
 
-          this.emitter.postMessage({
-            type: 'showToolAction',
-            status: 'running',
-            icon: actionIcon,
-            text: actionText,
-            detail: actionDetail,
-            sessionId
-          });
+          if (!isTerminalCommand) {
+            this.emitter.postMessage({
+              type: 'showToolAction',
+              status: 'running',
+              icon: actionIcon,
+              text: actionText,
+              detail: actionDetail,
+              sessionId
+            });
+          }
 
           try {
-            const result = await this.toolRegistry.execute(toolCall.name, toolCall.args, context);
+            const result = isTerminalCommand
+              ? await this.executeTerminalCommand(toolCall.name, toolCall.args, context, sessionId, actionText, actionIcon, token)
+              : await this.toolRegistry.execute(toolCall.name, toolCall.args, context);
             agentSession.toolCalls.push(result);
 
             if (['write_file', 'create_file', 'delete_file'].includes(toolCall.name)) {
@@ -149,16 +185,31 @@ export class AgentChatExecutor {
               );
             }
 
-            const { actionText: successText, actionDetail: successDetail } =
-              getToolSuccessInfo(toolCall.name, toolCall.args, result.output);
-            this.emitter.postMessage({
-              type: 'showToolAction',
-              status: 'success',
-              icon: actionIcon,
-              text: successText,
-              detail: successDetail,
-              sessionId
-            });
+            const isSkipped =
+              (toolCall.name === 'run_terminal_command' || toolCall.name === 'run_command') &&
+              (result.output || '').toLowerCase().includes('skipped by user');
+
+            if (isSkipped) {
+              this.emitter.postMessage({
+                type: 'showToolAction',
+                status: 'error',
+                icon: actionIcon,
+                text: 'Command skipped',
+                detail: 'Skipped by user',
+                sessionId
+              });
+            } else {
+              const { actionText: successText, actionDetail: successDetail } =
+                getToolSuccessInfo(toolCall.name, toolCall.args, result.output);
+              this.emitter.postMessage({
+                type: 'showToolAction',
+                status: 'success',
+                icon: actionIcon,
+                text: successText,
+                detail: successDetail,
+                sessionId
+              });
+            }
 
             messages.push({ role: 'assistant', content: response });
             messages.push({
@@ -198,13 +249,15 @@ export class AgentChatExecutor {
             });
           }
         }
+
+        // Finish the progress group after processing all tool calls in this iteration
+        this.emitter.postMessage({ type: 'finishProgressGroup', sessionId });
       } catch (error: any) {
         this.emitter.postMessage({ type: 'showError', message: error.message, sessionId });
         break;
       }
     }
 
-    this.emitter.postMessage({ type: 'finishProgressGroup', sessionId });
     this.sessionManager.updateSession(agentSession.id, { status: 'completed' });
 
     const filesChanged = agentSession.filesChanged?.length || 0;
@@ -322,6 +375,149 @@ export class AgentChatExecutor {
     }
 
     return toolCalls;
+  }
+
+  private async executeTerminalCommand(
+    toolName: string,
+    args: any,
+    context: any,
+    sessionId: string,
+    actionText: string,
+    actionIcon: string,
+    token: vscode.CancellationToken
+  ) {
+    const command = String(args?.command || '').trim();
+    if (!command) {
+      throw new Error('No command provided for terminal execution.');
+    }
+
+    const cwd = String(args?.cwd || context.workspace.uri.fsPath);
+    const resolvedToolName = toolName === 'run_command' ? 'run_terminal_command' : toolName;
+    const analysis = analyzeDangerousCommand(command);
+    const sessionRecord = sessionId ? await this.databaseService.getSession(sessionId) : null;
+    const autoApproveEnabled = !!sessionRecord?.auto_approve_commands;
+    const requiresApproval = analysis.severity === 'critical' || !autoApproveEnabled;
+
+    const approvalId = `approval_${Date.now()}_${Math.random().toString(36).slice(2)}`;
+    const severity = analysis.severity === 'none' ? 'medium' : analysis.severity;
+    const reason = analysis.reason || 'Command requires approval';
+
+    if (requiresApproval) {
+      this.emitter.postMessage({
+        type: 'requestToolApproval',
+        sessionId,
+        approval: {
+          id: approvalId,
+          command,
+          cwd,
+          severity,
+          reason,
+          status: 'pending',
+          timestamp: Date.now()
+        }
+      });
+
+      this.emitter.postMessage({
+        type: 'showToolAction',
+        status: 'pending',
+        icon: actionIcon,
+        text: actionText,
+        detail: 'Awaiting approval',
+        sessionId
+      });
+
+      const approval = await this.waitForApproval(approvalId, token);
+      if (!approval.approved) {
+        const skippedOutput = 'Command skipped by user.';
+
+        this.emitter.postMessage({
+          type: 'toolApprovalResult',
+          sessionId,
+          approvalId,
+          status: 'skipped',
+          output: skippedOutput
+        });
+
+        return {
+          tool: toolName,
+          input: args,
+          output: skippedOutput,
+          timestamp: Date.now()
+        };
+      }
+
+      if (approval.command && approval.command.trim()) {
+        args.command = approval.command.trim();
+      }
+      const finalCommand = String(args?.command || '').trim();
+
+      this.emitter.postMessage({
+        type: 'showToolAction',
+        status: 'running',
+        icon: actionIcon,
+        text: actionText,
+        detail: finalCommand.substring(0, 60),
+        sessionId
+      });
+    } else {
+      this.emitter.postMessage({
+        type: 'toolApprovalResult',
+        sessionId,
+        approvalId,
+        status: 'approved',
+        output: 'Auto-approved for this session.',
+        autoApproved: true,
+        command,
+        cwd,
+        severity,
+        reason
+      });
+
+      this.emitter.postMessage({
+        type: 'showToolAction',
+        status: 'running',
+        icon: actionIcon,
+        text: actionText,
+        detail: command.substring(0, 60),
+        sessionId
+      });
+    }
+
+    const result = await this.toolRegistry.execute(resolvedToolName, args, context);
+    const exitCodeMatch = (result.output || '').match(/Exit code:\s*(\d+)/i);
+    const exitCode = exitCodeMatch ? Number(exitCodeMatch[1]) : null;
+
+    this.emitter.postMessage({
+      type: 'toolApprovalResult',
+      sessionId,
+      approvalId,
+      status: 'approved',
+      output: result.output,
+      exitCode,
+      command: String(args?.command || '').trim()
+    });
+
+    return result;
+  }
+
+  private waitForApproval(
+    approvalId: string,
+    token: vscode.CancellationToken
+  ): Promise<{ approved: boolean; command?: string }> {
+    return new Promise(resolve => {
+      const onCancel = token.onCancellationRequested(() => {
+        onCancel.dispose();
+        this.pendingApprovals.delete(approvalId);
+        resolve({ approved: false });
+      });
+
+      this.pendingApprovals.set(approvalId, {
+        resolve: (result: { approved: boolean; command?: string }) => {
+          onCancel.dispose();
+          resolve(result);
+        }
+      });
+    });
   }
 
   private buildAgentSystemPrompt(): string {
