@@ -645,6 +645,8 @@ export class AgentChatExecutor {
         text: actionText,
         detail: 'Awaiting approval'
       });
+
+      // Send pending action to UI - this ensures LIVE matches SESSION (both show pending → approved/skipped)
       this.emitter.postMessage({
         type: 'showToolAction',
         status: 'pending',
