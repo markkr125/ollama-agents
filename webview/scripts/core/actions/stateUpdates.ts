@@ -35,4 +35,5 @@ export const applySettings = (msg: any) => {
   settings.toolTimeout = msg.settings.toolTimeout || settings.toolTimeout;
   settings.maxActiveSessions = msg.settings.maxActiveSessions ?? settings.maxActiveSessions;
   settings.temperature = msg.settings.temperature ?? settings.temperature;
+  settings.sensitiveFilePatterns = msg.settings.sensitiveFilePatterns ?? settings.sensitiveFilePatterns;
 };

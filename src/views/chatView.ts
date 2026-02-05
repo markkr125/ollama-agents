@@ -133,7 +133,9 @@ export class ChatViewProvider implements vscode.WebviewViewProvider, WebviewMess
           this.postMessage({
             type: 'sessionApprovalSettings',
             sessionId: this.sessionController.getCurrentSessionId(),
-            autoApproveCommands: false
+            autoApproveCommands: false,
+            autoApproveSensitiveEdits: false,
+            sessionSensitiveFilePatterns: null
           });
           await this.sessionController.sendSessionsList();
           break;
@@ -173,6 +175,15 @@ export class ChatViewProvider implements vscode.WebviewViewProvider, WebviewMess
         case 'setAutoApprove':
           await this.handleSetAutoApprove(data.sessionId, !!data.enabled);
           break;
+        case 'setAutoApproveSensitiveEdits':
+          await this.handleSetAutoApproveSensitiveEdits(data.sessionId, !!data.enabled);
+          break;
+        case 'updateSessionSensitivePatterns':
+          await this.handleUpdateSessionSensitivePatterns(data.sessionId, data.patterns);
+          break;
+        case 'openFileDiff':
+          await this.agentExecutor.openFileDiff(data.approvalId);
+          break;
       }
     });
   }
@@ -185,6 +196,28 @@ export class ChatViewProvider implements vscode.WebviewViewProvider, WebviewMess
       type: 'sessionApprovalSettings',
       sessionId,
       autoApproveCommands: enabled
+    });
+  }
+
+  private async handleSetAutoApproveSensitiveEdits(sessionId: string, enabled: boolean) {
+    if (!sessionId) return;
+    await this.databaseService.updateSession(sessionId, { auto_approve_sensitive_edits: enabled });
+    await this.sessionController.updateSessionAutoApproveSensitiveEdits(sessionId, enabled);
+    this.postMessage({
+      type: 'sessionApprovalSettings',
+      sessionId,
+      autoApproveSensitiveEdits: enabled
+    });
+  }
+
+  private async handleUpdateSessionSensitivePatterns(sessionId: string, patterns: string | null) {
+    if (!sessionId) return;
+    await this.databaseService.updateSession(sessionId, { sensitive_file_patterns: patterns });
+    await this.sessionController.updateSessionSensitiveFilePatterns(sessionId, patterns);
+    this.postMessage({
+      type: 'sessionApprovalSettings',
+      sessionId,
+      sessionSensitiveFilePatterns: patterns
     });
   }
 

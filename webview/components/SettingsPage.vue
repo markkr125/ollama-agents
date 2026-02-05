@@ -145,6 +145,32 @@
                   <label class="settings-label">Tool Timeout (seconds)</label>
                   <input type="number" :value="toolTimeoutSeconds" @input="onToolTimeoutInput" />
                 </div>
+            <div class="settings-item">
+              <label class="settings-label">Sensitive File Patterns (JSON)</label>
+              <textarea
+                class="settings-textarea"
+                rows="8"
+                v-model="settings.sensitiveFilePatterns"
+                spellcheck="false"
+              ></textarea>
+              <div class="settings-desc">
+                Use glob patterns with true = auto-approve, false = require approval.
+              </div>
+            </div>
+            <div class="settings-item">
+              <label class="settings-label">Session Override Patterns</label>
+              <textarea
+                class="settings-textarea"
+                rows="4"
+                v-model="localSessionPatterns"
+                spellcheck="false"
+                placeholder='{"**/*": true, "**/.env*": false}'
+              ></textarea>
+              <div class="settings-desc">
+                Override sensitive file patterns for the current session only.
+              </div>
+              <button class="btn btn-secondary" style="margin-top: 8px" @click="saveSessionPatterns">Save Session Override</button>
+            </div>
             <div class="toggle-row">
               <div class="toggle-info">
                 <span class="toggle-label">Auto Create Git Branch</span>
@@ -214,6 +240,9 @@
 
 <script setup lang="ts">
 import type { PropType } from 'vue';
+import { ref, watch } from 'vue';
+import { updateSessionSensitivePatterns } from '../scripts/core/actions/index';
+import { sessionSensitiveFilePatterns } from '../scripts/core/state';
 
 type StatusMessage = {
   visible: boolean;
@@ -232,6 +261,7 @@ type Settings = {
   toolTimeout: number;
   maxActiveSessions: number;
   temperature: number;
+  sensitiveFilePatterns: string;
 };
 
 type ChatSettings = {
@@ -409,5 +439,20 @@ const onToolTimeoutInput = (event: Event) => {
 const confirmRecreateMessagesTable = () => {
   // Use backend confirmation since webview sandbox blocks confirm()
   props.recreateMessagesTable();
+};
+
+// Session-level sensitive file pattern override
+const localSessionPatterns = ref('');
+
+watch(
+  () => sessionSensitiveFilePatterns.value,
+  (value) => {
+    localSessionPatterns.value = value || '';
+  },
+  { immediate: true }
+);
+
+const saveSessionPatterns = () => {
+  updateSessionSensitivePatterns(localSessionPatterns.value);
 };
 </script>

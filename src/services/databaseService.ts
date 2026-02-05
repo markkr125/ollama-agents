@@ -547,6 +547,8 @@ export class DatabaseService {
       model,
       status: 'idle',
       auto_approve_commands: false,
+      auto_approve_sensitive_edits: false,
+      sensitive_file_patterns: null,
       created_at: Date.now(),
       updated_at: Date.now()
     };

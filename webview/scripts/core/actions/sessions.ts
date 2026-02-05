@@ -35,6 +35,15 @@ export const loadMoreSessions = () => {
   vscode.postMessage({ type: 'loadMoreSessions', offset: sessionsCursor.value ?? 0 });
 };
 
+export const updateSessionSensitivePatterns = (patterns: string) => {
+  if (!currentSessionId.value) return;
+  vscode.postMessage({
+    type: 'updateSessionSensitivePatterns',
+    sessionId: currentSessionId.value,
+    patterns
+  });
+};
+
 export const loadSessionWithMessage = (sessionId: string, messageId: string) => {
   autoScrollLocked.value = true;
   scrollTargetMessageId.value = messageId;

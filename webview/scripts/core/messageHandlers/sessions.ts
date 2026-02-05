@@ -11,8 +11,10 @@ import {
 import {
     autoApproveCommands,
     autoApproveConfirmVisible,
+    autoApproveSensitiveEdits,
     connectionStatus,
     contextList,
+    currentAssistantThreadId,
     currentMode,
     currentModel,
     currentProgressIndex,
@@ -26,6 +28,7 @@ import {
     scrollTargetMessageId,
     sessions,
     sessionsCursor,
+    sessionSensitiveFilePatterns,
     sessionsHasMore,
     sessionsLoading,
     settings,
@@ -34,7 +37,7 @@ import {
 } from '../state';
 import { buildTimelineFromMessages } from '../timelineBuilder';
 import type { InitMessage, LoadSessionMessagesMessage, SearchResultGroup } from '../types';
-import { ensureAssistantThread, syncModelSelection } from './threadUtils';
+import { ensureAssistantThread, getLastTextBlock, syncModelSelection } from './threadUtils';
 
 export const handleInit = (msg: InitMessage) => {
   modelOptions.value = updateInitState(msg);
@@ -96,9 +99,18 @@ export const handleLoadSessionMessages = (msg: LoadSessionMessagesMessage) => {
     autoApproveCommands.value = msg.autoApproveCommands;
     autoApproveConfirmVisible.value = false;
   }
+  if (typeof msg.autoApproveSensitiveEdits === 'boolean') {
+    autoApproveSensitiveEdits.value = msg.autoApproveSensitiveEdits;
+  }
+  if (typeof msg.sessionSensitiveFilePatterns === 'string') {
+    sessionSensitiveFilePatterns.value = msg.sessionSensitiveFilePatterns;
+  } else if (msg.sessionSensitiveFilePatterns === null) {
+    sessionSensitiveFilePatterns.value = '';
+  }
   timeline.value = buildTimelineFromMessages(messages);
   currentProgressIndex.value = null;
   currentStreamIndex.value = null;
+  currentAssistantThreadId.value = null;
   if (!scrollTargetMessageId.value) {
     scrollToBottom();
   }
@@ -107,6 +119,14 @@ export const handleLoadSessionMessages = (msg: LoadSessionMessagesMessage) => {
 export const handleSessionApprovalSettings = (msg: any) => {
   if (!msg.sessionId || msg.sessionId === currentSessionId.value) {
     autoApproveCommands.value = !!msg.autoApproveCommands;
+    if (typeof msg.autoApproveSensitiveEdits === 'boolean') {
+      autoApproveSensitiveEdits.value = !!msg.autoApproveSensitiveEdits;
+    }
+    if (typeof msg.sessionSensitiveFilePatterns === 'string') {
+      sessionSensitiveFilePatterns.value = msg.sessionSensitiveFilePatterns;
+    } else if (msg.sessionSensitiveFilePatterns === null) {
+      sessionSensitiveFilePatterns.value = '';
+    }
   }
 };
 
@@ -117,15 +137,10 @@ export const handleAddMessage = (msg: any) => {
   if (msg.message?.role) {
     if (msg.message.role === 'assistant') {
       const thread = ensureAssistantThread(msg.message.model);
-      if (thread.tools.length > 0) {
-        thread.contentAfter = thread.contentAfter
-          ? `${thread.contentAfter}\n\n${msg.message.content}`
-          : msg.message.content;
-      } else {
-        thread.contentBefore = thread.contentBefore
-          ? `${thread.contentBefore}\n\n${msg.message.content}`
-          : msg.message.content;
-      }
+      const textBlock = getLastTextBlock(thread);
+      textBlock.content = textBlock.content
+        ? `${textBlock.content}\n\n${msg.message.content}`
+        : msg.message.content;
       if (msg.message.model) {
         thread.model = msg.message.model;
       }
@@ -137,6 +152,9 @@ export const handleAddMessage = (msg: any) => {
         content: msg.message.content,
         model: msg.message.model
       });
+      currentStreamIndex.value = null;
+      currentProgressIndex.value = null;
+      currentAssistantThreadId.value = null;
     }
     scrollToBottom();
   }
@@ -157,12 +175,16 @@ export const handleHideThinking = (msg: any) => {
 export const handleGenerationStarted = (msg: any) => {
   if (!msg.sessionId || msg.sessionId === currentSessionId.value) {
     setGenerating(true);
+    currentStreamIndex.value = null;
+    currentProgressIndex.value = null;
+    currentAssistantThreadId.value = null;
   }
 };
 
 export const handleGenerationStopped = (msg: any) => {
   if (!msg.sessionId || msg.sessionId === currentSessionId.value) {
     setGenerating(false);
+    currentAssistantThreadId.value = null;
   }
 };
 
@@ -176,6 +198,7 @@ export const handleClearMessages = (msg: any) => {
   timeline.value = [];
   currentStreamIndex.value = null;
   currentProgressIndex.value = null;
+  currentAssistantThreadId.value = null;
   if (msg.sessionId) {
     currentSessionId.value = msg.sessionId;
   }

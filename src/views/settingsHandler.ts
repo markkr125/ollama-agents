@@ -25,7 +25,8 @@ export class SettingsHandler {
       maxIterations: config.agent.maxIterations,
       toolTimeout: config.agent.toolTimeout,
       maxActiveSessions: config.agent.maxActiveSessions,
-      temperature: config.agentMode.temperature
+      temperature: config.agentMode.temperature,
+      sensitiveFilePatterns: JSON.stringify(config.agent.sensitiveFilePatterns, null, 2)
     };
   }
 
@@ -78,6 +79,21 @@ export class SettingsHandler {
     }
     if (settings.maxActiveSessions !== undefined) {
       await config.update('agent.maxActiveSessions', settings.maxActiveSessions, vscode.ConfigurationTarget.Global);
+    }
+    if (settings.sensitiveFilePatterns !== undefined) {
+      try {
+        const parsed = typeof settings.sensitiveFilePatterns === 'string'
+          ? JSON.parse(settings.sensitiveFilePatterns)
+          : settings.sensitiveFilePatterns;
+        if (!parsed || typeof parsed !== 'object') {
+          throw new Error('Sensitive file patterns must be a JSON object.');
+        }
+        await config.update('agent.sensitiveFilePatterns', parsed, vscode.ConfigurationTarget.Global);
+      } catch (error: any) {
+        vscode.window.showErrorMessage(
+          `Failed to save sensitive file patterns: ${error?.message || 'Invalid JSON'}`
+        );
+      }
     }
 
     this.emitter.postMessage({ type: 'settingsSaved' });

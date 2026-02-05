@@ -34,12 +34,18 @@ export class ToolRegistry {
       schema: {
         type: 'object',
         properties: {
-          path: { type: 'string', description: 'File path relative to workspace' }
+          path: { type: 'string', description: 'File path relative to workspace' },
+          file: { type: 'string', description: 'Alternative: file path relative to workspace' }
         },
-        required: ['path']
+        required: []
       },
       execute: async (params, context) => {
-        const filePath = this.resolveWorkspacePath(params.path, context.workspace);
+        // Accept both 'path' and 'file' as argument names
+        const relativePath = params.path || params.file || params.filePath;
+        if (!relativePath || typeof relativePath !== 'string') {
+          throw new Error('Missing required argument: path (file path relative to workspace)');
+        }
+        const filePath = this.resolveWorkspacePath(relativePath, context.workspace);
         const uri = vscode.Uri.file(filePath);
         
         try {
@@ -58,18 +64,24 @@ export class ToolRegistry {
         type: 'object',
         properties: {
           path: { type: 'string', description: 'File path relative to workspace' },
+          file: { type: 'string', description: 'Alternative: file path relative to workspace' },
           content: { type: 'string', description: 'Content to write' }
         },
-        required: ['path', 'content']
+        required: ['content']
       },
       execute: async (params, context) => {
-        const filePath = this.resolveWorkspacePath(params.path, context.workspace);
+        // Accept both 'path' and 'file' as argument names
+        const relativePath = params.path || params.file || params.filePath;
+        if (!relativePath || typeof relativePath !== 'string') {
+          throw new Error('Missing required argument: path (file path relative to workspace)');
+        }
+        const filePath = this.resolveWorkspacePath(relativePath, context.workspace);
         const uri = vscode.Uri.file(filePath);
         
         try {
           const content = new TextEncoder().encode(params.content);
           await vscode.workspace.fs.writeFile(uri, content);
-          return `Successfully wrote to ${params.path}`;
+          return `Successfully wrote to ${relativePath}`;
         } catch (error: any) {
           throw new Error(`Failed to write file: ${error.message}`);
         }
@@ -174,12 +186,18 @@ export class ToolRegistry {
       schema: {
         type: 'object',
         properties: {
-          path: { type: 'string', description: 'File path relative to workspace' }
+          path: { type: 'string', description: 'File path relative to workspace' },
+          file: { type: 'string', description: 'Alternative: file path relative to workspace' }
         },
-        required: ['path']
+        required: []
       },
       execute: async (params, context) => {
-        const filePath = this.resolveWorkspacePath(params.path, context.workspace);
+        // Accept both 'path' and 'file' as argument names
+        const relativePath = params.path || params.file || params.filePath;
+        if (!relativePath || typeof relativePath !== 'string') {
+          throw new Error('Missing required argument: path (file path relative to workspace)');
+        }
+        const filePath = this.resolveWorkspacePath(relativePath, context.workspace);
         const uri = vscode.Uri.file(filePath);
         
         const diagnostics = vscode.languages.getDiagnostics(uri);

@@ -10,6 +10,7 @@ export interface AgentConfig {
   maxIterations: number;
   toolTimeout: number;
   maxActiveSessions: number;
+  sensitiveFilePatterns: Record<string, boolean>;
 }
 
 export interface ExtensionConfig {

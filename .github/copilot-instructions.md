@@ -1,5 +1,55 @@
 # Ollama Copilot - Project Instructions
 
+---
+
+## ⚠️ CRITICAL RULE #1: UI Event Ordering & Persistence
+
+**Session history MUST be identical to live chat.** When a user loads a session from history, they must see the EXACT same timeline as when the chat was live. This is non-negotiable.
+
+### The Golden Rule
+
+**Every UI event that is `postMessage`'d to the webview MUST also be `persistUiEvent`'d to the database, IN THE SAME ORDER.**
+
+```typescript
+// CORRECT: Persist FIRST, then post (or at least in same logical order)
+await this.persistUiEvent(sessionId, 'showToolAction', { status: 'pending', ... });
+this.emitter.postMessage({ type: 'showToolAction', status: 'pending', ..., sessionId });
+
+// WRONG: Post without persisting - history will be missing this event!
+this.emitter.postMessage({ type: 'showToolAction', status: 'pending', ..., sessionId });
+// (no persistUiEvent call)
+```
+
+### Events That Must Be Persisted (In Order)
+ 
+| Event Type | When | Payload |
+|------------|------|---------|
+| `startProgressGroup` | Before first tool in a group | `{ title, groupId }` |
+| `showToolAction` (pending) | Before approval card (if any) | `{ status: 'pending', icon, text, detail }` |
+| `requestToolApproval` | Terminal command needs approval | `{ id, command, cwd, severity, reason }` |
+| `requestFileEditApproval` | File edit needs approval | `{ id, filePath, severity, reason, diffHtml }` |
+| `toolApprovalResult` | After terminal approval resolved | `{ approvalId, status, output, autoApproved? }` |
+| `fileEditApprovalResult` | After file edit approval resolved | `{ approvalId, status, autoApproved?, filePath }` |
+| `showToolAction` (success/error) | After tool execution completes | `{ status: 'success'/'error', icon, text, detail }` |
+| `finishProgressGroup` | After all tools in group complete | `{}` |
+
+### Debugging Live vs History Mismatch
+
+If live chat shows something that session history doesn't:
+1. **Check if the event is being persisted** - search for `persistUiEvent` near the `postMessage` call
+2. **Check the order** - events must be persisted in the same order they're posted
+3. **Check timelineBuilder.ts** - the handler for that `eventType` must reconstruct the UI correctly
+
+### Important Handler Rules
+
+1. **Approval result handlers must NOT complete progress groups** - `handleFileEditApprovalResult` and `handleToolApprovalResult` should only update the approval card status. The `showToolAction(success)` and `finishProgressGroup` events are responsible for completing the action and group respectively.
+
+2. **showToolAction with same text should update, not push** - When a `pending` action exists and a `running` action arrives with the same text, it should update the existing action in place, not push a new one.
+
+3. **Success actions should find the last running/pending action** - When `showToolAction(success)` arrives with different text than the running action, use the fallback "last running/pending" search to find and update the correct action.
+
+---
+
 ## Project Overview
 
 **Ollama Copilot** is a VS Code extension that provides GitHub Copilot-like AI assistance using local Ollama or OpenWebUI as the backend. It's designed to be a fully local, privacy-preserving alternative to cloud-based AI coding assistants.
@@ -171,6 +221,58 @@ Defines tools available to the agent for autonomous operations.
 <tool_call>{"name": "read_file", "arguments": {"path": "src/file.ts"}}</tool_call>
 ```
 
+### 3.1 Tool Call Parser (`src/utils/toolCallParser.ts`)
+
+Parses tool calls from LLM responses. This is critical for agent functionality and must handle various LLM output quirks robustly.
+
+**Key Functions:**
+| Function | Purpose |
+|----------|---------|
+| `extractToolCalls(response)` | Parse all tool calls from response text |
+| `detectPartialToolCall(response)` | Detect in-progress tool call during streaming |
+| `removeToolCalls(response)` | Strip tool call markup for display |
+
+**Robustness Features:**
+
+The parser handles various LLM quirks that smaller models (like devstral-small) may produce:
+
+1. **Balanced JSON Extraction** - Uses brace counting instead of regex to properly extract nested JSON:
+   ```typescript
+   // WRONG: /<tool_call>\s*(\{[\s\S]*?\})\s*<\/tool_call>/  (stops at first })
+   // RIGHT: extractBalancedJson() counts { and } to find matching close
+   ```
+
+2. **Multiple Argument Field Names** - Accepts `arguments`, `args`, `params`, or `parameters`:
+   ```json
+   {"name": "read_file", "args": {"path": "file.ts"}}  // works
+   {"name": "read_file", "arguments": {"path": "file.ts"}}  // works
+   ```
+
+3. **Top-Level Arguments** - Accepts args at root level instead of nested:
+   ```json
+   {"name": "read_file", "path": "file.ts"}  // works (path extracted from top level)
+   ```
+
+4. **Multiple Tool Name Fields** - Accepts `name`, `tool`, or `function`:
+   ```json
+   {"tool": "read_file", "arguments": {"path": "file.ts"}}  // works
+   ```
+
+5. **Incomplete Tool Calls** - Handles LLM getting cut off mid-response:
+   ```xml
+   <tool_call>{"name": "write_file", "arguments": {"path": "x.ts", "content": "...
+   ```
+   The parser attempts to repair by adding missing closing braces.
+
+**Tool Argument Flexibility:**
+
+Tools in `toolRegistry.ts` also accept multiple argument names for the file path:
+- `path`, `file`, or `filePath` are all valid for `read_file`, `write_file`, `get_diagnostics`
+
+**Write Validation:**
+
+The agent executor tracks whether a task requires file writes (based on keywords like "rename", "modify", "create", etc.) and validates that `write_file` was actually called before accepting `[TASK_COMPLETE]`. This prevents the LLM from hallucinating task completion.
+
 ### 4. Settings Configuration
 
 Settings are defined in `package.json` under `contributes.configuration`:
@@ -286,19 +388,83 @@ For each **single user prompt**, the UI must show **exactly one assistant messag
 - ❌ Do NOT render tool blocks as standalone timeline items outside the assistant message.
 - ❌ Do NOT overwrite or erase the initial explanation when tools finish.
 
-**History loading must match real-time**: When loading from the database, assistant explanations before tools and summaries after tools must be merged into the **same assistant message** with tool blocks embedded between them.
+**History loading must match real-time**: When loading from the database, the timeline must be rebuilt to produce the same structure as live streaming.
 
 ### Assistant Thread UI Structure (Webview)
 
-The webview represents each assistant response as a **single assistant thread item** with three parts:
-1. `contentBefore` (assistant explanation)
-2. `tools` (progress groups + command approvals embedded inside the same message)
-3. `contentAfter` (final summary)
+The webview represents each assistant response as a **single assistant thread item** with a `blocks` array:
+
+```typescript
+interface AssistantThreadItem {
+  id: string;
+  type: 'assistantThread';
+  role: 'assistant';
+  blocks: Array<TextBlock | ToolsBlock>;
+  model?: string;
+}
+
+interface TextBlock {
+  type: 'text';
+  content: string;
+}
+
+interface ToolsBlock {
+  type: 'tools';
+  tools: Array<ProgressItem | CommandApprovalItem>;
+}
+```
+
+**Block ordering**: Blocks are added sequentially as events occur:
+1. Thread starts with empty text block: `[{ type: 'text', content: '' }]`
+2. When tools start: `[text, { type: 'tools', tools: [...] }]`
+3. After tools, more text: `[text, tools, { type: 'text', content: '...' }]`
+4. More tools: `[text, tools, text, tools]`
+5. Final summary: `[text, tools, text, tools, text]`
 
 **Rules**:
 - The assistant thread is the only container for tool UI blocks during an assistant response.
 - Never render tool blocks as standalone timeline items outside the assistant thread.
-- During streaming, update `contentBefore` until tools start; after tools start, update `contentAfter`.
+- Both live handlers and `timelineBuilder` create an initial empty text block for consistency.
+
+### Streaming Behavior
+
+The backend sends **accumulated content** with each stream chunk, not incremental deltas:
+
+```typescript
+// Backend sends: "Hello", then "Hello World", then "Hello World!"
+// NOT: "Hello", then " World", then "!"
+handleStreamChunk({ content: 'Hello World!' }); // replaces, not appends
+```
+
+The `handleStreamChunk` handler **replaces** the text block content, it does not append.
+
+### UI Event Persistence
+
+UI events (progress groups, tool actions, approvals) are persisted as `__ui__` tool messages:
+
+```typescript
+{
+  role: 'tool',
+  toolName: '__ui__',
+  toolOutput: JSON.stringify({
+    eventType: 'startProgressGroup' | 'showToolAction' | 'finishProgressGroup' | 'requestToolApproval' | 'toolApprovalResult' | 'requestFileEditApproval' | 'fileEditApprovalResult',
+    payload: { ... }
+  })
+}
+```
+
+**Persisted events** (saved to database):
+- `startProgressGroup` - Creates new progress group
+- `showToolAction` - Adds action to progress group (only final states, not transient "running" states)
+- `finishProgressGroup` - Marks group as done/collapsed
+- `requestToolApproval` - Creates pending terminal command approval card + "Awaiting approval" action
+- `toolApprovalResult` - Updates terminal command approval status and action status
+- `requestFileEditApproval` - Creates pending file edit approval card with diff + "Awaiting approval" action
+- `fileEditApprovalResult` - Updates file edit approval status and action status
+
+**Not persisted** (transient UI states):
+- "Running" status updates that will be replaced by final status
+- Intermediate streaming content (only final content is saved as assistant message)
 
 ### Editable Command Approvals
 
@@ -597,8 +763,67 @@ Good `@vscode/test-electron` targets:
 - If the bug would show up as “VS Code integration broken / storage broken / commands missing / streaming broken”, write `@vscode/test-electron`.
 
 **High-ROI next webview tests to add (Vitest):**
-- Message-handling invariants: one user prompt must map to exactly one assistant thread item with tool blocks embedded between `contentBefore` and `contentAfter` (test via `webview/scripts/core/actions.ts` helpers and/or the message-assembly logic).
 - Sessions UI: `SessionsPanel.vue` pagination and selection behavior (load more, click session, correct postMessage payloads).
+
+#### Existing test coverage (Vitest)
+
+The following test suites exist in `webview/tests/`:
+
+**`timelineBuilder.test.ts`** (23 tests) - Tests the `buildTimelineFromMessages` function:
+- Block-based structure: user messages, assistant threads, text block merging
+- UI event replay: `startProgressGroup`, `showToolAction`, `finishProgressGroup`
+- Command approval flow: `requestToolApproval`, `toolApprovalResult`, skipped status
+- **File edit approval flow**: `requestFileEditApproval`, `fileEditApprovalResult`
+- Full workflow matching live/history parity
+- Edge cases: implicit groups, orphan approvals, invalid JSON handling
+- **Critical**: finishProgressGroup converts pending/running actions to success
+
+**`messageHandlers.test.ts`** (11 tests) - Tests live message handlers:
+- Streaming handlers: `handleStreamChunk` creates/updates text blocks
+- Progress group handlers: start/show/finish progress groups
+- Approval handlers with live/history parity: both progress group action AND approval card
+- **Critical contract test**: `complete workflow produces same structure as timelineBuilder`
+- **Critical contract test**: `file edit approval workflow produces same structure as timelineBuilder`
+
+**`actions.test.ts`** (7 tests) - Tests UI actions:
+- Debounced search behavior
+- Auto-approve toggle/confirm
+- Context packaging for send
+
+**`computed.test.ts`** (4 tests) - Tests derived state:
+- Temperature display formatting
+
+**`CommandApproval.test.ts`** (2 tests) - Tests Vue component:
+- Editable command input only when status is `pending`
+
+#### Existing test coverage (Extension Host)
+
+The following test suites exist in `src/test/suite/`:
+
+**`utils/toolCallParser.test.ts`** (24 tests) - Tests tool call parsing robustness:
+- Basic parsing: XML and bracket format tool calls
+- Balanced JSON extraction: nested objects, deeply nested content
+- Alternative argument names: `arguments`, `args`, `params`, `parameters`
+- Top-level arguments: when LLM puts args at root level
+- Alternative tool name fields: `name`, `tool`, `function`
+- Incomplete tool calls: LLM cutoff handling, missing closing braces
+- Edge cases: escaped quotes, newlines, surrounding text, empty args
+- Smart quote normalization: Unicode U+201C and U+201D to regular quotes
+
+**`agent/toolRegistry.test.ts`** (17 tests) - Tests tool execution:
+- read_file: accepts `path`, `file`, `filePath` arguments
+- write_file: accepts multiple path formats, writes JSON and special characters
+- list_files: lists workspace root correctly
+- get_diagnostics: accepts multiple path argument names
+- Tool registration: verifies all expected tools are registered
+
+**`services/databaseService.test.ts`** - Tests database operations:
+- Message timestamps are strictly increasing
+- Maintenance never deletes sessions
+
+**`utils/commandSafety.test.ts`** - Tests terminal command safety analysis:
+- Dangerous command detection (rm -rf, sudo, etc.)
+- Platform-specific filtering
 
 #### Webview test rules (important)
 

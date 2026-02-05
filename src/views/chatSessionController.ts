@@ -175,7 +175,9 @@ export class ChatSessionController {
       type: 'loadSessionMessages',
       messages: chatMessages,
       sessionId,
-      autoApproveCommands: !!session.auto_approve_commands
+      autoApproveCommands: !!session.auto_approve_commands,
+      autoApproveSensitiveEdits: !!session.auto_approve_sensitive_edits,
+      sessionSensitiveFilePatterns: session.sensitive_file_patterns ?? null
     });
 
     if (session.status === 'generating' && this.isSessionActive(sessionId)) {
@@ -213,6 +215,20 @@ export class ChatSessionController {
   async updateSessionAutoApprove(sessionId: string, enabled: boolean): Promise<void> {
     if (this.currentSession && this.currentSession.id === sessionId) {
       this.currentSession = { ...this.currentSession, auto_approve_commands: enabled, updated_at: Date.now() };
+    }
+    await this.sendSessionsList();
+  }
+
+  async updateSessionAutoApproveSensitiveEdits(sessionId: string, enabled: boolean): Promise<void> {
+    if (this.currentSession && this.currentSession.id === sessionId) {
+      this.currentSession = { ...this.currentSession, auto_approve_sensitive_edits: enabled, updated_at: Date.now() };
+    }
+    await this.sendSessionsList();
+  }
+
+  async updateSessionSensitiveFilePatterns(sessionId: string, patterns: string | null): Promise<void> {
+    if (this.currentSession && this.currentSession.id === sessionId) {
+      this.currentSession = { ...this.currentSession, sensitive_file_patterns: patterns, updated_at: Date.now() };
     }
     await this.sendSessionsList();
   }

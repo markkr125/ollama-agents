@@ -1,5 +1,15 @@
 export {
-    approveCommand, cancelAutoApproveCommands, confirmAutoApproveCommands, skipCommand, toggleAutoApproveCommands
+    approveCommand,
+    approveFileEdit,
+    cancelAutoApproveCommands,
+    cancelAutoApproveSensitiveEdits,
+    confirmAutoApproveCommands,
+    confirmAutoApproveSensitiveEdits,
+    openFileDiff,
+    skipCommand,
+    skipFileEdit,
+    toggleAutoApproveCommands,
+    toggleAutoApproveSensitiveEdits
 } from './approvals';
 export { handleEnter, handleSend, removeContext, resizeInputField } from './input';
 export { formatMarkdown, statusClass } from './markdown';
@@ -8,8 +18,17 @@ export {
     applySearchResults, clearSearch, handleSearchInput, highlightSnippet, revealMoreSearchResults
 } from './search';
 export {
-    addContext, deleteSession, getActiveSessionId, loadMoreSessions, loadSession, loadSessionWithMessage, newChat, selectMode,
-    selectModel, showPage
+    addContext,
+    deleteSession,
+    getActiveSessionId,
+    loadMoreSessions,
+    loadSession,
+    loadSessionWithMessage,
+    newChat,
+    selectMode,
+    selectModel,
+    showPage,
+    updateSessionSensitivePatterns
 } from './sessions';
 export {
     recreateMessagesTable, runDbMaintenance, saveAgentSettings, saveBaseUrl, saveBearerToken, saveModelSettings, testConnection, toggleAutocomplete, toggleToken

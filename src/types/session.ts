@@ -43,6 +43,8 @@ export interface SessionRecord {
   model: string;
   status: ChatSessionStatus;
   auto_approve_commands?: boolean;
+  auto_approve_sensitive_edits?: boolean;
+  sensitive_file_patterns?: string | null;
   created_at: number;
   updated_at: number;
 }

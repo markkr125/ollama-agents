@@ -6,14 +6,22 @@ export type MessageItem = {
   model?: string;
 };
 
+export type AssistantThreadTextBlock = {
+  type: 'text';
+  content: string;
+};
+
+export type AssistantThreadToolsBlock = {
+  type: 'tools';
+  tools: Array<ProgressItem | CommandApprovalItem | FileEditApprovalItem>;
+};
+
 export type AssistantThreadItem = {
   id: string;
   type: 'assistantThread';
   role: 'assistant';
-  contentBefore: string;
-  contentAfter: string;
+  blocks: Array<AssistantThreadTextBlock | AssistantThreadToolsBlock>;
   model?: string;
-  tools: Array<ProgressItem | CommandApprovalItem>;
 };
 
 export type ActionItem = {
@@ -48,7 +56,19 @@ export type CommandApprovalItem = {
   autoApproved?: boolean;
 };
 
-export type TimelineItem = MessageItem | AssistantThreadItem | ProgressItem | CommandApprovalItem;
+export type FileEditApprovalItem = {
+  id: string;
+  type: 'fileEditApproval';
+  filePath: string;
+  severity: 'critical' | 'high' | 'medium';
+  reason?: string;
+  status: 'pending' | 'approved' | 'skipped';
+  timestamp: number;
+  diffHtml?: string;
+  autoApproved?: boolean;
+};
+
+export type TimelineItem = MessageItem | AssistantThreadItem | ProgressItem | CommandApprovalItem | FileEditApprovalItem;
 
 export type SessionItem = {
   id: string;
@@ -93,6 +113,8 @@ export type LoadSessionMessagesMessage = {
   sessionId?: string;
   messages?: any[];
   autoApproveCommands?: boolean;
+  autoApproveSensitiveEdits?: boolean;
+  sessionSensitiveFilePatterns?: string | null;
 };
 
 export type StreamChunkMessage = {
@@ -129,4 +151,30 @@ export type ToolApprovalResultMessage = {
   cwd?: string;
   severity?: CommandApprovalItem['severity'];
   reason?: string;
+};
+
+export type FileEditApprovalRequestMessage = {
+  type: 'requestFileEditApproval';
+  sessionId?: string;
+  approval?: {
+    id: string;
+    filePath: string;
+    severity?: FileEditApprovalItem['severity'];
+    reason?: string;
+    status?: FileEditApprovalItem['status'];
+    timestamp?: number;
+    diffHtml?: string;
+  };
+};
+
+export type FileEditApprovalResultMessage = {
+  type: 'fileEditApprovalResult';
+  approvalId?: string;
+  sessionId?: string;
+  status?: FileEditApprovalItem['status'];
+  autoApproved?: boolean;
+  filePath?: string;
+  severity?: FileEditApprovalItem['severity'];
+  reason?: string;
+  diffHtml?: string;
 };

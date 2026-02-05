@@ -1,7 +1,7 @@
 import { scrollToBottom, startAssistantMessage } from '../actions/index';
-import { currentSessionId, currentStreamIndex } from '../state';
+import { currentAssistantThreadId, currentSessionId, currentStreamIndex } from '../state';
 import type { StreamChunkMessage } from '../types';
-import { ensureAssistantThread } from './threadUtils';
+import { ensureAssistantThread, getLastTextBlock } from './threadUtils';
 
 export const handleStreamChunk = (msg: StreamChunkMessage) => {
   if (msg.sessionId && msg.sessionId !== currentSessionId.value) {
@@ -11,11 +11,9 @@ export const handleStreamChunk = (msg: StreamChunkMessage) => {
     startAssistantMessage(msg.model);
   }
   const thread = ensureAssistantThread(msg.model);
-  if (thread.tools.length > 0) {
-    thread.contentAfter = msg.content || '';
-  } else {
-    thread.contentBefore = msg.content || '';
-  }
+  currentAssistantThreadId.value = thread.id;
+  const textBlock = getLastTextBlock(thread);
+  textBlock.content = msg.content || '';
   if (msg.model) {
     thread.model = msg.model;
   }
@@ -30,14 +28,13 @@ export const handleFinalMessage = (msg: StreamChunkMessage) => {
     startAssistantMessage(msg.model);
   }
   const thread = ensureAssistantThread(msg.model);
-  if (thread.tools.length > 0) {
-    thread.contentAfter = msg.content || '';
-  } else {
-    thread.contentBefore = msg.content || '';
-  }
+  currentAssistantThreadId.value = thread.id;
+  const textBlock = getLastTextBlock(thread);
+  textBlock.content = msg.content || '';
   if (msg.model) {
     thread.model = msg.model;
   }
   currentStreamIndex.value = null;
+  currentAssistantThreadId.value = null;
   scrollToBottom();
 };

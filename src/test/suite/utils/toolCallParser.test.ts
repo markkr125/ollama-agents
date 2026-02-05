@@ -54,4 +54,178 @@ suite('toolCallParser', () => {
     const cleaned = removeToolCalls(text);
     assert.strictEqual(cleaned, 'Hello');
   });
+
+  // --- New comprehensive tests for balanced JSON extraction and LLM quirks ---
+
+  suite('Balanced JSON Extraction (nested objects)', () => {
+    test('extracts tool call with nested JSON in content field', () => {
+      const response = `<tool_call>{"name": "write_file", "arguments": {"path": "test.json", "content": "{\\"name\\": \\"demo\\"}"}}</tool_call>`;
+      const result = extractToolCalls(response);
+      
+      assert.strictEqual(result.length, 1);
+      assert.strictEqual(result[0].name, 'write_file');
+      assert.strictEqual(result[0].args.path, 'test.json');
+      assert.strictEqual(result[0].args.content, '{"name": "demo"}');
+    });
+
+    test('extracts tool call with deeply nested JSON (package.json with scripts)', () => {
+      const content = '{"name": "project", "scripts": {"test": "echo test", "build": "tsc"}}';
+      const response = `<tool_call>{"name": "write_file", "arguments": {"path": "package.json", "content": ${JSON.stringify(content)}}}</tool_call>`;
+      const result = extractToolCalls(response);
+      
+      assert.strictEqual(result.length, 1);
+      assert.strictEqual(result[0].name, 'write_file');
+      assert.strictEqual(result[0].args.content, content);
+    });
+
+    test('handles content with multiple levels of nesting', () => {
+      const content = '{"a": {"b": {"c": {"d": "value"}}}}';
+      const response = `<tool_call>{"name": "write_file", "arguments": {"path": "deep.json", "content": ${JSON.stringify(content)}}}</tool_call>`;
+      const result = extractToolCalls(response);
+      
+      assert.strictEqual(result.length, 1);
+      assert.strictEqual(result[0].args.content, content);
+    });
+  });
+
+  suite('Alternative argument field names', () => {
+    test('accepts "args" instead of "arguments"', () => {
+      const response = '<tool_call>{"name": "read_file", "args": {"path": "file.ts"}}</tool_call>';
+      const result = extractToolCalls(response);
+      
+      assert.strictEqual(result.length, 1);
+      assert.strictEqual(result[0].args.path, 'file.ts');
+    });
+
+    test('accepts "params" instead of "arguments"', () => {
+      const response = '<tool_call>{"name": "read_file", "params": {"path": "file.ts"}}</tool_call>';
+      const result = extractToolCalls(response);
+      
+      assert.strictEqual(result.length, 1);
+      assert.strictEqual(result[0].args.path, 'file.ts');
+    });
+
+    test('accepts "parameters" instead of "arguments"', () => {
+      const response = '<tool_call>{"name": "read_file", "parameters": {"path": "file.ts"}}</tool_call>';
+      const result = extractToolCalls(response);
+      
+      assert.strictEqual(result.length, 1);
+      assert.strictEqual(result[0].args.path, 'file.ts');
+    });
+  });
+
+  suite('Top-level arguments (no nested object)', () => {
+    test('extracts args from top level when no arguments field', () => {
+      const response = '<tool_call>{"name": "read_file", "path": "file.ts"}</tool_call>';
+      const result = extractToolCalls(response);
+      
+      assert.strictEqual(result.length, 1);
+      assert.strictEqual(result[0].name, 'read_file');
+      assert.strictEqual(result[0].args.path, 'file.ts');
+    });
+
+    test('extracts multiple top-level args', () => {
+      const response = '<tool_call>{"name": "write_file", "path": "file.ts", "content": "hello"}</tool_call>';
+      const result = extractToolCalls(response);
+      
+      assert.strictEqual(result.length, 1);
+      assert.strictEqual(result[0].args.path, 'file.ts');
+      assert.strictEqual(result[0].args.content, 'hello');
+    });
+  });
+
+  suite('Alternative tool name fields', () => {
+    test('accepts "tool" instead of "name"', () => {
+      const response = '<tool_call>{"tool": "read_file", "arguments": {"path": "file.ts"}}</tool_call>';
+      const result = extractToolCalls(response);
+      
+      assert.strictEqual(result.length, 1);
+      assert.strictEqual(result[0].name, 'read_file');
+    });
+
+    test('accepts "function" instead of "name"', () => {
+      const response = '<tool_call>{"function": "read_file", "arguments": {"path": "file.ts"}}</tool_call>';
+      const result = extractToolCalls(response);
+      
+      assert.strictEqual(result.length, 1);
+      assert.strictEqual(result[0].name, 'read_file');
+    });
+  });
+
+  suite('Incomplete tool calls (LLM cutoff)', () => {
+    test('handles incomplete tool call (no closing tag)', () => {
+      const response = '<tool_call>{"name": "read_file", "arguments": {"path": "file.ts"}}';
+      const result = extractToolCalls(response);
+      
+      assert.strictEqual(result.length, 1);
+      assert.strictEqual(result[0].name, 'read_file');
+      assert.strictEqual(result[0].args.path, 'file.ts');
+    });
+
+    test('handles incomplete JSON with one missing closing brace', () => {
+      const response = '<tool_call>{"name": "read_file", "arguments": {"path": "file.ts"}';
+      const result = extractToolCalls(response);
+      
+      // Parser attempts to repair by adding closing braces
+      assert.strictEqual(result.length, 1);
+      assert.strictEqual(result[0].name, 'read_file');
+    });
+
+    test('handles incomplete JSON with multiple missing closing braces', () => {
+      const response = '<tool_call>{"name": "write_file", "arguments": {"path": "file.ts", "content": "test"';
+      const result = extractToolCalls(response);
+      
+      assert.strictEqual(result.length, 1);
+      assert.strictEqual(result[0].name, 'write_file');
+    });
+  });
+
+  suite('Edge cases', () => {
+    test('ignores tool call without name field', () => {
+      const response = '<tool_call>{"arguments": {"path": "file.ts"}}</tool_call>';
+      const result = extractToolCalls(response);
+      
+      assert.strictEqual(result.length, 0);
+    });
+
+    test('handles content with escaped quotes', () => {
+      const content = 'const x = "hello \\"world\\""';
+      const response = `<tool_call>{"name": "write_file", "arguments": {"path": "test.ts", "content": ${JSON.stringify(content)}}}</tool_call>`;
+      const result = extractToolCalls(response);
+      
+      assert.strictEqual(result.length, 1);
+      assert.strictEqual(result[0].args.content, content);
+    });
+
+    test('handles content with newlines', () => {
+      const content = 'line1\nline2\nline3';
+      const response = `<tool_call>{"name": "write_file", "arguments": {"path": "test.txt", "content": ${JSON.stringify(content)}}}</tool_call>`;
+      const result = extractToolCalls(response);
+      
+      assert.strictEqual(result.length, 1);
+      assert.strictEqual(result[0].args.content, content);
+    });
+
+    test('extracts from response with surrounding text and explanation', () => {
+      const response = `
+        I'll read the package.json file first to see the current project name.
+        <tool_call>{"name": "read_file", "arguments": {"path": "package.json"}}</tool_call>
+        This will show us the current configuration.
+      `;
+      const result = extractToolCalls(response);
+      
+      assert.strictEqual(result.length, 1);
+      assert.strictEqual(result[0].name, 'read_file');
+      assert.strictEqual(result[0].args.path, 'package.json');
+    });
+
+    test('handles empty arguments object', () => {
+      const response = '<tool_call>{"name": "list_files", "arguments": {}}</tool_call>';
+      const result = extractToolCalls(response);
+      
+      assert.strictEqual(result.length, 1);
+      assert.strictEqual(result[0].name, 'list_files');
+      assert.deepStrictEqual(result[0].args, {});
+    });
+  });
 });

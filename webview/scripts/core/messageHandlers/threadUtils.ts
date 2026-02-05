@@ -1,17 +1,17 @@
 import { selectModel, startAssistantMessage } from '../actions/index';
-import { currentModel, currentStreamIndex, modelOptions, settings, timeline } from '../state';
-import type { AssistantThreadItem } from '../types';
+import { currentAssistantThreadId, currentModel, currentStreamIndex, modelOptions, settings, timeline } from '../state';
+import type { AssistantThreadItem, AssistantThreadTextBlock, AssistantThreadToolsBlock } from '../types';
 
 export const getActiveAssistantThread = (): AssistantThreadItem | null => {
+  if (currentAssistantThreadId.value) {
+    const byId = timeline.value.find(
+      item => item.type === 'assistantThread' && item.id === currentAssistantThreadId.value
+    ) as AssistantThreadItem | undefined;
+    if (byId) return byId;
+  }
   if (currentStreamIndex.value !== null) {
     const item = timeline.value[currentStreamIndex.value];
     if (item && item.type === 'assistantThread') {
-      return item as AssistantThreadItem;
-    }
-  }
-  for (let i = timeline.value.length - 1; i >= 0; i--) {
-    const item = timeline.value[i];
-    if (item.type === 'assistantThread') {
       return item as AssistantThreadItem;
     }
   }
@@ -25,6 +25,26 @@ export const ensureAssistantThread = (model?: string): AssistantThreadItem => {
     thread = getActiveAssistantThread();
   }
   return thread as AssistantThreadItem;
+};
+
+export const getLastTextBlock = (thread: AssistantThreadItem): AssistantThreadTextBlock => {
+  const last = thread.blocks[thread.blocks.length - 1];
+  if (!last || last.type !== 'text') {
+    const block: AssistantThreadTextBlock = { type: 'text', content: '' };
+    thread.blocks.push(block);
+    return block;
+  }
+  return last;
+};
+
+export const getOrCreateToolsBlock = (thread: AssistantThreadItem): AssistantThreadToolsBlock => {
+  const last = thread.blocks[thread.blocks.length - 1];
+  if (last && last.type === 'tools') {
+    return last;
+  }
+  const block: AssistantThreadToolsBlock = { type: 'tools', tools: [] };
+  thread.blocks.push(block);
+  return block;
 };
 
 export const syncModelSelection = () => {

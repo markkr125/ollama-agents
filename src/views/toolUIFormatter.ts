@@ -41,6 +41,12 @@ export function getToolActionInfo(
         actionDetail: '',
         actionIcon: '📁'
       };
+    case 'file_edit_approval':
+      return {
+        actionText: `Approve ${fileName || 'file'}`,
+        actionDetail: 'Sensitive file edit',
+        actionIcon: '🛡️'
+      };
     case 'list_files':
       return {
         actionText: `List ${path || 'workspace'}`,
@@ -79,7 +85,8 @@ export function getToolSuccessInfo(
 
   switch (toolName) {
     case 'read_file': {
-      const lines = output?.split('\n').length || 0;
+      const content = output || '';
+      const lines = content ? content.split('\n').length : 0;
       return {
         actionText: `Read ${fileName}`,
         actionDetail: `${lines} lines`
