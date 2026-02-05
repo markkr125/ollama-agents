@@ -21,7 +21,7 @@ this.emitter.postMessage({ type: 'showToolAction', status: 'pending', ..., sessi
 ```
 
 ### Events That Must Be Persisted (In Order)
-
+ 
 | Event Type | When | Payload |
 |------------|------|---------|
 | `startProgressGroup` | Before first tool in a group | `{ title, groupId }` |
