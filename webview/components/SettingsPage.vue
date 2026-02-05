@@ -145,6 +145,18 @@
                   <label class="settings-label">Tool Timeout (seconds)</label>
                   <input type="number" :value="toolTimeoutSeconds" @input="onToolTimeoutInput" />
                 </div>
+            <div class="settings-item">
+              <label class="settings-label">Sensitive File Patterns (JSON)</label>
+              <textarea
+                class="settings-textarea"
+                rows="8"
+                v-model="settings.sensitiveFilePatterns"
+                spellcheck="false"
+              ></textarea>
+              <div class="settings-desc">
+                Use glob patterns with true = auto-approve, false = require approval.
+              </div>
+            </div>
             <div class="toggle-row">
               <div class="toggle-info">
                 <span class="toggle-label">Auto Create Git Branch</span>
@@ -232,6 +244,7 @@ type Settings = {
   toolTimeout: number;
   maxActiveSessions: number;
   temperature: number;
+  sensitiveFilePatterns: string;
 };
 
 type ChatSettings = {

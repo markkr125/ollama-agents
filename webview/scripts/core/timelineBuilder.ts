@@ -1,192 +1,229 @@
 import type {
-    ActionItem,
     AssistantThreadItem,
+    AssistantThreadToolsBlock,
     CommandApprovalItem,
+    ProgressItem,
     TimelineItem
 } from './types';
 
-export const getProgressTitleForTools = (toolNames: string[]) => {
-  const hasRead = toolNames.includes('read_file');
-  const hasWrite = toolNames.includes('write_file') || toolNames.includes('create_file');
-  const hasSearch = toolNames.includes('search_workspace');
-  const hasCommand = toolNames.includes('run_terminal_command') || toolNames.includes('run_command');
-  const hasListFiles = toolNames.includes('list_files');
-
-  if (hasSearch) return 'Searching codebase';
-  if (hasWrite && hasRead) return 'Modifying files';
-  if (hasWrite) return 'Writing files';
-  if (hasRead && toolNames.length > 1) return 'Reading files';
-  if (hasRead) return 'Analyzing code';
-  if (hasListFiles) return 'Exploring workspace';
-  if (hasCommand) return 'Running commands';
-  return 'Executing task';
-};
-
-export const buildCommandApprovalItem = (toolMessage: any): CommandApprovalItem | null => {
-  let toolInput: any = {};
-  if (toolMessage.toolInput) {
-    try {
-      toolInput = JSON.parse(toolMessage.toolInput);
-    } catch {
-      toolInput = {};
-    }
-  }
-  const command = toolInput?.command || '';
-  if (!command) return null;
-  const output = toolMessage.toolOutput || toolMessage.content || '';
-  const skipped = (output || '').toLowerCase().includes('skipped by user');
-  const exitMatch = (output || '').match(/Exit code:\s*(\d+)/i);
-  const exitCode = exitMatch ? Number(exitMatch[1]) : null;
-
-  return {
-    id: `approval_${toolMessage.id}`,
-    type: 'commandApproval',
-    command,
-    cwd: toolInput?.cwd || '',
-    severity: 'medium',
-    reason: toolMessage.actionDetail || undefined,
-    status: skipped ? 'skipped' : 'approved',
-    timestamp: toolMessage.timestamp || Date.now(),
-    output,
-    exitCode
-  };
-};
-
+/**
+ * SIMPLE timeline builder: iterate messages in timestamp order, render each one.
+ * No fancy grouping. No restructuring. Just replay exactly as stored.
+ */
 export const buildTimelineFromMessages = (messages: any[]): TimelineItem[] => {
   const items: TimelineItem[] = [];
   let currentThread: AssistantThreadItem | null = null;
+  let currentGroup: ProgressItem | null = null;
 
-  for (let i = 0; i < messages.length; i++) {
-    const m = messages[i];
+  // Helper: get or create current assistant thread
+  const ensureThread = (model?: string): AssistantThreadItem => {
+    if (!currentThread) {
+      currentThread = {
+        id: `thread_${Date.now()}_${Math.random()}`,
+        type: 'assistantThread',
+        role: 'assistant',
+        // Start with empty text block to match live handler behavior
+        blocks: [{ type: 'text', content: '' }],
+        model
+      };
+      items.push(currentThread);
+    }
+    if (model) currentThread.model = model;
+    return currentThread;
+  };
+
+  // Helper: get or create a tools block at the end of current thread
+  const ensureToolsBlock = (): AssistantThreadToolsBlock => {
+    const thread = ensureThread();
+    const lastBlock = thread.blocks[thread.blocks.length - 1];
+    if (lastBlock && lastBlock.type === 'tools') {
+      return lastBlock;
+    }
+    const newBlock: AssistantThreadToolsBlock = { type: 'tools', tools: [] };
+    thread.blocks.push(newBlock);
+    return newBlock;
+  };
+
+  // Helper: append text to current thread
+  const appendText = (content: string, model?: string) => {
+    if (!content) return;
+    const thread = ensureThread(model);
+    const lastBlock = thread.blocks[thread.blocks.length - 1];
+    if (lastBlock && lastBlock.type === 'text') {
+      lastBlock.content = lastBlock.content ? `${lastBlock.content}\n\n${content}` : content;
+    } else {
+      thread.blocks.push({ type: 'text', content });
+    }
+  };
+
+  // Process each message in order (already sorted by timestamp from backend)
+  for (const m of messages) {
+    // USER MESSAGE: new timeline item, reset thread
     if (m.role === 'user') {
       items.push({
         id: m.id || `msg_${Date.now()}_${Math.random()}`,
         type: 'message',
         role: 'user',
-        content: m.content,
+        content: m.content || '',
         model: m.model
       });
       currentThread = null;
+      currentGroup = null;
       continue;
     }
 
+    // ASSISTANT MESSAGE: append to current thread
     if (m.role === 'assistant') {
-      if (!currentThread) {
-        currentThread = {
-          id: m.id || `msg_${Date.now()}_${Math.random()}`,
-          type: 'assistantThread',
-          role: 'assistant',
-          contentBefore: m.content || '',
-          contentAfter: '',
-          model: m.model,
-          tools: []
-        };
-        items.push(currentThread);
-      } else if (currentThread.tools.length > 0) {
-        currentThread.contentAfter = currentThread.contentAfter
-          ? `${currentThread.contentAfter}\n\n${m.content || ''}`
-          : (m.content || '');
-      } else {
-        currentThread.contentBefore = currentThread.contentBefore
-          ? `${currentThread.contentBefore}\n\n${m.content || ''}`
-          : (m.content || '');
-      }
-      if (m.model) {
-        currentThread.model = m.model;
-      }
+      appendText(m.content || '', m.model);
       continue;
     }
 
-    if (!currentThread) {
-      currentThread = {
-        id: `msg_${Date.now()}_${Math.random()}`,
-        type: 'assistantThread',
-        role: 'assistant',
-        contentBefore: '',
-        contentAfter: '',
-        model: m.model,
-        tools: []
-      };
-      items.push(currentThread);
-    }
+    // TOOL MESSAGE: handle based on toolName
+    if (m.role === 'tool') {
+      const toolName = m.toolName;
 
-    const toolBlock: any[] = [];
-    let j = i;
-    while (j < messages.length && messages[j].role === 'tool') {
-      toolBlock.push(messages[j]);
-      j++;
-    }
+      // __ui__ events: replay exactly as stored
+      if (toolName === '__ui__') {
+        let uiEvent: any = null;
+        try {
+          uiEvent = JSON.parse(m.toolOutput || m.content || '{}');
+        } catch {
+          continue;
+        }
+        if (!uiEvent?.eventType) continue;
 
-    const commandTools = toolBlock.filter(toolMessage =>
-      toolMessage.toolName === 'run_terminal_command' || toolMessage.toolName === 'run_command'
-    );
+        const toolsBlock = ensureToolsBlock();
 
-    if (commandTools.length > 0) {
-      const cmdProgressGroup = {
-        id: `progress_cmd_${m.id}`,
-        type: 'progress',
-        title: 'Running commands',
-        status: commandTools.some(toolMessage =>
-          (toolMessage.actionStatus ? toolMessage.actionStatus === 'error' : toolMessage.content?.startsWith('Error:'))
-        ) ? 'error' : 'done',
-        collapsed: true,
-        actions: commandTools.map(toolMessage => ({
-          id: toolMessage.id,
-          status: toolMessage.content?.startsWith('Error:') ? 'error' : 'success',
-          icon: '💻',
-          text: 'Terminal command',
-          detail: null
-        })) as ActionItem[]
-      };
-      currentThread.tools.push(cmdProgressGroup);
-
-      const commandItems = commandTools
-        .map(buildCommandApprovalItem)
-        .filter(Boolean) as CommandApprovalItem[];
-      for (const commandItem of commandItems) {
-        currentThread.tools.push(commandItem);
+        switch (uiEvent.eventType) {
+          case 'startProgressGroup': {
+            currentGroup = {
+              id: uiEvent.payload?.groupId || `progress_${m.id}`,
+              type: 'progress',
+              title: uiEvent.payload?.title || 'Working on task',
+              status: 'running',
+              collapsed: false,
+              actions: []
+            };
+            toolsBlock.tools.push(currentGroup);
+            break;
+          }
+          case 'showToolAction': {
+            if (!currentGroup) {
+              // Create implicit group if none exists
+              currentGroup = {
+                id: `progress_${m.id}`,
+                type: 'progress',
+                title: 'Working on task',
+                status: 'running',
+                collapsed: false,
+                actions: []
+              };
+              toolsBlock.tools.push(currentGroup);
+            }
+            const status = uiEvent.payload?.status || 'running';
+            currentGroup.actions.push({
+              id: `action_${m.id}`,
+              status,
+              icon: uiEvent.payload?.icon || '•',
+              text: uiEvent.payload?.text || 'Tool',
+              detail: uiEvent.payload?.detail || null
+            });
+            if (status === 'error') currentGroup.status = 'error';
+            break;
+          }
+          case 'finishProgressGroup': {
+            if (currentGroup) {
+              currentGroup.status = currentGroup.actions.some(a => a.status === 'error') ? 'error' : 'done';
+              currentGroup.collapsed = true;
+              currentGroup = null;
+            }
+            break;
+          }
+          case 'requestToolApproval': {
+            // Add action to current progress group for pending approval
+            if (currentGroup) {
+              currentGroup.actions.push({
+                id: `action_${uiEvent.payload?.id || m.id}`,
+                status: 'running',
+                icon: '⚡',
+                text: 'Run command',
+                detail: 'Awaiting approval'
+              });
+            }
+            // Also add the approval card
+            toolsBlock.tools.push({
+              id: uiEvent.payload?.id || `approval_${m.id}`,
+              type: 'commandApproval',
+              command: uiEvent.payload?.command || '',
+              cwd: uiEvent.payload?.cwd || '',
+              severity: uiEvent.payload?.severity || 'medium',
+              reason: uiEvent.payload?.reason,
+              status: 'pending',
+              timestamp: uiEvent.payload?.timestamp || Date.now(),
+              output: undefined,
+              exitCode: null,
+              autoApproved: false
+            } as CommandApprovalItem);
+            break;
+          }
+          case 'toolApprovalResult': {
+            // Update action in progress group to show final status
+            if (currentGroup) {
+              const actionId = `action_${uiEvent.payload?.approvalId}`;
+              const existingAction = currentGroup.actions.find(a => a.id === actionId);
+              if (existingAction) {
+                const isError = uiEvent.payload?.status === 'skipped' || uiEvent.payload?.status === 'error';
+                existingAction.status = isError ? 'error' : 'success';
+                existingAction.detail = uiEvent.payload?.command?.substring(0, 60) || existingAction.detail;
+                if (isError) currentGroup.status = 'error';
+              }
+            }
+            // Find and update the existing approval card
+            const approvalId = uiEvent.payload?.approvalId;
+            let found = false;
+            for (const block of ensureThread().blocks) {
+              if (block.type === 'tools') {
+                const existing = block.tools.find(
+                  item => item.type === 'commandApproval' && item.id === approvalId
+                ) as CommandApprovalItem | undefined;
+                if (existing) {
+                  existing.status = uiEvent.payload?.status || existing.status;
+                  existing.output = uiEvent.payload?.output ?? existing.output;
+                  existing.exitCode = uiEvent.payload?.exitCode ?? existing.exitCode;
+                  if (uiEvent.payload?.command) existing.command = uiEvent.payload.command;
+                  found = true;
+                  break;
+                }
+              }
+            }
+            // If not found, add as new approval
+            if (!found) {
+              const tb = ensureToolsBlock();
+              tb.tools.push({
+                id: approvalId || `approval_${m.id}`,
+                type: 'commandApproval',
+                command: uiEvent.payload?.command || '',
+                cwd: uiEvent.payload?.cwd || '',
+                severity: uiEvent.payload?.severity || 'medium',
+                reason: uiEvent.payload?.reason,
+                status: uiEvent.payload?.status || 'approved',
+                timestamp: Date.now(),
+                output: uiEvent.payload?.output,
+                exitCode: uiEvent.payload?.exitCode ?? null,
+                autoApproved: !!uiEvent.payload?.autoApproved
+              } as CommandApprovalItem);
+            }
+            break;
+          }
+          default:
+            break;
+        }
+        continue;
       }
+
+      // Legacy tool messages (non-__ui__): just skip them if we have UI events
+      // They're only here for backwards compatibility with old sessions
     }
-
-    const nonCommandTools = toolBlock.filter(toolMessage =>
-      toolMessage.toolName !== 'run_terminal_command' && toolMessage.toolName !== 'run_command'
-    );
-
-    if (nonCommandTools.length > 0) {
-      const toolNames = nonCommandTools
-        .map(toolMessage => toolMessage.toolName)
-        .filter(Boolean);
-      const storedTitle = nonCommandTools.find(toolMessage => toolMessage.progressTitle)?.progressTitle;
-      const groupTitle = storedTitle || getProgressTitleForTools(toolNames);
-
-      const progressGroup = {
-        id: `progress_${m.id}`,
-        type: 'progress',
-        title: groupTitle,
-        status: nonCommandTools.some(toolMessage =>
-          (toolMessage.actionStatus ? toolMessage.actionStatus === 'error' : toolMessage.content?.startsWith('Error:'))
-        ) ? 'error' : 'done',
-        collapsed: true,
-        actions: [] as ActionItem[]
-      };
-
-      for (const toolMessage of nonCommandTools) {
-        const isError = toolMessage.actionStatus
-          ? toolMessage.actionStatus === 'error'
-          : toolMessage.content?.startsWith('Error:');
-        progressGroup.actions.push({
-          id: toolMessage.id,
-          status: isError ? 'error' : 'success',
-          icon: toolMessage.actionIcon || '📄',
-          text: toolMessage.actionText || toolMessage.toolName || 'Tool',
-          detail: toolMessage.actionDetail || toolMessage.content?.split('\n')[0]?.substring(0, 50) || null
-        });
-      }
-
-      currentThread.tools.push(progressGroup);
-    }
-
-    i = j - 1;
   }
 
   return items;

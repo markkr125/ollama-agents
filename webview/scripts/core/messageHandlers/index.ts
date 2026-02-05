@@ -6,7 +6,7 @@ import type {
     StreamChunkMessage,
     ToolApprovalResultMessage
 } from '../types';
-import { handleRequestToolApproval, handleToolApprovalResult } from './approvals';
+import { handleFileEditApprovalResult, handleRequestFileEditApproval, handleRequestToolApproval, handleToolApprovalResult } from './approvals';
 import { handleFinishProgressGroup, handleShowError, handleShowToolAction, handleStartProgressGroup } from './progress';
 import {
     handleAddContextItem,
@@ -52,8 +52,14 @@ export const handleMessage = (msg: any) => {
     case 'requestToolApproval':
       handleRequestToolApproval(msg);
       break;
+    case 'requestFileEditApproval':
+      handleRequestFileEditApproval(msg);
+      break;
     case 'toolApprovalResult':
       handleToolApprovalResult(msg as ToolApprovalResultMessage);
+      break;
+    case 'fileEditApprovalResult':
+      handleFileEditApprovalResult(msg);
       break;
     case 'sessionApprovalSettings':
       handleSessionApprovalSettings(msg);

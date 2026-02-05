@@ -61,6 +61,7 @@ export const saveAgentSettings = () => {
       maxIterations: settings.maxIterations,
       toolTimeout: settings.toolTimeout,
       maxActiveSessions: settings.maxActiveSessions,
+      sensitiveFilePatterns: settings.sensitiveFilePatterns,
       autoCreateBranch: agentSettings.autoCreateBranch,
       autoCommit: agentSettings.autoCommit
     }

@@ -74,6 +74,18 @@ input[type="number"] {
   font-size: 12px;
 }
 
+.settings-textarea {
+  width: 100%;
+  padding: 6px 8px;
+  background: var(--input-bg);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  color: var(--fg);
+  font-size: 12px;
+  font-family: var(--vscode-editor-font-family, monospace);
+  resize: vertical;
+}
+
 .settings-row {
   display: flex;
   gap: 8px;

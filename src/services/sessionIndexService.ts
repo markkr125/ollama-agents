@@ -45,6 +45,8 @@ export class SessionIndexService {
         model TEXT NOT NULL,
         status TEXT NOT NULL DEFAULT 'completed',
         auto_approve_commands INTEGER NOT NULL DEFAULT 0,
+        auto_approve_sensitive_edits INTEGER NOT NULL DEFAULT 0,
+        sensitive_file_patterns TEXT DEFAULT NULL,
         created_at INTEGER NOT NULL,
         updated_at INTEGER NOT NULL
       );
@@ -57,6 +59,8 @@ export class SessionIndexService {
 
     await this.ensureStatusColumn();
     await this.ensureAutoApproveColumn();
+    await this.ensureAutoApproveSensitiveEditsColumn();
+    await this.ensureSensitiveFilePatternsColumn();
 
     this.initialized = true;
     await this.persist();
@@ -109,6 +113,27 @@ export class SessionIndexService {
     await this.persist();
   }
 
+  private async ensureAutoApproveSensitiveEditsColumn(): Promise<void> {
+    if (!this.db) return;
+    if (this.hasColumn('sessions', 'auto_approve_sensitive_edits')) {
+      return;
+    }
+
+    this.db.run('ALTER TABLE sessions ADD COLUMN auto_approve_sensitive_edits INTEGER NOT NULL DEFAULT 0;');
+    this.db.run('UPDATE sessions SET auto_approve_sensitive_edits = 0 WHERE auto_approve_sensitive_edits IS NULL;');
+    await this.persist();
+  }
+
+  private async ensureSensitiveFilePatternsColumn(): Promise<void> {
+    if (!this.db) return;
+    if (this.hasColumn('sessions', 'sensitive_file_patterns')) {
+      return;
+    }
+
+    this.db.run('ALTER TABLE sessions ADD COLUMN sensitive_file_patterns TEXT DEFAULT NULL;');
+    await this.persist();
+  }
+
   private mapRow(row: Record<string, any>): SessionRecord {
     return {
       id: String(row.id),
@@ -117,6 +142,8 @@ export class SessionIndexService {
       model: String(row.model ?? ''),
       status: (String(row.status ?? 'completed') as ChatSessionStatus),
       auto_approve_commands: Boolean(row.auto_approve_commands ?? 0),
+      auto_approve_sensitive_edits: Boolean(row.auto_approve_sensitive_edits ?? 0),
+      sensitive_file_patterns: row.sensitive_file_patterns ?? null,
       created_at: Number(row.created_at ?? 0),
       updated_at: Number(row.updated_at ?? 0)
     };
@@ -125,8 +152,8 @@ export class SessionIndexService {
   async createSession(record: SessionRecord): Promise<void> {
     this.ensureReady();
     this.db.run(
-      `INSERT INTO sessions (id, title, mode, model, status, auto_approve_commands, created_at, updated_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?);`,
+      `INSERT INTO sessions (id, title, mode, model, status, auto_approve_commands, auto_approve_sensitive_edits, sensitive_file_patterns, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?);`,
       [
         record.id,
         record.title,
@@ -134,6 +161,8 @@ export class SessionIndexService {
         record.model,
         record.status ?? 'completed',
         record.auto_approve_commands ? 1 : 0,
+        record.auto_approve_sensitive_edits ? 1 : 0,
+        record.sensitive_file_patterns ?? null,
         record.created_at,
         record.updated_at
       ]
@@ -144,14 +173,16 @@ export class SessionIndexService {
   async upsertSession(record: SessionRecord): Promise<void> {
     this.ensureReady();
     this.db.run(
-      `INSERT INTO sessions (id, title, mode, model, status, auto_approve_commands, created_at, updated_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+      `INSERT INTO sessions (id, title, mode, model, status, auto_approve_commands, auto_approve_sensitive_edits, sensitive_file_patterns, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
        ON CONFLICT(id) DO UPDATE SET
          title = excluded.title,
          mode = excluded.mode,
          model = excluded.model,
          status = excluded.status,
          auto_approve_commands = excluded.auto_approve_commands,
+         auto_approve_sensitive_edits = excluded.auto_approve_sensitive_edits,
+         sensitive_file_patterns = excluded.sensitive_file_patterns,
          created_at = excluded.created_at,
          updated_at = excluded.updated_at;`,
       [
@@ -161,6 +192,8 @@ export class SessionIndexService {
         record.model,
         record.status ?? 'completed',
         record.auto_approve_commands ? 1 : 0,
+        record.auto_approve_sensitive_edits ? 1 : 0,
+        record.sensitive_file_patterns ?? null,
         record.created_at,
         record.updated_at
       ]
@@ -171,7 +204,7 @@ export class SessionIndexService {
   async getSession(id: string): Promise<SessionRecord | null> {
     this.ensureReady();
     const stmt = this.db.prepare(
-      'SELECT id, title, mode, model, status, auto_approve_commands, created_at, updated_at FROM sessions WHERE id = ? LIMIT 1;'
+      'SELECT id, title, mode, model, status, auto_approve_commands, auto_approve_sensitive_edits, sensitive_file_patterns, created_at, updated_at FROM sessions WHERE id = ? LIMIT 1;'
     );
     stmt.bind([id]);
     let result: SessionRecord | null = null;
@@ -207,6 +240,14 @@ export class SessionIndexService {
       fields.push('auto_approve_commands = ?');
       values.push(updates.auto_approve_commands ? 1 : 0);
     }
+    if (updates.auto_approve_sensitive_edits !== undefined) {
+      fields.push('auto_approve_sensitive_edits = ?');
+      values.push(updates.auto_approve_sensitive_edits ? 1 : 0);
+    }
+    if (updates.sensitive_file_patterns !== undefined) {
+      fields.push('sensitive_file_patterns = ?');
+      values.push(updates.sensitive_file_patterns);
+    }
 
     const updatedAt = typeof updates.updated_at === 'number' ? updates.updated_at : Date.now();
     fields.push('updated_at = ?');
@@ -227,7 +268,7 @@ export class SessionIndexService {
   async listSessions(limit = 50, offset = 0): Promise<SessionsPage> {
     this.ensureReady();
     const stmt = this.db.prepare(
-      'SELECT id, title, mode, model, status, auto_approve_commands, created_at, updated_at FROM sessions ORDER BY updated_at DESC LIMIT ? OFFSET ?;'
+      'SELECT id, title, mode, model, status, auto_approve_commands, auto_approve_sensitive_edits, sensitive_file_patterns, created_at, updated_at FROM sessions ORDER BY updated_at DESC LIMIT ? OFFSET ?;'
     );
     stmt.bind([limit + 1, offset]);
 
@@ -247,7 +288,7 @@ export class SessionIndexService {
   async listAllSessions(): Promise<SessionRecord[]> {
     this.ensureReady();
     const stmt = this.db.prepare(
-      'SELECT id, title, mode, model, status, auto_approve_commands, created_at, updated_at FROM sessions;'
+      'SELECT id, title, mode, model, status, auto_approve_commands, auto_approve_sensitive_edits, sensitive_file_patterns, created_at, updated_at FROM sessions;'
     );
     const rows: SessionRecord[] = [];
     while (stmt.step()) {

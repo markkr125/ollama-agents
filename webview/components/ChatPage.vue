@@ -9,6 +9,13 @@
         <span class="chat-toolbar-label">Auto-approve commands</span>
         <div class="toggle" :class="{ on: autoApproveCommands }" @click="toggleAutoApproveCommands"></div>
       </div>
+      <div
+        class="chat-toolbar-item"
+        title="Auto-approve sensitive file edits for this session"
+      >
+        <span class="chat-toolbar-label">Auto-approve sensitive edits</span>
+        <div class="toggle" :class="{ on: autoApproveSensitiveEdits }" @click="toggleAutoApproveSensitiveEdits"></div>
+      </div>
     </div>
     <div
       v-if="currentMode === 'agent' && autoApproveConfirmVisible"
@@ -44,51 +51,62 @@
             :id="`message-${item.id}`"
             :data-message-id="item.id"
           >
-            <div class="markdown-body" v-html="formatMarkdown(item.contentBefore)"></div>
+            <template v-for="(block, bIndex) in item.blocks" :key="`${item.id}-${bIndex}`">
+              <div v-if="block.type === 'text'" class="markdown-body" v-html="formatMarkdown(block.content)"></div>
 
-            <div v-if="item.tools && item.tools.length" class="assistant-tools">
-              <template v-for="toolItem in item.tools" :key="toolItem.id">
-                <template v-if="toolItem.type === 'commandApproval'">
-                  <CommandApproval
-                    :item="toolItem"
-                    :on-approve="handleApproveCommand"
-                    :on-skip="handleSkipCommand"
-                    :auto-approve-enabled="autoApproveCommands"
-                    :on-toggle-auto-approve="toggleAutoApproveCommands"
-                  />
-                </template>
+              <div v-else class="assistant-tools">
+                <template v-for="toolItem in block.tools" :key="toolItem.id">
+                  <template v-if="toolItem.type === 'commandApproval'">
+                    <CommandApproval
+                      :item="toolItem"
+                      :on-approve="handleApproveCommand"
+                      :on-skip="handleSkipCommand"
+                      :auto-approve-enabled="autoApproveCommands"
+                      :on-toggle-auto-approve="toggleAutoApproveCommands"
+                    />
+                  </template>
 
-                <div v-else class="progress-group" :class="{ collapsed: toolItem.collapsed }">
-                  <div class="progress-header" @click="toggleProgress(toolItem)">
-                    <span class="progress-chevron">▼</span>
-                    <span class="progress-status" :class="progressStatusClass(toolItem)">
-                      <span v-if="progressStatus(toolItem) === 'running'" class="spinner"></span>
-                      <span v-else-if="progressStatus(toolItem) === 'success'">✓</span>
-                      <span v-else-if="progressStatus(toolItem) === 'error'">✗</span>
-                      <span v-else>○</span>
-                    </span>
-                    <span class="progress-title">{{ toolItem.title }}</span>
-                  </div>
-                  <div class="progress-actions">
-                    <div class="action-item" v-for="action in toolItem.actions" :key="action.id">
-                      <span class="action-status" :class="actionStatusClass(action.status)">
-                        <span v-if="action.status === 'running'" class="spinner"></span>
-                        <span v-else-if="action.status === 'success'">✓</span>
-                        <span v-else-if="action.status === 'error'">✗</span>
+                  <template v-else-if="toolItem.type === 'fileEditApproval'">
+                    <FileEditApproval
+                      :item="toolItem"
+                      :on-approve="handleApproveFileEdit"
+                      :on-skip="handleSkipFileEdit"
+                      :on-open-diff="handleOpenFileDiff"
+                      :auto-approve-enabled="autoApproveSensitiveEdits"
+                      :on-toggle-auto-approve="toggleAutoApproveSensitiveEdits"
+                    />
+                  </template>
+
+                  <div v-else-if="toolItem.type === 'progress'" class="progress-group" :class="{ collapsed: toolItem.collapsed }">
+                    <div class="progress-header" @click="toggleProgress(toolItem)">
+                      <span class="progress-chevron">▼</span>
+                      <span class="progress-status" :class="progressStatusClass(toolItem)">
+                        <span v-if="progressStatus(toolItem) === 'running'" class="spinner"></span>
+                        <span v-else-if="progressStatus(toolItem) === 'success'">✓</span>
+                        <span v-else-if="progressStatus(toolItem) === 'error'">✗</span>
                         <span v-else>○</span>
                       </span>
-                      <span class="file-icon">{{ action.icon }}</span>
-                      <span class="action-text">
-                        <span class="filename">{{ action.text }}</span>
-                        <span v-if="action.detail" class="detail">, {{ action.detail }}</span>
-                      </span>
+                      <span class="progress-title">{{ toolItem.title }}</span>
+                    </div>
+                    <div class="progress-actions">
+                      <div class="action-item" v-for="action in toolItem.actions" :key="action.id">
+                        <span class="action-status" :class="actionStatusClass(action.status)">
+                          <span v-if="action.status === 'running'" class="spinner"></span>
+                          <span v-else-if="action.status === 'success'">✓</span>
+                          <span v-else-if="action.status === 'error'">✗</span>
+                          <span v-else>○</span>
+                        </span>
+                        <span class="file-icon">{{ action.icon }}</span>
+                        <span class="action-text">
+                          <span class="filename">{{ action.text }}</span>
+                          <span v-if="action.detail" class="detail">, {{ action.detail }}</span>
+                        </span>
+                      </div>
                     </div>
                   </div>
-                </div>
-              </template>
-            </div>
-
-            <div v-if="item.contentAfter" class="markdown-body" v-html="formatMarkdown(item.contentAfter)"></div>
+                </template>
+              </div>
+            </template>
             <div v-if="item.model" class="message-model">{{ item.model }}</div>
           </div>
           <div
@@ -121,6 +139,17 @@
             :on-skip="handleSkipCommand"
             :auto-approve-enabled="autoApproveCommands"
             :on-toggle-auto-approve="toggleAutoApproveCommands"
+          />
+        </template>
+
+        <template v-else-if="item.type === 'fileEditApproval'">
+          <FileEditApproval
+            :item="item"
+            :on-approve="handleApproveFileEdit"
+            :on-skip="handleSkipFileEdit"
+            :on-open-diff="handleOpenFileDiff"
+            :auto-approve-enabled="autoApproveSensitiveEdits"
+            :on-toggle-auto-approve="toggleAutoApproveSensitiveEdits"
           />
         </template>
 
@@ -200,8 +229,9 @@
 <script setup lang="ts">
 import type { PropType } from 'vue';
 import { nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue';
-import type { ActionItem, CommandApprovalItem, ProgressItem, TimelineItem } from '../scripts/core/types';
+import type { ActionItem, CommandApprovalItem, FileEditApprovalItem, ProgressItem, TimelineItem } from '../scripts/core/types';
 import CommandApproval from './CommandApproval.vue';
+import FileEditApproval from './FileEditApproval.vue';
 
 type ThinkingState = {
   visible: boolean;
@@ -292,6 +322,26 @@ const props = defineProps({
   },
   skipCommand: {
     type: Function as PropType<(approvalId: string) => void>,
+    required: true
+  },
+  approveFileEdit: {
+    type: Function as PropType<(approvalId: string) => void>,
+    required: true
+  },
+  skipFileEdit: {
+    type: Function as PropType<(approvalId: string) => void>,
+    required: true
+  },
+  openFileDiff: {
+    type: Function as PropType<(approvalId: string) => void>,
+    required: true
+  },
+  autoApproveSensitiveEdits: {
+    type: Boolean,
+    required: true
+  },
+  toggleAutoApproveSensitiveEdits: {
+    type: Function as PropType<() => void>,
     required: true
   },
   isGenerating: {
@@ -395,10 +445,13 @@ const findCommandApprovalItem = (approvalId: string) => {
       return entry as CommandApprovalItem;
     }
     if (entry.type === 'assistantThread') {
-      const match = entry.tools.find(
-        tool => tool.type === 'commandApproval' && tool.id === approvalId
-      ) as CommandApprovalItem | undefined;
-      if (match) return match;
+      for (const block of entry.blocks) {
+        if (block.type !== 'tools') continue;
+        const match = block.tools.find(
+          tool => tool.type === 'commandApproval' && tool.id === approvalId
+        ) as CommandApprovalItem | undefined;
+        if (match) return match;
+      }
     }
   }
   return undefined;
@@ -419,6 +472,44 @@ const handleSkipCommand = (approvalId: string) => {
     item.status = 'skipped';
   }
   props.skipCommand(approvalId);
+};
+
+const findFileEditApprovalItem = (approvalId: string) => {
+  for (const entry of props.timeline) {
+    if (entry.type === 'fileEditApproval' && entry.id === approvalId) {
+      return entry as FileEditApprovalItem;
+    }
+    if (entry.type === 'assistantThread') {
+      for (const block of entry.blocks) {
+        if (block.type !== 'tools') continue;
+        const match = block.tools.find(
+          tool => tool.type === 'fileEditApproval' && tool.id === approvalId
+        ) as FileEditApprovalItem | undefined;
+        if (match) return match;
+      }
+    }
+  }
+  return undefined;
+};
+
+const handleApproveFileEdit = (approvalId: string) => {
+  const item = findFileEditApprovalItem(approvalId);
+  if (item) {
+    item.status = 'approved';
+  }
+  props.approveFileEdit(approvalId);
+};
+
+const handleSkipFileEdit = (approvalId: string) => {
+  const item = findFileEditApprovalItem(approvalId);
+  if (item) {
+    item.status = 'skipped';
+  }
+  props.skipFileEdit(approvalId);
+};
+
+const handleOpenFileDiff = (approvalId: string) => {
+  props.openFileDiff(approvalId);
 };
 
 const onMessagesClick = async (event: MouseEvent) => {

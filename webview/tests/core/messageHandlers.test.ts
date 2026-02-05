@@ -1,4 +1,4 @@
-import { beforeEach, expect, test, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
 
 beforeEach(() => {
   vi.useFakeTimers();
@@ -10,75 +10,368 @@ afterEach(() => {
   vi.useRealTimers();
 });
 
-test('handleStreamChunk writes into contentBefore when no tools', async () => {
-  const state = await import('../../scripts/core/state');
-  const handlers = await import('../../scripts/core/messageHandlers/streaming');
+describe('streaming handlers', () => {
+  test('handleStreamChunk creates assistant thread with text block', async () => {
+    const state = await import('../../scripts/core/state');
+    const handlers = await import('../../scripts/core/messageHandlers/streaming');
 
-  state.timeline.value = [];
-  state.currentStreamIndex.value = null;
+    state.timeline.value = [];
+    state.currentStreamIndex.value = null;
+    state.currentAssistantThreadId.value = null;
 
-  handlers.handleStreamChunk({ type: 'streamChunk', content: 'Hello', model: 'm1' });
+    handlers.handleStreamChunk({ type: 'streamChunk', content: 'Hello', model: 'm1' });
 
-  expect(state.timeline.value.length).toBe(1);
-  const thread = state.timeline.value[0] as any;
-  expect(thread.type).toBe('assistantThread');
-  expect(thread.contentBefore).toBe('Hello');
-  expect(thread.contentAfter).toBe('');
-  expect(thread.model).toBe('m1');
-});
-
-test('progress group lifecycle updates status and collapses', async () => {
-  const state = await import('../../scripts/core/state');
-  const handlers = await import('../../scripts/core/messageHandlers/progress');
-
-  state.timeline.value = [];
-  state.currentProgressIndex.value = null;
-  state.currentStreamIndex.value = null;
-
-  handlers.handleStartProgressGroup({ type: 'startProgressGroup', title: 'Working' });
-  expect(state.timeline.value.length).toBe(1);
-  const thread = state.timeline.value[0] as any;
-  const group = thread.tools[0];
-  expect(group.status).toBe('running');
-  expect(group.title).toBe('Working');
-
-  handlers.handleShowToolAction({ type: 'showToolAction', text: 'Step 1', status: 'running' });
-  expect(group.actions.length).toBe(1);
-  expect(group.actions[0].status).toBe('running');
-
-  handlers.handleShowToolAction({ type: 'showToolAction', text: 'Step 1', status: 'success' });
-  expect(group.actions[0].status).toBe('success');
-  expect(group.status).toBe('done');
-
-  handlers.handleFinishProgressGroup({ type: 'finishProgressGroup' });
-  expect(group.collapsed).toBe(true);
-  expect(state.currentProgressIndex.value).toBe(null);
-});
-
-test('handleToolApprovalResult updates command and exit code', async () => {
-  const state = await import('../../scripts/core/state');
-  const handlers = await import('../../scripts/core/messageHandlers/approvals');
-
-  state.timeline.value = [];
-  state.currentStreamIndex.value = null;
-
-  handlers.handleRequestToolApproval({
-    type: 'requestToolApproval',
-    approval: { id: 'a1', command: 'echo hi', cwd: '/tmp', severity: 'medium' }
+    expect(state.timeline.value.length).toBe(1);
+    const thread = state.timeline.value[0] as any;
+    expect(thread.type).toBe('assistantThread');
+    expect(thread.blocks.length).toBe(1);
+    expect(thread.blocks[0].type).toBe('text');
+    expect(thread.blocks[0].content).toBe('Hello');
+    expect(thread.model).toBe('m1');
   });
 
-  handlers.handleToolApprovalResult({
-    type: 'toolApprovalResult',
-    approvalId: 'a1',
-    status: 'approved',
-    output: 'Exit code: 0',
-    command: 'echo hello',
-    exitCode: 0
+  test('handleStreamChunk replaces content (backend sends accumulated content)', async () => {
+    const state = await import('../../scripts/core/state');
+    const handlers = await import('../../scripts/core/messageHandlers/streaming');
+
+    state.timeline.value = [];
+    state.currentStreamIndex.value = null;
+    state.currentAssistantThreadId.value = null;
+
+    // Backend sends accumulated content with each chunk
+    handlers.handleStreamChunk({ type: 'streamChunk', content: 'Hello ' });
+    handlers.handleStreamChunk({ type: 'streamChunk', content: 'Hello World' });
+
+    const thread = state.timeline.value[0] as any;
+    expect(thread.blocks[0].content).toBe('Hello World');
+  });
+});
+
+describe('progress group handlers', () => {
+  test('handleStartProgressGroup creates progress in tools block', async () => {
+    const state = await import('../../scripts/core/state');
+    const handlers = await import('../../scripts/core/messageHandlers/progress');
+
+    state.timeline.value = [];
+    state.currentProgressIndex.value = null;
+    state.currentStreamIndex.value = null;
+    state.currentAssistantThreadId.value = null;
+
+    handlers.handleStartProgressGroup({ type: 'startProgressGroup', title: 'Working' });
+
+    expect(state.timeline.value.length).toBe(1);
+    const thread = state.timeline.value[0] as any;
+    // Live view creates empty text block first, then tools block
+    expect(thread.blocks.length).toBe(2);
+    expect(thread.blocks[0].type).toBe('text');
+    expect(thread.blocks[1].type).toBe('tools');
+    expect(thread.blocks[1].tools.length).toBe(1);
+
+    const group = thread.blocks[1].tools[0];
+    expect(group.type).toBe('progress');
+    expect(group.status).toBe('running');
+    expect(group.title).toBe('Working');
   });
 
-  const thread = state.timeline.value[0] as any;
-  const approval = thread.tools.find((item: any) => item.type === 'commandApproval');
-  expect(approval.command).toBe('echo hello');
-  expect(approval.exitCode).toBe(0);
-  expect(approval.status).toBe('approved');
+  test('handleShowToolAction adds action to current progress group', async () => {
+    const state = await import('../../scripts/core/state');
+    const handlers = await import('../../scripts/core/messageHandlers/progress');
+
+    state.timeline.value = [];
+    state.currentProgressIndex.value = null;
+    state.currentStreamIndex.value = null;
+    state.currentAssistantThreadId.value = null;
+
+    handlers.handleStartProgressGroup({ type: 'startProgressGroup', title: 'Working' });
+    handlers.handleShowToolAction({
+      type: 'showToolAction',
+      text: 'Read file',
+      status: 'success',
+      icon: '📄',
+      detail: '50 lines'
+    });
+
+    const thread = state.timeline.value[0] as any;
+    const group = thread.blocks[1].tools[0];
+    expect(group.actions.length).toBe(1);
+    expect(group.actions[0].text).toBe('Read file');
+    expect(group.actions[0].status).toBe('success');
+  });
+
+  test('handleFinishProgressGroup marks group done and collapsed', async () => {
+    const state = await import('../../scripts/core/state');
+    const handlers = await import('../../scripts/core/messageHandlers/progress');
+
+    state.timeline.value = [];
+    state.currentProgressIndex.value = null;
+    state.currentStreamIndex.value = null;
+    state.currentAssistantThreadId.value = null;
+
+    handlers.handleStartProgressGroup({ type: 'startProgressGroup', title: 'Working' });
+    handlers.handleShowToolAction({ type: 'showToolAction', text: 'Step 1', status: 'success' });
+    handlers.handleFinishProgressGroup({ type: 'finishProgressGroup' });
+
+    const thread = state.timeline.value[0] as any;
+    const group = thread.blocks[1].tools[0];
+    expect(group.status).toBe('done');
+    expect(group.collapsed).toBe(true);
+    expect(state.currentProgressIndex.value).toBe(null);
+  });
+
+  test('error action marks group status as error', async () => {
+    const state = await import('../../scripts/core/state');
+    const handlers = await import('../../scripts/core/messageHandlers/progress');
+
+    state.timeline.value = [];
+    state.currentProgressIndex.value = null;
+    state.currentStreamIndex.value = null;
+    state.currentAssistantThreadId.value = null;
+
+    handlers.handleStartProgressGroup({ type: 'startProgressGroup', title: 'Working' });
+    handlers.handleShowToolAction({ type: 'showToolAction', text: 'Failed', status: 'error' });
+    handlers.handleFinishProgressGroup({ type: 'finishProgressGroup' });
+
+    const thread = state.timeline.value[0] as any;
+    const group = thread.blocks[1].tools[0];
+    expect(group.status).toBe('error');
+  });
+});
+
+describe('approval handlers - live/history parity', () => {
+  test('handleRequestToolApproval adds action to progress group AND approval card', async () => {
+    const state = await import('../../scripts/core/state');
+    const progressHandlers = await import('../../scripts/core/messageHandlers/progress');
+    const approvalHandlers = await import('../../scripts/core/messageHandlers/approvals');
+
+    state.timeline.value = [];
+    state.currentProgressIndex.value = null;
+    state.currentStreamIndex.value = null;
+    state.currentAssistantThreadId.value = null;
+
+    // Start a progress group first (like backend does)
+    progressHandlers.handleStartProgressGroup({ type: 'startProgressGroup', title: 'Running commands' });
+
+    // Then request approval
+    approvalHandlers.handleRequestToolApproval({
+      type: 'requestToolApproval',
+      approval: {
+        id: 'approval_123',
+        command: 'npm install',
+        cwd: '/project',
+        severity: 'medium',
+        reason: 'Requires approval'
+      }
+    });
+
+    const thread = state.timeline.value[0] as any;
+    // blocks[0] is empty text, blocks[1] is tools
+    const toolsBlock = thread.blocks[1];
+
+    // Progress group should have action
+    const progress = toolsBlock.tools[0];
+    expect(progress.type).toBe('progress');
+    expect(progress.actions.length).toBe(1);
+    expect(progress.actions[0].text).toBe('Run command');
+    expect(progress.actions[0].detail).toBe('Awaiting approval');
+    expect(progress.actions[0].status).toBe('running');
+
+    // Approval card should exist
+    const approval = toolsBlock.tools[1];
+    expect(approval.type).toBe('commandApproval');
+    expect(approval.id).toBe('approval_123');
+    expect(approval.command).toBe('npm install');
+    expect(approval.status).toBe('pending');
+  });
+
+  test('handleToolApprovalResult updates action in progress group AND approval card', async () => {
+    const state = await import('../../scripts/core/state');
+    const progressHandlers = await import('../../scripts/core/messageHandlers/progress');
+    const approvalHandlers = await import('../../scripts/core/messageHandlers/approvals');
+
+    state.timeline.value = [];
+    state.currentProgressIndex.value = null;
+    state.currentStreamIndex.value = null;
+    state.currentAssistantThreadId.value = null;
+
+    progressHandlers.handleStartProgressGroup({ type: 'startProgressGroup', title: 'Running commands' });
+    approvalHandlers.handleRequestToolApproval({
+      type: 'requestToolApproval',
+      approval: { id: 'approval_123', command: 'npm install', cwd: '/project', severity: 'medium' }
+    });
+
+    approvalHandlers.handleToolApprovalResult({
+      type: 'toolApprovalResult',
+      approvalId: 'approval_123',
+      status: 'approved',
+      command: 'npm install papaparse',
+      output: 'up to date\nExit code: 0',
+      exitCode: 0
+    });
+
+    const thread = state.timeline.value[0] as any;
+    const toolsBlock = thread.blocks[1];
+
+    // Progress group action should be updated
+    const progress = toolsBlock.tools[0];
+    expect(progress.actions[0].status).toBe('success');
+    expect(progress.actions[0].detail).toBe('npm install papaparse');
+
+    // Approval card should be updated
+    const approval = toolsBlock.tools[1];
+    expect(approval.status).toBe('approved');
+    expect(approval.command).toBe('npm install papaparse');
+    expect(approval.exitCode).toBe(0);
+  });
+
+  test('skipped approval marks action as error', async () => {
+    const state = await import('../../scripts/core/state');
+    const progressHandlers = await import('../../scripts/core/messageHandlers/progress');
+    const approvalHandlers = await import('../../scripts/core/messageHandlers/approvals');
+
+    state.timeline.value = [];
+    state.currentProgressIndex.value = null;
+    state.currentStreamIndex.value = null;
+    state.currentAssistantThreadId.value = null;
+
+    progressHandlers.handleStartProgressGroup({ type: 'startProgressGroup', title: 'Running commands' });
+    approvalHandlers.handleRequestToolApproval({
+      type: 'requestToolApproval',
+      approval: { id: 'approval_123', command: 'rm -rf /', cwd: '/', severity: 'high' }
+    });
+
+    approvalHandlers.handleToolApprovalResult({
+      type: 'toolApprovalResult',
+      approvalId: 'approval_123',
+      status: 'skipped',
+      output: 'Command skipped by user.'
+    });
+
+    const thread = state.timeline.value[0] as any;
+    const progress = thread.blocks[1].tools[0];
+    const approval = thread.blocks[1].tools[1];
+
+    expect(progress.actions[0].status).toBe('error');
+    expect(progress.status).toBe('error');
+    expect(approval.status).toBe('skipped');
+  });
+});
+
+describe('live/history consistency contract', () => {
+  test('complete workflow produces same structure as timelineBuilder', async () => {
+    // This test verifies that the live message handlers produce
+    // the same structure as buildTimelineFromMessages
+
+    const state = await import('../../scripts/core/state');
+    const progressHandlers = await import('../../scripts/core/messageHandlers/progress');
+    const approvalHandlers = await import('../../scripts/core/messageHandlers/approvals');
+    const builder = await import('../../scripts/core/timelineBuilder');
+
+    // Reset state
+    state.timeline.value = [];
+    state.currentProgressIndex.value = null;
+    state.currentStreamIndex.value = null;
+    state.currentAssistantThreadId.value = null;
+
+    // Simulate live events
+    progressHandlers.handleStartProgressGroup({ type: 'startProgressGroup', title: 'Running commands' });
+    approvalHandlers.handleRequestToolApproval({
+      type: 'requestToolApproval',
+      approval: { id: 'approval_abc', command: 'npm install', cwd: '/project', severity: 'medium' }
+    });
+    approvalHandlers.handleToolApprovalResult({
+      type: 'toolApprovalResult',
+      approvalId: 'approval_abc',
+      status: 'approved',
+      command: 'npm install papaparse',
+      output: 'Exit code: 0',
+      exitCode: 0
+    });
+    progressHandlers.handleShowToolAction({
+      type: 'showToolAction',
+      status: 'success',
+      icon: '⚡',
+      text: 'Command completed',
+      detail: 'exit 0'
+    });
+    progressHandlers.handleFinishProgressGroup({ type: 'finishProgressGroup' });
+
+    const liveTimeline = state.timeline.value;
+
+    // Build from persisted messages (what history would see)
+    const makeUiEvent = (id: string, eventType: string, payload: any) => ({
+      id,
+      role: 'tool',
+      toolName: '__ui__',
+      toolOutput: JSON.stringify({ eventType, payload })
+    });
+
+    const messages = [
+      { id: 'a1', role: 'assistant', content: '' },
+      makeUiEvent('ui1', 'startProgressGroup', { title: 'Running commands' }),
+      makeUiEvent('ui2', 'requestToolApproval', {
+        id: 'approval_abc',
+        command: 'npm install',
+        cwd: '/project',
+        severity: 'medium'
+      }),
+      makeUiEvent('ui3', 'toolApprovalResult', {
+        approvalId: 'approval_abc',
+        status: 'approved',
+        command: 'npm install papaparse',
+        output: 'Exit code: 0',
+        exitCode: 0
+      }),
+      makeUiEvent('ui4', 'showToolAction', {
+        status: 'success',
+        icon: '⚡',
+        text: 'Command completed',
+        detail: 'exit 0'
+      }),
+      makeUiEvent('ui5', 'finishProgressGroup', {})
+    ];
+
+    const historyTimeline = builder.buildTimelineFromMessages(messages);
+
+    // Both should have one assistant thread
+    expect(liveTimeline.length).toBe(1);
+    expect(historyTimeline.length).toBe(1);
+
+    const liveThread = liveTimeline[0] as any;
+    const historyThread = historyTimeline[0] as any;
+
+    // Both should have tools block at index 1 (index 0 is empty text block)
+    expect(liveThread.blocks[1].type).toBe('tools');
+    expect(historyThread.blocks[1].type).toBe('tools');
+
+    // Both should have 2 items: progress + approval
+    expect(liveThread.blocks[1].tools.length).toBe(2);
+    expect(historyThread.blocks[1].tools.length).toBe(2);
+
+    // Progress groups should match
+    const liveProgress = liveThread.blocks[1].tools[0];
+    const historyProgress = historyThread.blocks[1].tools[0];
+
+    expect(liveProgress.type).toBe('progress');
+    expect(historyProgress.type).toBe('progress');
+    expect(liveProgress.title).toBe(historyProgress.title);
+    expect(liveProgress.status).toBe(historyProgress.status);
+    expect(liveProgress.collapsed).toBe(historyProgress.collapsed);
+    expect(liveProgress.actions.length).toBe(historyProgress.actions.length);
+
+    // Actions should match
+    for (let i = 0; i < liveProgress.actions.length; i++) {
+      expect(liveProgress.actions[i].text).toBe(historyProgress.actions[i].text);
+      expect(liveProgress.actions[i].status).toBe(historyProgress.actions[i].status);
+    }
+
+    // Approval cards should match
+    const liveApproval = liveThread.blocks[1].tools[1];
+    const historyApproval = historyThread.blocks[1].tools[1];
+
+    expect(liveApproval.type).toBe('commandApproval');
+    expect(historyApproval.type).toBe('commandApproval');
+    expect(liveApproval.command).toBe(historyApproval.command);
+    expect(liveApproval.status).toBe(historyApproval.status);
+    expect(liveApproval.exitCode).toBe(historyApproval.exitCode);
+  });
 });

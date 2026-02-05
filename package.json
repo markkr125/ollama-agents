@@ -226,6 +226,33 @@
           "maximum": 5,
           "description": "Maximum number of active chat sessions that can run concurrently"
         },
+        "ollamaCopilot.agent.sensitiveFilePatterns": {
+          "type": "object",
+          "default": {
+            "**/*": true,
+            "**/.env*": false,
+            "**/.vscode/*.json": false,
+            "**/package.json": false,
+            "**/package-lock.json": false,
+            "**/yarn.lock": false,
+            "**/pnpm-lock.yaml": false,
+            "**/*.pem": false,
+            "**/*.key": false,
+            "**/*.pfx": false,
+            "**/*.p12": false,
+            "**/tsconfig.json": false,
+            "**/jsconfig.json": false,
+            "**/Dockerfile": false,
+            "**/docker-compose*.yml": false,
+            "**/docker-compose*.yaml": false,
+            "**/.github/workflows/*": false,
+            "**/.npmrc": false,
+            "**/.yarnrc": false,
+            "**/.yarnrc.yml": false,
+            "**/*.secrets.*": false
+          },
+          "markdownDescription": "Glob patterns for sensitive file edits. True = auto-approve, false = require approval. Session overrides take precedence."
+        },
         "ollamaCopilot.contextWindow": {
           "type": "number",
           "default": 16000,
@@ -310,6 +337,9 @@
   "dependencies": {
     "@lancedb/lancedb": "^0.23.0",
     "apache-arrow": "^18.1.0",
+    "diff": "^7.0.0",
+    "diff2html": "^3.4.51",
+    "minimatch": "^9.0.5",
     "sql.js": "^1.10.3"
   }
 }

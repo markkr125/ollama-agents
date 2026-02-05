@@ -18,6 +18,7 @@ export const currentMode = ref('agent');
 export const currentModel = ref('');
 export const currentSessionId = ref<string | null>(null);
 export const autoApproveCommands = ref(false);
+export const autoApproveSensitiveEdits = ref(false);
 export const autoApproveConfirmVisible = ref(false);
 export const currentPage = ref<'chat' | 'settings' | 'sessions'>('chat');
 export const activeSection = ref('connection');
@@ -43,7 +44,8 @@ export const settings = reactive({
   maxIterations: 25,
   toolTimeout: 30000,
   maxActiveSessions: 1,
-  temperature: 0.7
+  temperature: 0.7,
+  sensitiveFilePatterns: ''
 });
 
 export const chatSettings = reactive({
@@ -61,6 +63,8 @@ export const agentSettings = reactive({
   autoCreateBranch: true,
   autoCommit: false
 });
+
+export const sessionSensitiveFilePatterns = ref('');
 
 export const connectionStatus = reactive<StatusMessage>({ visible: false, success: true, message: '' });
 export const modelsStatus = reactive<StatusMessage>({ visible: false, success: true, message: '' });
@@ -82,6 +86,7 @@ export const temperatureSlider = ref(70);
 
 export const currentProgressIndex = ref<number | null>(null);
 export const currentStreamIndex = ref<number | null>(null);
+export const currentAssistantThreadId = ref<string | null>(null);
 
 // Session search state
 export const searchQuery = ref('');

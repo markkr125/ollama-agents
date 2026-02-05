@@ -1,0 +1,90 @@
+.file-approval {
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  margin: 10px 0;
+  background: var(--panel-bg, var(--vscode-editor-background));
+  color: var(--fg);
+  overflow: hidden;
+}
+
+.file-approval-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px;
+  border-bottom: 1px solid var(--border);
+  background: var(--input-bg);
+}
+
+.file-approval-icon {
+  font-size: 14px;
+}
+
+.file-approval-title {
+  font-weight: 600;
+  font-size: 12px;
+}
+
+.file-approval-tag,
+.file-approval-severity {
+  margin-left: auto;
+  padding: 2px 6px;
+  border-radius: 6px;
+  background: var(--border);
+  color: var(--muted);
+  font-size: 10px;
+  text-transform: uppercase;
+}
+
+.file-approval-tag {
+  background: var(--btn-bg);
+  color: var(--btn-fg);
+  text-transform: none;
+}
+
+.file-approval-path {
+  display: flex;
+  gap: 8px;
+  padding: 6px 12px;
+  font-size: 11px;
+  color: var(--muted);
+
+  .detail-label {
+    font-weight: 600;
+    color: var(--fg);
+  }
+}
+
+.file-approval-diff {
+  padding: 0 12px 12px;
+}
+
+.file-approval-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px 12px;
+  flex-wrap: wrap;
+}
+
+.file-approval-auto {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 11px;
+  color: var(--muted);
+  margin-left: auto;
+}
+
+.file-approval-status {
+  padding: 8px 12px 12px;
+  font-size: 12px;
+}
+
+.status-approved {
+  color: var(--success);
+}
+
+.status-skipped {
+  color: var(--error);
+}

@@ -1,13 +1,14 @@
 import { scrollToBottom } from '../actions/index';
 import { currentProgressIndex, currentSessionId } from '../state';
 import type { ActionItem, ProgressItem, ShowToolActionMessage, StartProgressGroupMessage } from '../types';
-import { ensureAssistantThread } from './threadUtils';
+import { ensureAssistantThread, getOrCreateToolsBlock } from './threadUtils';
 
 export const handleStartProgressGroup = (msg: StartProgressGroupMessage) => {
   if (msg.sessionId && msg.sessionId !== currentSessionId.value) {
     return;
   }
   const thread = ensureAssistantThread();
+  const toolsBlock = getOrCreateToolsBlock(thread);
   const group: ProgressItem = {
     id: `progress_${Date.now()}`,
     type: 'progress',
@@ -17,8 +18,8 @@ export const handleStartProgressGroup = (msg: StartProgressGroupMessage) => {
     actions: [],
     lastActionStatus: undefined
   };
-  thread.tools.push(group);
-  currentProgressIndex.value = thread.tools.length - 1;
+  toolsBlock.tools.push(group);
+  currentProgressIndex.value = toolsBlock.tools.length - 1;
 };
 
 export const handleShowToolAction = (msg: ShowToolActionMessage) => {
@@ -26,6 +27,7 @@ export const handleShowToolAction = (msg: ShowToolActionMessage) => {
     return;
   }
   const thread = ensureAssistantThread();
+  const toolsBlock = getOrCreateToolsBlock(thread);
   if (currentProgressIndex.value === null) {
     const group: ProgressItem = {
       id: `progress_${Date.now()}`,
@@ -36,10 +38,10 @@ export const handleShowToolAction = (msg: ShowToolActionMessage) => {
       actions: [],
       lastActionStatus: undefined
     };
-    thread.tools.push(group);
-    currentProgressIndex.value = thread.tools.length - 1;
+    toolsBlock.tools.push(group);
+    currentProgressIndex.value = toolsBlock.tools.length - 1;
   }
-  const group = thread.tools[currentProgressIndex.value] as ProgressItem;
+  const group = toolsBlock.tools[currentProgressIndex.value] as ProgressItem;
   const actionText = msg.text || '';
   const existingIndex = group.actions.findIndex(actionItem =>
     (actionItem.status === 'running' || actionItem.status === 'pending') &&
@@ -85,9 +87,11 @@ export const handleFinishProgressGroup = (msg: any) => {
     return;
   }
   const thread = ensureAssistantThread();
+  const toolsBlock = getOrCreateToolsBlock(thread);
   if (currentProgressIndex.value !== null) {
-    const group = thread.tools[currentProgressIndex.value] as ProgressItem;
-    group.status = 'done';
+    const group = toolsBlock.tools[currentProgressIndex.value] as ProgressItem;
+    const hasError = group.actions.some(action => action.status === 'error');
+    group.status = hasError ? 'error' : 'done';
     group.collapsed = true;
     group.actions = group.actions.map(action =>
       action.status === 'running' || action.status === 'pending'
@@ -105,6 +109,7 @@ export const handleShowError = (msg: any) => {
     return;
   }
   const thread = ensureAssistantThread();
+  const toolsBlock = getOrCreateToolsBlock(thread);
   if (currentProgressIndex.value === null) {
     const group: ProgressItem = {
       id: `progress_${Date.now()}`,
@@ -115,10 +120,10 @@ export const handleShowError = (msg: any) => {
       actions: [],
       lastActionStatus: undefined
     };
-    thread.tools.push(group);
-    currentProgressIndex.value = thread.tools.length - 1;
+    toolsBlock.tools.push(group);
+    currentProgressIndex.value = toolsBlock.tools.length - 1;
   }
-  const group = thread.tools[currentProgressIndex.value] as ProgressItem;
+  const group = toolsBlock.tools[currentProgressIndex.value] as ProgressItem;
   const action: ActionItem = {
     id: `action_${Date.now()}_${Math.random()}`,
     status: 'error',

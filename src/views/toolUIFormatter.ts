@@ -41,6 +41,12 @@ export function getToolActionInfo(
         actionDetail: '',
         actionIcon: '📁'
       };
+    case 'file_edit_approval':
+      return {
+        actionText: `Approve ${fileName || 'file'}`,
+        actionDetail: 'Sensitive file edit',
+        actionIcon: '🛡️'
+      };
     case 'list_files':
       return {
         actionText: `List ${path || 'workspace'}`,

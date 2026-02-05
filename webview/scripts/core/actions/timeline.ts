@@ -1,4 +1,4 @@
-import { currentProgressIndex, currentStreamIndex, timeline } from '../state';
+import { currentAssistantThreadId, currentProgressIndex, currentStreamIndex, timeline } from '../state';
 import type { ProgressItem } from '../types';
 import { scrollToBottom } from './scroll';
 
@@ -23,12 +23,16 @@ export const startAssistantMessage = (model?: string) => {
     id: `msg_${Date.now()}`,
     type: 'assistantThread' as const,
     role: 'assistant' as const,
-    contentBefore: '',
-    contentAfter: '',
     model,
-    tools: []
+    blocks: [
+      {
+        type: 'text' as const,
+        content: ''
+      }
+    ]
   };
   timeline.value.push(message);
   currentStreamIndex.value = timeline.value.length - 1;
+  currentAssistantThreadId.value = message.id;
   scrollToBottom();
 };

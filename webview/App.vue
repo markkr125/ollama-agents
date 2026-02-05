@@ -29,6 +29,9 @@
         :cancel-auto-approve-commands="cancelAutoApproveCommands"
         :approve-command="approveCommand"
         :skip-command="skipCommand"
+        :approve-file-edit="approveFileEdit"
+        :skip-file-edit="skipFileEdit"
+        :open-file-diff="openFileDiff"
         :is-generating="isGenerating"
         :format-markdown="formatMarkdown"
         :toggle-progress="toggleProgress"
@@ -42,6 +45,8 @@
         :select-model="selectModel"
         :scroll-target-message-id="scrollTargetMessageId"
         :clear-scroll-target="clearScrollTarget"
+        :auto-approve-sensitive-edits="autoApproveSensitiveEdits"
+        :toggle-auto-approve-sensitive-edits="toggleAutoApproveSensitiveEdits"
       />
 
       <SettingsPage
@@ -117,8 +122,10 @@ import {
   agentSettings,
   agentStatus,
   approveCommand,
+  approveFileEdit,
   autoApproveCommands,
   autoApproveConfirmVisible,
+  autoApproveSensitiveEdits,
   autocomplete,
   bearerToken,
   cancelAutoApproveCommands,
@@ -152,6 +159,7 @@ import {
   modelOptions,
   modelsStatus,
   newChat,
+  openFileDiff,
   recreateMessagesStatus,
   recreateMessagesTable,
   removeContext,
@@ -175,6 +183,7 @@ import {
   settings,
   showPage,
   skipCommand,
+  skipFileEdit,
   statusClass,
   temperatureDisplay,
   temperatureSlider,
@@ -182,6 +191,7 @@ import {
   thinking,
   timeline,
   toggleAutoApproveCommands,
+  toggleAutoApproveSensitiveEdits,
   toggleAutocomplete,
   toggleProgress,
   toggleToken,

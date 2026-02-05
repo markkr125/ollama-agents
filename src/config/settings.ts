@@ -1,5 +1,6 @@
 import * as vscode from 'vscode';
 import { AgentConfig, ExtensionConfig, ModeConfig } from '../types/config';
+import { DEFAULT_SENSITIVE_FILE_PATTERNS } from '../utils/fileSensitivity';
 
 export function getConfig(): ExtensionConfig {
   const config = vscode.workspace.getConfiguration('ollamaCopilot');
@@ -35,7 +36,11 @@ export function getConfig(): ExtensionConfig {
     agent: {
       maxIterations: config.get('agent.maxIterations', 25),
       toolTimeout: config.get('agent.toolTimeout', 30000),
-      maxActiveSessions: config.get('agent.maxActiveSessions', 1)
+      maxActiveSessions: config.get('agent.maxActiveSessions', 1),
+      sensitiveFilePatterns: config.get(
+        'agent.sensitiveFilePatterns',
+        DEFAULT_SENSITIVE_FILE_PATTERNS
+      )
     }
   };
 }
