@@ -1,5 +1,55 @@
 # Ollama Copilot - Project Instructions
 
+---
+
+## ⚠️ CRITICAL RULE #1: UI Event Ordering & Persistence
+
+**Session history MUST be identical to live chat.** When a user loads a session from history, they must see the EXACT same timeline as when the chat was live. This is non-negotiable.
+
+### The Golden Rule
+
+**Every UI event that is `postMessage`'d to the webview MUST also be `persistUiEvent`'d to the database, IN THE SAME ORDER.**
+
+```typescript
+// CORRECT: Persist FIRST, then post (or at least in same logical order)
+await this.persistUiEvent(sessionId, 'showToolAction', { status: 'pending', ... });
+this.emitter.postMessage({ type: 'showToolAction', status: 'pending', ..., sessionId });
+
+// WRONG: Post without persisting - history will be missing this event!
+this.emitter.postMessage({ type: 'showToolAction', status: 'pending', ..., sessionId });
+// (no persistUiEvent call)
+```
+
+### Events That Must Be Persisted (In Order)
+
+| Event Type | When | Payload |
+|------------|------|---------|
+| `startProgressGroup` | Before first tool in a group | `{ title, groupId }` |
+| `showToolAction` (pending) | Before approval card (if any) | `{ status: 'pending', icon, text, detail }` |
+| `requestToolApproval` | Terminal command needs approval | `{ id, command, cwd, severity, reason }` |
+| `requestFileEditApproval` | File edit needs approval | `{ id, filePath, severity, reason, diffHtml }` |
+| `toolApprovalResult` | After terminal approval resolved | `{ approvalId, status, output, autoApproved? }` |
+| `fileEditApprovalResult` | After file edit approval resolved | `{ approvalId, status, autoApproved?, filePath }` |
+| `showToolAction` (success/error) | After tool execution completes | `{ status: 'success'/'error', icon, text, detail }` |
+| `finishProgressGroup` | After all tools in group complete | `{}` |
+
+### Debugging Live vs History Mismatch
+
+If live chat shows something that session history doesn't:
+1. **Check if the event is being persisted** - search for `persistUiEvent` near the `postMessage` call
+2. **Check the order** - events must be persisted in the same order they're posted
+3. **Check timelineBuilder.ts** - the handler for that `eventType` must reconstruct the UI correctly
+
+### Important Handler Rules
+
+1. **Approval result handlers must NOT complete progress groups** - `handleFileEditApprovalResult` and `handleToolApprovalResult` should only update the approval card status. The `showToolAction(success)` and `finishProgressGroup` events are responsible for completing the action and group respectively.
+
+2. **showToolAction with same text should update, not push** - When a `pending` action exists and a `running` action arrives with the same text, it should update the existing action in place, not push a new one.
+
+3. **Success actions should find the last running/pending action** - When `showToolAction(success)` arrives with different text than the running action, use the fallback "last running/pending" search to find and update the correct action.
+
+---
+
 ## Project Overview
 
 **Ollama Copilot** is a VS Code extension that provides GitHub Copilot-like AI assistance using local Ollama or OpenWebUI as the backend. It's designed to be a fully local, privacy-preserving alternative to cloud-based AI coding assistants.
@@ -397,7 +447,7 @@ UI events (progress groups, tool actions, approvals) are persisted as `__ui__` t
   role: 'tool',
   toolName: '__ui__',
   toolOutput: JSON.stringify({
-    eventType: 'startProgressGroup' | 'showToolAction' | 'finishProgressGroup' | 'requestToolApproval' | 'toolApprovalResult',
+    eventType: 'startProgressGroup' | 'showToolAction' | 'finishProgressGroup' | 'requestToolApproval' | 'toolApprovalResult' | 'requestFileEditApproval' | 'fileEditApprovalResult',
     payload: { ... }
   })
 }
@@ -407,8 +457,10 @@ UI events (progress groups, tool actions, approvals) are persisted as `__ui__` t
 - `startProgressGroup` - Creates new progress group
 - `showToolAction` - Adds action to progress group (only final states, not transient "running" states)
 - `finishProgressGroup` - Marks group as done/collapsed
-- `requestToolApproval` - Creates pending approval card + "Awaiting approval" action
-- `toolApprovalResult` - Updates approval status and action status
+- `requestToolApproval` - Creates pending terminal command approval card + "Awaiting approval" action
+- `toolApprovalResult` - Updates terminal command approval status and action status
+- `requestFileEditApproval` - Creates pending file edit approval card with diff + "Awaiting approval" action
+- `fileEditApprovalResult` - Updates file edit approval status and action status
 
 **Not persisted** (transient UI states):
 - "Running" status updates that will be replaced by final status
@@ -717,18 +769,21 @@ Good `@vscode/test-electron` targets:
 
 The following test suites exist in `webview/tests/`:
 
-**`timelineBuilder.test.ts`** (17 tests) - Tests the `buildTimelineFromMessages` function:
+**`timelineBuilder.test.ts`** (23 tests) - Tests the `buildTimelineFromMessages` function:
 - Block-based structure: user messages, assistant threads, text block merging
 - UI event replay: `startProgressGroup`, `showToolAction`, `finishProgressGroup`
 - Command approval flow: `requestToolApproval`, `toolApprovalResult`, skipped status
+- **File edit approval flow**: `requestFileEditApproval`, `fileEditApprovalResult`
 - Full workflow matching live/history parity
 - Edge cases: implicit groups, orphan approvals, invalid JSON handling
+- **Critical**: finishProgressGroup converts pending/running actions to success
 
-**`messageHandlers.test.ts`** (10 tests) - Tests live message handlers:
+**`messageHandlers.test.ts`** (11 tests) - Tests live message handlers:
 - Streaming handlers: `handleStreamChunk` creates/updates text blocks
 - Progress group handlers: start/show/finish progress groups
 - Approval handlers with live/history parity: both progress group action AND approval card
 - **Critical contract test**: `complete workflow produces same structure as timelineBuilder`
+- **Critical contract test**: `file edit approval workflow produces same structure as timelineBuilder`
 
 **`actions.test.ts`** (7 tests) - Tests UI actions:
 - Debounced search behavior

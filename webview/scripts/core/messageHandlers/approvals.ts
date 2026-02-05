@@ -153,18 +153,7 @@ export const handleFileEditApprovalResult = (msg: any) => {
     };
     toolsBlock.tools.push(item);
   }
-  if (currentProgressIndex.value !== null && msg.status && msg.status !== 'pending') {
-    const group = toolsBlock.tools[currentProgressIndex.value] as ProgressItem;
-    const hasError = msg.status === 'skipped' || group.actions.some(action => action.status === 'error');
-    group.status = hasError ? 'error' : 'done';
-    group.actions = group.actions.map(action =>
-      action.status === 'running' || action.status === 'pending'
-        ? { ...action, status: msg.status === 'skipped' ? 'error' : 'success' }
-        : action
-    );
-    group.lastActionStatus = group.actions[group.actions.length - 1]?.status || 'success';
-    group.collapsed = true;
-    currentProgressIndex.value = null;
-  }
+  // NOTE: Do NOT complete progress group here. The showToolAction(success) and finishProgressGroup
+  // events are responsible for that. We only update the approval card status.
   scrollToBottom();
 };

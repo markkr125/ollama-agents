@@ -374,4 +374,152 @@ describe('live/history consistency contract', () => {
     expect(liveApproval.status).toBe(historyApproval.status);
     expect(liveApproval.exitCode).toBe(historyApproval.exitCode);
   });
+
+  test('file edit approval workflow produces same structure as timelineBuilder', async () => {
+    const state = await import('../../scripts/core/state');
+    const progressHandlers = await import('../../scripts/core/messageHandlers/progress');
+    const approvalHandlers = await import('../../scripts/core/messageHandlers/approvals');
+    const builder = await import('../../scripts/core/timelineBuilder');
+
+    // Reset state
+    state.timeline.value = [];
+    state.currentProgressIndex.value = null;
+    state.currentStreamIndex.value = null;
+    state.currentAssistantThreadId.value = null;
+
+    // Simulate live events for file edit with approval
+    progressHandlers.handleStartProgressGroup({ type: 'startProgressGroup', title: 'Writing files' });
+    progressHandlers.handleShowToolAction({
+      type: 'showToolAction',
+      status: 'pending',
+      icon: '✏️',
+      text: 'Write package.json',
+      detail: 'Awaiting approval'
+    });
+    approvalHandlers.handleRequestFileEditApproval({
+      type: 'requestFileEditApproval',
+      approval: {
+        id: 'file_edit_123',
+        filePath: 'package.json',
+        severity: 'high',
+        reason: 'Matched sensitive pattern',
+        diffHtml: '<div>diff</div>'
+      }
+    });
+    progressHandlers.handleShowToolAction({
+      type: 'showToolAction',
+      status: 'running',
+      icon: '✏️',
+      text: 'Write package.json',
+      detail: 'package.json'
+    });
+    approvalHandlers.handleFileEditApprovalResult({
+      type: 'fileEditApprovalResult',
+      approvalId: 'file_edit_123',
+      status: 'approved',
+      autoApproved: false,
+      filePath: 'package.json'
+    });
+    progressHandlers.handleShowToolAction({
+      type: 'showToolAction',
+      status: 'success',
+      icon: '✏️',
+      text: 'Wrote package.json',
+      detail: ''
+    });
+    progressHandlers.handleFinishProgressGroup({ type: 'finishProgressGroup' });
+
+    const liveTimeline = state.timeline.value;
+
+    // Build from persisted messages
+    const makeUiEvent = (id: string, eventType: string, payload: any) => ({
+      id,
+      role: 'tool',
+      toolName: '__ui__',
+      toolOutput: JSON.stringify({ eventType, payload })
+    });
+
+    const messages = [
+      { id: 'a1', role: 'assistant', content: '' },
+      makeUiEvent('ui1', 'startProgressGroup', { title: 'Writing files' }),
+      makeUiEvent('ui2', 'showToolAction', {
+        status: 'pending',
+        icon: '✏️',
+        text: 'Write package.json',
+        detail: 'Awaiting approval'
+      }),
+      makeUiEvent('ui3', 'requestFileEditApproval', {
+        id: 'file_edit_123',
+        filePath: 'package.json',
+        severity: 'high',
+        reason: 'Matched sensitive pattern',
+        diffHtml: '<div>diff</div>'
+      }),
+      makeUiEvent('ui4', 'showToolAction', {
+        status: 'running',
+        icon: '✏️',
+        text: 'Write package.json',
+        detail: 'package.json'
+      }),
+      makeUiEvent('ui5', 'fileEditApprovalResult', {
+        approvalId: 'file_edit_123',
+        status: 'approved',
+        autoApproved: false,
+        filePath: 'package.json'
+      }),
+      makeUiEvent('ui6', 'showToolAction', {
+        status: 'success',
+        icon: '✏️',
+        text: 'Wrote package.json',
+        detail: ''
+      }),
+      makeUiEvent('ui7', 'finishProgressGroup', {})
+    ];
+
+    const historyTimeline = builder.buildTimelineFromMessages(messages);
+
+    // Both should have one assistant thread
+    expect(liveTimeline.length).toBe(1);
+    expect(historyTimeline.length).toBe(1);
+
+    const liveThread = liveTimeline[0] as any;
+    const historyThread = historyTimeline[0] as any;
+
+    // Both should have tools block
+    expect(liveThread.blocks[1].type).toBe('tools');
+    expect(historyThread.blocks[1].type).toBe('tools');
+
+    // Both should have 2 items: progress + file edit approval
+    expect(liveThread.blocks[1].tools.length).toBe(2);
+    expect(historyThread.blocks[1].tools.length).toBe(2);
+
+    // Progress groups should match
+    const liveProgress = liveThread.blocks[1].tools[0];
+    const historyProgress = historyThread.blocks[1].tools[0];
+
+    expect(liveProgress.type).toBe('progress');
+    expect(historyProgress.type).toBe('progress');
+    expect(liveProgress.title).toBe(historyProgress.title);
+    expect(liveProgress.status).toBe(historyProgress.status);
+    expect(liveProgress.collapsed).toBe(historyProgress.collapsed);
+
+    // CRITICAL: Action count must be identical
+    expect(liveProgress.actions.length).toBe(historyProgress.actions.length);
+
+    // Actions should match
+    for (let i = 0; i < liveProgress.actions.length; i++) {
+      expect(liveProgress.actions[i].status).toBe(historyProgress.actions[i].status);
+    }
+
+    // File edit approval cards should match
+    const liveApproval = liveThread.blocks[1].tools[1];
+    const historyApproval = historyThread.blocks[1].tools[1];
+
+    expect(liveApproval.type).toBe('fileEditApproval');
+    expect(historyApproval.type).toBe('fileEditApproval');
+    expect(liveApproval.filePath).toBe(historyApproval.filePath);
+    expect(liveApproval.status).toBe(historyApproval.status);
+    expect(liveApproval.autoApproved).toBe(historyApproval.autoApproved);
+    expect(liveApproval.severity).toBe(historyApproval.severity);
+  });
 });

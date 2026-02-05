@@ -28,8 +28,19 @@ export const handleShowToolAction = (msg: ShowToolActionMessage) => {
   }
   const thread = ensureAssistantThread();
   const toolsBlock = getOrCreateToolsBlock(thread);
-  if (currentProgressIndex.value === null) {
-    const group: ProgressItem = {
+
+  // Find last progress group in current tools block (more reliable than global index)
+  let group: ProgressItem | null = null;
+  for (let i = toolsBlock.tools.length - 1; i >= 0; i--) {
+    if (toolsBlock.tools[i].type === 'progress') {
+      group = toolsBlock.tools[i] as ProgressItem;
+      currentProgressIndex.value = i;
+      break;
+    }
+  }
+
+  if (!group) {
+    group = {
       id: `progress_${Date.now()}`,
       type: 'progress',
       title: 'Working on task',
@@ -41,7 +52,7 @@ export const handleShowToolAction = (msg: ShowToolActionMessage) => {
     toolsBlock.tools.push(group);
     currentProgressIndex.value = toolsBlock.tools.length - 1;
   }
-  const group = toolsBlock.tools[currentProgressIndex.value] as ProgressItem;
+
   const actionText = msg.text || '';
   const existingIndex = group.actions.findIndex(actionItem =>
     (actionItem.status === 'running' || actionItem.status === 'pending') &&
@@ -61,6 +72,7 @@ export const handleShowToolAction = (msg: ShowToolActionMessage) => {
     detail: msg.detail || null
   };
   if (action.status !== 'running' && action.status !== 'pending') {
+    // Final state (success/error) - update existing or push
     if (existingIndex >= 0) {
       group.actions[existingIndex] = { ...group.actions[existingIndex], ...action };
     } else if (resolvedIndex >= 0) {
@@ -74,7 +86,12 @@ export const handleShowToolAction = (msg: ShowToolActionMessage) => {
     if (!hasActive) {
       group.status = action.status === 'error' ? 'error' : 'done';
     }
+  } else if (existingIndex >= 0) {
+    // Running/pending with same text as existing - update in place
+    group.actions[existingIndex] = { ...group.actions[existingIndex], ...action };
+    group.status = 'running';
   } else {
+    // New running/pending action - push
     group.actions.push(action);
     group.status = 'running';
   }

@@ -600,6 +600,16 @@ export class AgentChatExecutor {
         newContent
       });
       await this.persistFileEditApproval(sessionId, normalizedRelPath, originalContent, newContent, decision, true, 'approved', diffHtml);
+      // Persist the auto-approved file edit result
+      await this.persistUiEvent(sessionId, 'fileEditApprovalResult', {
+        approvalId,
+        status: 'approved',
+        autoApproved: true,
+        filePath: normalizedRelPath,
+        severity: decision.severity,
+        reason: decision.reason,
+        diffHtml
+      });
       this.emitter.postMessage({
         type: 'fileEditApprovalResult',
         sessionId,
@@ -628,6 +638,32 @@ export class AgentChatExecutor {
         newContent
       });
 
+      // Persist pending action FIRST, then approval card - ORDER MATTERS for history reconstruction
+      await this.persistUiEvent(sessionId, 'showToolAction', {
+        status: 'pending',
+        icon: actionIcon,
+        text: actionText,
+        detail: 'Awaiting approval'
+      });
+      this.emitter.postMessage({
+        type: 'showToolAction',
+        status: 'pending',
+        icon: actionIcon,
+        text: actionText,
+        detail: 'Awaiting approval',
+        sessionId
+      });
+
+      // Now persist the file edit approval request
+      await this.persistUiEvent(sessionId, 'requestFileEditApproval', {
+        id: approvalId,
+        filePath: normalizedRelPath,
+        severity: decision.severity,
+        reason: decision.reason,
+        status: 'pending',
+        timestamp: Date.now(),
+        diffHtml
+      });
       this.emitter.postMessage({
         type: 'requestFileEditApproval',
         sessionId,
@@ -642,20 +678,21 @@ export class AgentChatExecutor {
         }
       });
 
-      this.emitter.postMessage({
-        type: 'showToolAction',
-        status: 'pending',
-        icon: actionIcon,
-        text: actionText,
-        detail: 'Awaiting approval',
-        sessionId
-      });
-
       const approval = await this.waitForApproval(approvalId, token);
       if (!approval.approved) {
         const skippedOutput = 'Edit skipped by user.';
 
         await this.persistFileEditApproval(sessionId, normalizedRelPath, originalContent, newContent, decision, false, 'skipped', diffHtml);
+        // Persist the skipped file edit result
+        await this.persistUiEvent(sessionId, 'fileEditApprovalResult', {
+          approvalId,
+          status: 'skipped',
+          autoApproved: false,
+          filePath: normalizedRelPath,
+          severity: decision.severity,
+          reason: decision.reason,
+          diffHtml
+        });
         this.emitter.postMessage({
           type: 'fileEditApprovalResult',
           sessionId,
@@ -677,6 +714,16 @@ export class AgentChatExecutor {
       }
 
       await this.persistFileEditApproval(sessionId, normalizedRelPath, originalContent, newContent, decision, false, 'approved', diffHtml);
+      // Persist the approved file edit result
+      await this.persistUiEvent(sessionId, 'fileEditApprovalResult', {
+        approvalId,
+        status: 'approved',
+        autoApproved: false,
+        filePath: normalizedRelPath,
+        severity: decision.severity,
+        reason: decision.reason,
+        diffHtml
+      });
       this.emitter.postMessage({
         type: 'fileEditApprovalResult',
         sessionId,
@@ -689,6 +736,13 @@ export class AgentChatExecutor {
         diffHtml
       });
 
+      // Persist running action - this ensures SESSION matches LIVE (both show pending AND running→success)
+      await this.persistUiEvent(sessionId, 'showToolAction', {
+        status: 'running',
+        icon: actionIcon,
+        text: actionText,
+        detail: normalizedRelPath
+      });
       this.emitter.postMessage({
         type: 'showToolAction',
         status: 'running',
@@ -698,6 +752,13 @@ export class AgentChatExecutor {
         sessionId
       });
     } else {
+      // Non-sensitive file - also persist running action for consistency
+      await this.persistUiEvent(sessionId, 'showToolAction', {
+        status: 'running',
+        icon: actionIcon,
+        text: actionText,
+        detail: normalizedRelPath
+      });
       this.emitter.postMessage({
         type: 'showToolAction',
         status: 'running',

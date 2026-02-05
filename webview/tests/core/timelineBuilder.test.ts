@@ -444,3 +444,289 @@ describe('buildTimelineFromMessages - edge cases', () => {
     expect(timeline.length).toBe(0);
   });
 });
+
+describe('buildTimelineFromMessages - file edit approval flow (CRITICAL: live/session parity)', () => {
+  const makeUiEvent = (id: string, eventType: string, payload: any) => ({
+    id,
+    role: 'tool',
+    toolName: '__ui__',
+    toolOutput: JSON.stringify({ eventType, payload })
+  });
+
+  test('file edit with approval shows pending, running, then success actions', async () => {
+    const builder = await import('../../scripts/core/timelineBuilder');
+
+    // This is the EXACT sequence that must be persisted for session to match live:
+    // 1. startProgressGroup
+    // 2. showToolAction pending (Awaiting approval)
+    // 3. requestFileEditApproval
+    // 4. showToolAction running (after approval, before write)
+    // 5. fileEditApprovalResult
+    // 6. showToolAction success (after write completes)
+    // 7. finishProgressGroup
+    const messages = [
+      { id: 'a1', role: 'assistant', content: 'I will update the file.' },
+      makeUiEvent('ui1', 'startProgressGroup', { title: 'Writing files' }),
+      makeUiEvent('ui2', 'showToolAction', {
+        status: 'pending',
+        icon: '✏️',
+        text: 'Write package.json',
+        detail: 'Awaiting approval'
+      }),
+      makeUiEvent('ui3', 'requestFileEditApproval', {
+        id: 'file_edit_123',
+        filePath: 'package.json',
+        severity: 'high',
+        reason: 'Matched sensitive pattern',
+        diffHtml: '<div>diff content</div>'
+      }),
+      makeUiEvent('ui4', 'showToolAction', {
+        status: 'running',
+        icon: '✏️',
+        text: 'Write package.json',
+        detail: 'package.json'
+      }),
+      makeUiEvent('ui5', 'fileEditApprovalResult', {
+        approvalId: 'file_edit_123',
+        status: 'approved',
+        autoApproved: false,
+        filePath: 'package.json'
+      }),
+      makeUiEvent('ui6', 'showToolAction', {
+        status: 'success',
+        icon: '✏️',
+        text: 'Wrote package.json',
+        detail: ''
+      }),
+      makeUiEvent('ui7', 'finishProgressGroup', {})
+    ];
+
+    const timeline = builder.buildTimelineFromMessages(messages);
+
+    const thread = timeline[0] as any;
+    const toolsBlock = thread.blocks[1];
+    const progress = toolsBlock.tools[0];
+
+    // Progress group action should be complete after all transitions
+    expect(progress.type).toBe('progress');
+    expect(progress.title).toBe('Writing files');
+    expect(progress.status).toBe('done');
+    expect(progress.collapsed).toBe(true);
+
+    // Should have exactly 1 action - pending→running→success all update the same action
+    // (pending and running have same text, success updates last running)
+    expect(progress.actions.length).toBe(1);
+    expect(progress.actions[0].status).toBe('success');
+
+    // File edit approval card should be present and approved
+    const approval = toolsBlock.tools[1];
+    expect(approval.type).toBe('fileEditApproval');
+    expect(approval.id).toBe('file_edit_123');
+    expect(approval.status).toBe('approved');
+    expect(approval.filePath).toBe('package.json');
+    expect(approval.severity).toBe('high');
+  });
+
+  test('file edit skipped shows error status', async () => {
+    const builder = await import('../../scripts/core/timelineBuilder');
+
+    const messages = [
+      { id: 'a1', role: 'assistant', content: 'I will update the file.' },
+      makeUiEvent('ui1', 'startProgressGroup', { title: 'Writing files' }),
+      makeUiEvent('ui2', 'showToolAction', {
+        status: 'pending',
+        icon: '✏️',
+        text: 'Write package.json',
+        detail: 'Awaiting approval'
+      }),
+      makeUiEvent('ui3', 'requestFileEditApproval', {
+        id: 'file_edit_456',
+        filePath: 'package.json',
+        severity: 'high',
+        reason: 'Matched sensitive pattern'
+      }),
+      makeUiEvent('ui4', 'fileEditApprovalResult', {
+        approvalId: 'file_edit_456',
+        status: 'skipped',
+        autoApproved: false,
+        filePath: 'package.json'
+      }),
+      makeUiEvent('ui5', 'showToolAction', {
+        status: 'error',
+        icon: '✏️',
+        text: 'Edit skipped',
+        detail: 'Skipped by user'
+      }),
+      makeUiEvent('ui6', 'finishProgressGroup', {})
+    ];
+
+    const timeline = builder.buildTimelineFromMessages(messages);
+
+    const thread = timeline[0] as any;
+    const progress = thread.blocks[1].tools[0];
+    const approval = thread.blocks[1].tools[1];
+
+    expect(progress.status).toBe('error');
+    expect(approval.status).toBe('skipped');
+  });
+
+  test('auto-approved file edit shows autoApproved flag', async () => {
+    const builder = await import('../../scripts/core/timelineBuilder');
+
+    const messages = [
+      { id: 'a1', role: 'assistant', content: 'Updating file.' },
+      makeUiEvent('ui1', 'startProgressGroup', { title: 'Writing files' }),
+      makeUiEvent('ui2', 'showToolAction', {
+        status: 'running',
+        icon: '✏️',
+        text: 'Write package.json',
+        detail: 'package.json'
+      }),
+      makeUiEvent('ui3', 'fileEditApprovalResult', {
+        approvalId: 'file_edit_auto',
+        status: 'approved',
+        autoApproved: true,
+        filePath: 'package.json',
+        severity: 'high',
+        diffHtml: '<div>auto diff</div>'
+      }),
+      makeUiEvent('ui4', 'showToolAction', {
+        status: 'success',
+        icon: '✏️',
+        text: 'Wrote package.json',
+        detail: ''
+      }),
+      makeUiEvent('ui5', 'finishProgressGroup', {})
+    ];
+
+    const timeline = builder.buildTimelineFromMessages(messages);
+
+    const thread = timeline[0] as any;
+    const approval = thread.blocks[1].tools[1];
+
+    expect(approval.type).toBe('fileEditApproval');
+    expect(approval.autoApproved).toBe(true);
+    expect(approval.status).toBe('approved');
+  });
+});
+
+describe('CRITICAL: Live handler vs timelineBuilder parity', () => {
+  /**
+   * These tests verify that the same sequence of events produces
+   * IDENTICAL structures whether processed by live handlers or timelineBuilder.
+   *
+   * This is critical for session history to match live chat exactly.
+   */
+
+  const makeUiEvent = (id: string, eventType: string, payload: any) => ({
+    id,
+    role: 'tool',
+    toolName: '__ui__',
+    toolOutput: JSON.stringify({ eventType, payload })
+  });
+
+  test('showToolAction updates existing pending action with same text', async () => {
+    const builder = await import('../../scripts/core/timelineBuilder');
+
+    // Simulate: pending "Write file" → success "Write file" (same text)
+    const messages = [
+      { id: 'a1', role: 'assistant', content: '' },
+      makeUiEvent('ui1', 'startProgressGroup', { title: 'Test' }),
+      makeUiEvent('ui2', 'showToolAction', {
+        status: 'pending',
+        icon: '✏️',
+        text: 'Write file',
+        detail: 'Awaiting'
+      }),
+      makeUiEvent('ui3', 'showToolAction', {
+        status: 'success',
+        icon: '✏️',
+        text: 'Write file',
+        detail: 'Done'
+      })
+    ];
+
+    const timeline = builder.buildTimelineFromMessages(messages);
+
+    const thread = timeline[0] as any;
+    const progress = thread.blocks[1].tools[0];
+
+    // Should have exactly 1 action (pending updated to success)
+    expect(progress.actions.length).toBe(1);
+    expect(progress.actions[0].status).toBe('success');
+    expect(progress.actions[0].text).toBe('Write file');
+    expect(progress.actions[0].detail).toBe('Done');
+  });
+
+  test('showToolAction with different text updates last pending action', async () => {
+    const builder = await import('../../scripts/core/timelineBuilder');
+
+    // Simulate: pending "Write package.json" → success "Wrote package.json" (different text)
+    const messages = [
+      { id: 'a1', role: 'assistant', content: '' },
+      makeUiEvent('ui1', 'startProgressGroup', { title: 'Test' }),
+      makeUiEvent('ui2', 'showToolAction', {
+        status: 'pending',
+        icon: '✏️',
+        text: 'Write package.json',
+        detail: 'Awaiting'
+      }),
+      makeUiEvent('ui3', 'showToolAction', {
+        status: 'success',
+        icon: '✏️',
+        text: 'Wrote package.json',
+        detail: ''
+      })
+    ];
+
+    const timeline = builder.buildTimelineFromMessages(messages);
+
+    const thread = timeline[0] as any;
+    const progress = thread.blocks[1].tools[0];
+
+    // Should have exactly 1 action (pending updated to success with new text)
+    expect(progress.actions.length).toBe(1);
+    expect(progress.actions[0].status).toBe('success');
+    expect(progress.actions[0].text).toBe('Wrote package.json');
+  });
+
+  test('running action with same text updates pending, then success updates it', async () => {
+    const builder = await import('../../scripts/core/timelineBuilder');
+
+    // Simulate full flow: pending → running (same text, updates) → success (updates)
+    const messages = [
+      { id: 'a1', role: 'assistant', content: '' },
+      makeUiEvent('ui1', 'startProgressGroup', { title: 'Test' }),
+      makeUiEvent('ui2', 'showToolAction', {
+        status: 'pending',
+        icon: '✏️',
+        text: 'Write package.json',
+        detail: 'Awaiting approval'
+      }),
+      makeUiEvent('ui3', 'showToolAction', {
+        status: 'running',
+        icon: '✏️',
+        text: 'Write package.json',
+        detail: 'package.json'
+      }),
+      makeUiEvent('ui4', 'showToolAction', {
+        status: 'success',
+        icon: '✏️',
+        text: 'Wrote package.json',
+        detail: ''
+      }),
+      makeUiEvent('ui5', 'finishProgressGroup', {})
+    ];
+
+    const timeline = builder.buildTimelineFromMessages(messages);
+
+    const thread = timeline[0] as any;
+    const progress = thread.blocks[1].tools[0];
+
+    // Should have exactly 1 action:
+    // pending → running (updates same) → success (updates)
+    expect(progress.actions.length).toBe(1);
+    expect(progress.actions[0].status).toBe('success');
+    expect(progress.status).toBe('done');
+  });
+});

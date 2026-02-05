@@ -2,6 +2,7 @@ import type {
     AssistantThreadItem,
     AssistantThreadToolsBlock,
     CommandApprovalItem,
+    FileEditApprovalItem,
     ProgressItem,
     TimelineItem
 } from './types';
@@ -121,18 +122,58 @@ export const buildTimelineFromMessages = (messages: any[]): TimelineItem[] => {
               toolsBlock.tools.push(currentGroup);
             }
             const status = uiEvent.payload?.status || 'running';
-            currentGroup.actions.push({
+            const actionText = uiEvent.payload?.text || 'Tool';
+            const action = {
               id: `action_${m.id}`,
               status,
               icon: uiEvent.payload?.icon || '•',
-              text: uiEvent.payload?.text || 'Tool',
+              text: actionText,
               detail: uiEvent.payload?.detail || null
-            });
+            };
+
+            // Match live handler: update existing pending/running action with same text, or push new
+            if (status !== 'running' && status !== 'pending') {
+              // Final state (success/error) - update existing or push
+              const existingIndex = currentGroup.actions.findIndex(
+                a => (a.status === 'running' || a.status === 'pending') && a.text === actionText
+              );
+              if (existingIndex >= 0) {
+                currentGroup.actions[existingIndex] = { ...currentGroup.actions[existingIndex], ...action };
+              } else {
+                // Try to find last running/pending action to update
+                const lastPendingIndex = [...currentGroup.actions].reverse().findIndex(
+                  a => a.status === 'running' || a.status === 'pending'
+                );
+                if (lastPendingIndex >= 0) {
+                  const resolvedIndex = currentGroup.actions.length - 1 - lastPendingIndex;
+                  currentGroup.actions[resolvedIndex] = { ...currentGroup.actions[resolvedIndex], ...action };
+                } else {
+                  currentGroup.actions.push(action);
+                }
+              }
+            } else {
+              // Running/pending state - check if same text exists, update; otherwise push
+              const existingIndex = currentGroup.actions.findIndex(
+                a => (a.status === 'running' || a.status === 'pending') && a.text === actionText
+              );
+              if (existingIndex >= 0) {
+                currentGroup.actions[existingIndex] = { ...currentGroup.actions[existingIndex], ...action };
+              } else {
+                currentGroup.actions.push(action);
+              }
+            }
+
             if (status === 'error') currentGroup.status = 'error';
             break;
           }
           case 'finishProgressGroup': {
             if (currentGroup) {
+              // Convert remaining pending/running actions to success (matching live handler)
+              currentGroup.actions = currentGroup.actions.map(action =>
+                action.status === 'running' || action.status === 'pending'
+                  ? { ...action, status: 'success' as const }
+                  : action
+              );
               currentGroup.status = currentGroup.actions.some(a => a.status === 'error') ? 'error' : 'done';
               currentGroup.collapsed = true;
               currentGroup = null;
@@ -212,6 +253,55 @@ export const buildTimelineFromMessages = (messages: any[]): TimelineItem[] => {
                 exitCode: uiEvent.payload?.exitCode ?? null,
                 autoApproved: !!uiEvent.payload?.autoApproved
               } as CommandApprovalItem);
+            }
+            break;
+          }
+          case 'requestFileEditApproval': {
+            // Only add the file edit approval card - actions are handled by showToolAction events
+            toolsBlock.tools.push({
+              id: uiEvent.payload?.id || `file_approval_${m.id}`,
+              type: 'fileEditApproval',
+              filePath: uiEvent.payload?.filePath || '',
+              severity: uiEvent.payload?.severity || 'medium',
+              reason: uiEvent.payload?.reason,
+              status: 'pending',
+              timestamp: uiEvent.payload?.timestamp || Date.now(),
+              diffHtml: uiEvent.payload?.diffHtml,
+              autoApproved: false
+            } as FileEditApprovalItem);
+            break;
+          }
+          case 'fileEditApprovalResult': {
+            // Find and update the existing file edit approval card
+            const approvalId = uiEvent.payload?.approvalId;
+            let found = false;
+            for (const block of ensureThread().blocks) {
+              if (block.type === 'tools') {
+                const existing = block.tools.find(
+                  item => item.type === 'fileEditApproval' && item.id === approvalId
+                ) as FileEditApprovalItem | undefined;
+                if (existing) {
+                  existing.status = uiEvent.payload?.status || existing.status;
+                  existing.autoApproved = !!uiEvent.payload?.autoApproved;
+                  found = true;
+                  break;
+                }
+              }
+            }
+            // If not found (e.g., auto-approved), add as new approval with final status
+            if (!found) {
+              const tb = ensureToolsBlock();
+              tb.tools.push({
+                id: approvalId || `file_approval_${m.id}`,
+                type: 'fileEditApproval',
+                filePath: uiEvent.payload?.filePath || '',
+                severity: uiEvent.payload?.severity || 'medium',
+                reason: uiEvent.payload?.reason,
+                status: uiEvent.payload?.status || 'approved',
+                timestamp: Date.now(),
+                diffHtml: uiEvent.payload?.diffHtml,
+                autoApproved: !!uiEvent.payload?.autoApproved
+              } as FileEditApprovalItem);
             }
             break;
           }
