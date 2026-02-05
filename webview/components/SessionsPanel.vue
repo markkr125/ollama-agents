@@ -44,22 +44,6 @@
 
     <!-- Regular sessions list (when not searching) -->
       <div v-else class="sessions-list" ref="sessionsListRef" @scroll="onSessionsScroll">
-      <div class="session-patterns">
-        <div class="session-patterns-header">
-          <span class="session-patterns-title">Sensitive edit patterns (session override)</span>
-          <button class="btn btn-secondary" @click="onSaveSessionPatterns">Save</button>
-        </div>
-        <textarea
-          class="settings-textarea"
-          rows="6"
-          v-model="localSessionPatterns"
-          spellcheck="false"
-          placeholder='{"**/*": true, "**/.env*": false}'
-        ></textarea>
-        <div class="settings-desc">
-          Session patterns override global settings for this session.
-        </div>
-      </div>
       <div class="sessions-group" v-for="group in categorizedSessions" :key="group.key">
         <div class="sessions-group-title">{{ group.label }}</div>
         <div
@@ -115,9 +99,8 @@
 
 <script setup lang="ts">
 import type { PropType } from 'vue';
-import { computed, ref, watch } from 'vue';
-import { loadSession, loadSessionWithMessage, updateSessionSensitivePatterns } from '../scripts/core/actions/index';
-import { sessionSensitiveFilePatterns } from '../scripts/core/state';
+import { computed, ref } from 'vue';
+import { loadSession, loadSessionWithMessage } from '../scripts/core/actions/index';
 import type { SearchResultGroup, SessionItem } from '../scripts/core/types';
 
 const props = defineProps({
@@ -196,19 +179,6 @@ const props = defineProps({
 });
 
 const sessionsListRef = ref<HTMLDivElement | null>(null);
-const localSessionPatterns = ref('');
-
-const onSaveSessionPatterns = () => {
-  updateSessionSensitivePatterns(localSessionPatterns.value);
-};
-
-watch(
-  () => sessionSensitiveFilePatterns.value,
-  (value) => {
-    localSessionPatterns.value = value || '';
-  },
-  { immediate: true }
-);
 
 const categorizedSessions = computed(() => {
   const now = new Date();

@@ -6,7 +6,7 @@ import { ToolRegistry } from '../agent/toolRegistry';
 import { DatabaseService } from '../services/databaseService';
 import { OllamaClient } from '../services/ollamaClient';
 import { TerminalManager } from '../services/terminalManager';
-import { MessageRecord } from '../types/session';
+import { MessageRecord, ToolExecution } from '../types/session';
 import { analyzeDangerousCommand } from '../utils/commandSafety';
 import { renderDiffHtml } from '../utils/diffRenderer';
 import { DEFAULT_SENSITIVE_FILE_PATTERNS, evaluateFileSensitivity } from '../utils/fileSensitivity';
@@ -79,6 +79,11 @@ export class AgentChatExecutor {
 
     let iteration = 0;
     let accumulatedExplanation = '';
+    let hasWrittenFiles = false;
+
+    // Check if task likely requires file modifications
+    const taskLower = agentSession.task.toLowerCase();
+    const taskRequiresWrite = /\b(rename|change|modify|edit|update|add|create|write|fix|refactor|remove|delete)\b/.test(taskLower);
 
     while (iteration < config.maxIterations && !token.isCancellationRequested) {
       iteration++;
@@ -114,6 +119,11 @@ export class AgentChatExecutor {
           break;
         }
 
+        // Debug: Log the full LLM response for troubleshooting
+        this.outputChannel.appendLine(`\n[Iteration ${iteration}] Full LLM response:`);
+        this.outputChannel.appendLine(response);
+        this.outputChannel.appendLine('---');
+
         const cleanedText = removeToolCalls(response);
 
         if (cleanedText.trim() && !cleanedText.includes('[TASK_COMPLETE]')) {
@@ -131,11 +141,25 @@ export class AgentChatExecutor {
         }
 
         if (response.includes('[TASK_COMPLETE]') || response.toLowerCase().includes('task is complete')) {
+          // Validate: if task required writes but none happened, reject completion
+          if (taskRequiresWrite && !hasWrittenFiles) {
+            messages.push({ role: 'assistant', content: response });
+            messages.push({
+              role: 'user',
+              content: 'You said the task is complete, but no files were modified. You must use write_file to actually make changes. Reading a file does not modify it. Please complete the task by calling write_file with the modified content.'
+            });
+            continue;
+          }
           accumulatedExplanation = cleanedText.replace('[TASK_COMPLETE]', '').trim() || accumulatedExplanation;
           break;
         }
 
         const toolCalls = extractToolCalls(response);
+
+        // Debug: Log parsed tool calls
+        this.outputChannel.appendLine(`[Iteration ${iteration}] Parsed ${toolCalls.length} tool calls:`);
+        toolCalls.forEach((tc, i) => this.outputChannel.appendLine(`  [${i}] ${tc.name}: ${JSON.stringify(tc.args)}`));
+        this.outputChannel.appendLine('---');
 
         if (toolCalls.length === 0) {
           messages.push({ role: 'assistant', content: response });
@@ -189,17 +213,23 @@ export class AgentChatExecutor {
           }
 
           try {
-            const result = isTerminalCommand
+            const result: ToolExecution = isTerminalCommand
               ? await this.executeTerminalCommand(toolCall.name, toolCall.args, context, sessionId, actionText, actionIcon, token)
               : isFileEdit
                 ? await this.executeFileEdit(toolCall.name, toolCall.args, context, sessionId, actionText, actionIcon, token)
                 : await this.toolRegistry.execute(toolCall.name, toolCall.args, context);
             agentSession.toolCalls.push(result);
 
+            // Check if the tool returned an error
+            if (result.error) {
+              throw new Error(result.error);
+            }
+
             if (['write_file', 'create_file', 'delete_file'].includes(toolCall.name)) {
               const skippedEdit = (result.output || '').toLowerCase().includes('skipped by user');
               if (!skippedEdit) {
                 agentSession.filesChanged.push(toolCall.args?.path || toolCall.args?.file);
+                hasWrittenFiles = true;
                 this.refreshExplorer();
               }
             }
@@ -760,17 +790,29 @@ export class AgentChatExecutor {
 
   private buildAgentSystemPrompt(): string {
     const tools = this.toolRegistry.getAll();
-    return `You are an autonomous AI coding agent with tools.
+    const toolDescriptions = tools.map((t: { name: string; description: string; schema?: any }) => {
+      const params = t.schema?.properties
+        ? Object.entries(t.schema.properties)
+            .map(([key, val]: [string, any]) => `    ${key}: ${val.description || val.type}`)
+            .join('\n')
+        : '    (no parameters)';
+      return `${t.name}: ${t.description}\n${params}`;
+    }).join('\n\n');
 
-AVAILABLE TOOLS:
-${tools.map((t: { name: string; description: string }) => `- ${t.name}: ${t.description}`).join('\n')}
+    return `You are a coding agent. You MUST use tools to complete tasks. Never claim to do something without using tools.
 
-TO USE A TOOL:
-<tool_call>{"name": "tool_name", "arguments": {"arg1": "value1"}}</tool_call>
+TOOLS:
+${toolDescriptions}
 
-RULES:
-1. Read files before modifying
-2. Write complete, working code
-3. Use [TASK_COMPLETE] when done`;
+FORMAT - Always use this exact format:
+<tool_call>{"name": "TOOL_NAME", "arguments": {"arg": "value"}}</tool_call>
+
+EXAMPLES:
+<tool_call>{"name": "read_file", "arguments": {"path": "package.json"}}</tool_call>
+<tool_call>{"name": "write_file", "arguments": {"path": "file.txt", "content": "new content"}}</tool_call>
+
+CRITICAL: To edit a file you must call write_file. Reading alone does NOT change files.
+
+When done: [TASK_COMPLETE]`;
   }
 }

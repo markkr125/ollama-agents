@@ -85,7 +85,8 @@ export function getToolSuccessInfo(
 
   switch (toolName) {
     case 'read_file': {
-      const lines = output?.split('\n').length || 0;
+      const content = output || '';
+      const lines = content ? content.split('\n').length : 0;
       return {
         actionText: `Read ${fileName}`,
         actionDetail: `${lines} lines`

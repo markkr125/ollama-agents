@@ -1,5 +1,6 @@
 import { createTwoFilesPatch } from 'diff';
-import { Diff2Html } from 'diff2html';
+// eslint-disable-next-line @typescript-eslint/no-var-requires
+const diff2html = require('diff2html');
 
 export const renderDiffHtml = (
   filePath: string,
@@ -17,9 +18,9 @@ export const renderDiffHtml = (
     { context: 3 }
   );
 
-  return Diff2Html.getPrettyHtml(diffText, {
+  return diff2html.html(diffText, {
     inputFormat: 'diff',
-    showFiles: false,
+    drawFileList: false,
     matching: 'lines',
     outputFormat: 'line-by-line'
   });

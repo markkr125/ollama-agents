@@ -1,21 +1,26 @@
 <template>
   <div class="page" :class="{ active: currentPage === 'chat' }">
-    <div v-if="currentMode === 'agent'" class="chat-toolbar">
-      <div class="chat-toolbar-title">Session controls</div>
-      <div
-        class="chat-toolbar-item"
-        title="Auto-approve commands for this session (critical commands still require approval)"
-      >
-        <span class="chat-toolbar-label">Auto-approve commands</span>
-        <div class="toggle" :class="{ on: autoApproveCommands }" @click="toggleAutoApproveCommands"></div>
-      </div>
-      <div
-        class="chat-toolbar-item"
-        title="Auto-approve sensitive file edits for this session"
-      >
-        <span class="chat-toolbar-label">Auto-approve sensitive edits</span>
-        <div class="toggle" :class="{ on: autoApproveSensitiveEdits }" @click="toggleAutoApproveSensitiveEdits"></div>
-      </div>
+    <!-- Compact session controls - collapsible -->
+    <div v-if="currentMode === 'agent'" class="session-controls">
+      <button class="session-controls-toggle" @click="sessionControlsExpanded = !sessionControlsExpanded">
+        <span class="session-controls-icon">⚙️</span>
+        <span class="session-controls-title">Session</span>
+        <span class="session-controls-chevron" :class="{ expanded: sessionControlsExpanded }">›</span>
+      </button>
+      <transition name="slide">
+        <div v-if="sessionControlsExpanded" class="session-controls-panel">
+          <label class="session-control-option" @click.prevent="toggleAutoApproveCommands">
+            <input type="checkbox" :checked="autoApproveCommands" />
+            <span class="option-text">Auto-approve commands</span>
+            <span class="option-hint">Skip approval for non-critical commands</span>
+          </label>
+          <label class="session-control-option" @click.prevent="toggleAutoApproveSensitiveEdits">
+            <input type="checkbox" :checked="autoApproveSensitiveEdits" />
+            <span class="option-text">Auto-approve sensitive edits</span>
+            <span class="option-hint">Skip approval for sensitive file changes</span>
+          </label>
+        </div>
+      </transition>
     </div>
     <div
       v-if="currentMode === 'agent' && autoApproveConfirmVisible"
@@ -34,6 +39,27 @@
         <div class="confirm-dialog-actions">
           <button class="approve-btn" @click="confirmAutoApproveCommands">Enable Auto-Approve</button>
           <button class="skip-btn" @click="cancelAutoApproveCommands">Cancel</button>
+        </div>
+      </div>
+    </div>
+    <!-- Confirmation dialog for auto-approve sensitive edits -->
+    <div
+      v-if="currentMode === 'agent' && autoApproveSensitiveEditsConfirmVisible"
+      class="auto-approve-confirm-overlay"
+      @click.self="cancelAutoApproveSensitiveEdits"
+    >
+      <div class="auto-approve-confirm-dialog">
+        <div class="confirm-dialog-icon">⚠️</div>
+        <div class="confirm-dialog-title">Enable Auto-Approve Sensitive Edits?</div>
+        <div class="confirm-dialog-message">
+          Edits to sensitive files (config files, secrets, etc.) will be applied automatically without review.
+          <strong>This can be risky</strong> as it allows the agent to modify critical files without your approval.
+          <br><br>
+          Make sure you trust the agent's changes before enabling this.
+        </div>
+        <div class="confirm-dialog-actions">
+          <button class="approve-btn" @click="confirmAutoApproveSensitiveEdits">Enable Auto-Approve</button>
+          <button class="skip-btn" @click="cancelAutoApproveSensitiveEdits">Cancel</button>
         </div>
       </div>
     </div>
@@ -344,6 +370,18 @@ const props = defineProps({
     type: Function as PropType<() => void>,
     required: true
   },
+  autoApproveSensitiveEditsConfirmVisible: {
+    type: Boolean,
+    required: true
+  },
+  confirmAutoApproveSensitiveEdits: {
+    type: Function as PropType<() => void>,
+    required: true
+  },
+  cancelAutoApproveSensitiveEdits: {
+    type: Function as PropType<() => void>,
+    required: true
+  },
   isGenerating: {
     type: Boolean,
     required: true
@@ -400,6 +438,7 @@ const props = defineProps({
 
 const localMessagesEl = ref<HTMLDivElement | null>(null);
 const localInputEl = ref<HTMLTextAreaElement | null>(null);
+const sessionControlsExpanded = ref(false);
 
 const progressStatus = (item: ProgressItem) => {
   if (item.status === 'error') return 'error';

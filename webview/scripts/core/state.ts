@@ -20,6 +20,7 @@ export const currentSessionId = ref<string | null>(null);
 export const autoApproveCommands = ref(false);
 export const autoApproveSensitiveEdits = ref(false);
 export const autoApproveConfirmVisible = ref(false);
+export const autoApproveSensitiveEditsConfirmVisible = ref(false);
 export const currentPage = ref<'chat' | 'settings' | 'sessions'>('chat');
 export const activeSection = ref('connection');
 export const isGenerating = ref(false);

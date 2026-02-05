@@ -1,4 +1,4 @@
-import { autoApproveCommands, autoApproveConfirmVisible, autoApproveSensitiveEdits, currentSessionId, vscode } from '../state';
+import { autoApproveCommands, autoApproveConfirmVisible, autoApproveSensitiveEdits, autoApproveSensitiveEditsConfirmVisible, currentSessionId, vscode } from '../state';
 
 export const toggleAutoApproveCommands = () => {
   const nextValue = !autoApproveCommands.value;
@@ -42,14 +42,36 @@ export const skipCommand = (approvalId: string) => {
 };
 
 export const toggleAutoApproveSensitiveEdits = () => {
-  autoApproveSensitiveEdits.value = !autoApproveSensitiveEdits.value;
+  const nextValue = !autoApproveSensitiveEdits.value;
+  if (nextValue) {
+    autoApproveSensitiveEditsConfirmVisible.value = true;
+    return;
+  }
+  autoApproveSensitiveEditsConfirmVisible.value = false;
+  autoApproveSensitiveEdits.value = false;
   if (currentSessionId.value) {
     vscode.postMessage({
       type: 'setAutoApproveSensitiveEdits',
       sessionId: currentSessionId.value,
-      enabled: autoApproveSensitiveEdits.value
+      enabled: false
     });
   }
+};
+
+export const confirmAutoApproveSensitiveEdits = () => {
+  autoApproveSensitiveEditsConfirmVisible.value = false;
+  autoApproveSensitiveEdits.value = true;
+  if (currentSessionId.value) {
+    vscode.postMessage({
+      type: 'setAutoApproveSensitiveEdits',
+      sessionId: currentSessionId.value,
+      enabled: true
+    });
+  }
+};
+
+export const cancelAutoApproveSensitiveEdits = () => {
+  autoApproveSensitiveEditsConfirmVisible.value = false;
 };
 
 export const approveFileEdit = (approvalId: string) => {
