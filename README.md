@@ -27,7 +27,7 @@ AI-powered code completion and chat assistance using local [Ollama](https://olla
 
 3. Install the extension (from source):
    ```bash
-   git clone https://github.com/your-username/ollama-copilot.git
+   git clone https://github.com/markkr125/ollama-agents.git
    cd ollama-copilot
    npm install
    npm run compile
