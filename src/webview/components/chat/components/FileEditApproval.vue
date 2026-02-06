@@ -40,7 +40,7 @@
 
 <script setup lang="ts">
 import { computed } from 'vue';
-import type { FileEditApprovalItem } from '../scripts/core/types';
+import type { FileEditApprovalItem } from '../../../scripts/core/types';
 
 const props = defineProps<{
   item: FileEditApprovalItem;

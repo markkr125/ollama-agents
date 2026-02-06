@@ -1,0 +1,83 @@
+<template>
+  <div class="settings-section" :class="{ active: activeSection === 'agent' }">
+    <div class="settings-group">
+      <h3>Agent Settings</h3>
+      <div class="settings-item">
+        <label class="settings-label">Max Iterations</label>
+        <input type="number" v-model.number="settings.maxIterations" />
+      </div>
+      <div class="settings-item">
+        <label class="settings-label">Max Active Sessions</label>
+        <input type="number" min="1" max="5" v-model.number="settings.maxActiveSessions" />
+      </div>
+      <div class="settings-item">
+        <label class="settings-label">Tool Timeout (seconds)</label>
+        <input type="number" :value="toolTimeoutSeconds" @input="onToolTimeoutInput" />
+      </div>
+      <div class="settings-item">
+        <label class="settings-label">Sensitive File Patterns (JSON)</label>
+        <textarea
+          class="settings-textarea"
+          rows="8"
+          v-model="settings.sensitiveFilePatterns"
+          spellcheck="false"
+        ></textarea>
+        <div class="settings-desc">
+          Use glob patterns with true = auto-approve, false = require approval.
+        </div>
+      </div>
+      <div class="settings-item">
+        <label class="settings-label">Session Override Patterns</label>
+        <textarea
+          class="settings-textarea"
+          rows="4"
+          :value="localSessionPatterns"
+          @input="$emit('update:localSessionPatterns', ($event.target as HTMLTextAreaElement).value)"
+          spellcheck="false"
+          placeholder='{"**/*": true, "**/.env*": false}'
+        ></textarea>
+        <div class="settings-desc">
+          Override sensitive file patterns for the current session only.
+        </div>
+        <button class="btn btn-secondary" style="margin-top: 8px" @click="saveSessionPatterns">Save Session Override</button>
+      </div>
+      <div class="toggle-row">
+        <div class="toggle-info">
+          <span class="toggle-label">Auto Create Git Branch</span>
+          <span class="toggle-desc">Create a new branch for agent tasks</span>
+        </div>
+        <div class="toggle" :class="{ on: agentSettings.autoCreateBranch }" @click="agentSettings.autoCreateBranch = !agentSettings.autoCreateBranch"></div>
+      </div>
+      <div class="toggle-row">
+        <div class="toggle-info">
+          <span class="toggle-label">Auto Commit</span>
+          <span class="toggle-desc">Automatically commit changes</span>
+        </div>
+        <div class="toggle" :class="{ on: agentSettings.autoCommit }" @click="agentSettings.autoCommit = !agentSettings.autoCommit"></div>
+      </div>
+      <button class="btn btn-primary" @click="saveAgentSettings">Save Agent Settings</button>
+      <div class="status-msg" :class="statusClass(agentStatus)">{{ agentStatus.message }}</div>
+    </div>
+  </div>
+</template>
+
+<script setup lang="ts">
+import type { AgentSettings, Settings, StatusMessage } from '../../../scripts/core/settings';
+
+defineProps<{
+  activeSection: string;
+  settings: Settings;
+  toolTimeoutSeconds: number;
+  onToolTimeoutInput: (event: Event) => void;
+  localSessionPatterns: string;
+  saveSessionPatterns: () => void;
+  agentSettings: AgentSettings;
+  saveAgentSettings: () => void;
+  statusClass: (status: StatusMessage) => Record<string, boolean>;
+  agentStatus: StatusMessage;
+}>();
+
+defineEmits<{
+  'update:localSessionPatterns': [value: string];
+}>();
+</script>

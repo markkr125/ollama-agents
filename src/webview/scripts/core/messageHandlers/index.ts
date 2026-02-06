@@ -24,6 +24,7 @@ import {
     handleInit,
     handleLoadSessionMessages,
     handleLoadSessions,
+    handleNavigateToSettings,
     handleRecreateMessagesResult,
     handleSearchSessionsResult,
     handleSessionApprovalSettings,
@@ -135,6 +136,9 @@ export const handleMessage = (msg: any) => {
       break;
     case 'deletionProgress':
       handleDeletionProgress(msg);
+      break;
+    case 'navigateToSettings':
+      handleNavigateToSettings(msg);
       break;
   }
 };

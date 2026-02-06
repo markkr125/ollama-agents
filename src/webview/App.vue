@@ -125,10 +125,10 @@
 
 <script setup lang="ts">
 import { onMounted } from 'vue';
-import ChatPage from './components/ChatPage.vue';
+import ChatPage from './components/chat/ChatPage.vue';
 import HeaderBar from './components/HeaderBar.vue';
 import SessionsPanel from './components/SessionsPanel.vue';
-import SettingsPage from './components/SettingsPage.vue';
+import SettingsPage from './components/settings/SettingsPage.vue';
 import {
     actionStatusClass,
     activeSection,

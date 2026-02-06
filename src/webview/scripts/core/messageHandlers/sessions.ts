@@ -17,6 +17,7 @@ import {
     currentAssistantThreadId,
     currentMode,
     currentModel,
+    currentPage,
     currentProgressIndex,
     currentSessionId,
     currentStreamIndex,
@@ -24,6 +25,7 @@ import {
     deletingSessionIds,
     deletionProgress,
     hasToken,
+    isFirstRun,
     isSearching,
     modelOptions,
     recreateMessagesStatus,
@@ -288,4 +290,9 @@ export const handleDeletionProgress = (msg: any) => {
     completed: msg.completed || 0,
     total: msg.total || 0
   };
+};
+
+export const handleNavigateToSettings = (msg: any) => {
+  currentPage.value = 'settings';
+  isFirstRun.value = !!msg.isFirstRun;
 };

@@ -4,7 +4,7 @@
 
 <script setup lang="ts">
 import { computed } from 'vue';
-import { formatMarkdown } from '../scripts/core/actions';
+import { formatMarkdown } from '../../../scripts/core/actions';
 
 const props = defineProps<{
   content: string;

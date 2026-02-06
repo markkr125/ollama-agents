@@ -78,6 +78,26 @@ export class ChatViewProvider implements vscode.WebviewViewProvider, WebviewMess
     this.view?.webview.postMessage(message);
   }
 
+  /**
+   * Reveal the sidebar and navigate the webview to the settings page.
+   * Called by the `ollamaCopilot.showSetup` command and on first-run.
+   */
+  public navigateToSettings(isFirstRun = false) {
+    if (this.view) {
+      this.view.show?.(true);
+      this.postMessage({ type: 'navigateToSettings', isFirstRun });
+    } else {
+      // Sidebar hasn't been resolved yet — reveal the view which will
+      // trigger resolveWebviewView, then queue the navigation.
+      vscode.commands.executeCommand('ollamaCopilot.chatView.focus').then(() => {
+        // Small delay to let the webview finish initializing
+        setTimeout(() => {
+          this.postMessage({ type: 'navigateToSettings', isFirstRun });
+        }, 500);
+      });
+    }
+  }
+
   private refreshExplorer() {
     vscode.commands.executeCommand('workbench.files.action.refreshFilesExplorer');
   }

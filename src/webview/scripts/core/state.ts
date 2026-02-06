@@ -28,6 +28,7 @@ export const autoApproveConfirmVisible = ref(false);
 export const autoApproveSensitiveEditsConfirmVisible = ref(false);
 export const currentPage = ref<'chat' | 'settings' | 'sessions'>('chat');
 export const activeSection = ref('connection');
+export const isFirstRun = ref(false);
 export const isGenerating = ref(false);
 export const inputText = ref('');
 export const contextList = ref<Array<{ fileName: string; content: string }>>([]);

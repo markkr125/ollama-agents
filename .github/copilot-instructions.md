@@ -101,22 +101,34 @@ src/
 │   ├── settingsHandler.ts # Settings + token + connection handling
 │   ├── toolUIFormatter.ts # Pure mapping for tool UI text/icons
 │   └── chatTypes.ts       # Shared view types + WebviewMessageEmitter
-├── webview/              # Vue frontend (built by Vite) + setup wizard
+├── webview/              # Vue frontend (built by Vite)
 │   ├── App.vue            # Vue root SFC (composes child components)
 │   ├── main.ts            # Webview bootstrap
 │   ├── index.html         # Webview HTML entry
 │   ├── vite.config.ts     # Vite build config for webview
 │   ├── vitest.config.ts   # Vitest config for webview tests
-│   ├── setupWizard.ts     # First-run setup wizard (backend, compiled by tsc)
-│   ├── setupWizard.html   # Setup wizard HTML template
-│   ├── components/        # Vue UI subcomponents
-│   │   ├── ChatPage.vue
-│   │   ├── HeaderBar.vue
-│   │   ├── SessionsPanel.vue
-│   │   ├── SettingsPage.vue
-│   │   ├── CommandApproval.vue
-│   │   ├── FileEditApproval.vue
-│   │   └── MarkdownBlock.vue  # Isolated markdown rendering (prevents re-render cascade)
+│   ├── components/        # Vue UI components (page-per-folder pattern)
+│   │   ├── HeaderBar.vue       # Top bar (back, new chat, settings, sessions)
+│   │   ├── SessionsPanel.vue   # Full-page sessions list + search
+│   │   ├── chat/               # Chat feature folder
+│   │   │   ├── ChatPage.vue         # Main page component (entry point)
+│   │   │   └── components/          # Chat sub-components
+│   │   │       ├── ChatInput.vue
+│   │   │       ├── CommandApproval.vue
+│   │   │       ├── FileEditApproval.vue
+│   │   │       ├── MarkdownBlock.vue
+│   │   │       ├── ProgressGroup.vue
+│   │   │       └── SessionControls.vue
+│   │   └── settings/           # Settings feature folder
+│   │       ├── SettingsPage.vue     # Main page component (entry point)
+│   │       └── components/          # Settings sub-components
+│   │           ├── AdvancedSection.vue
+│   │           ├── AgentSection.vue
+│   │           ├── AutocompleteSection.vue
+│   │           ├── ChatSection.vue
+│   │           ├── ConnectionSection.vue
+│   │           ├── ModelsSection.vue
+│   │           └── ToolsSection.vue
 │   ├── scripts/           # Webview app logic split by concern
 │   │   ├── app/
 │   │   │   └── App.ts      # Entry/wiring for message handling
@@ -617,6 +629,7 @@ When user sends a message in Agent mode:
 | `dbMaintenanceResult` | `{success, deletedSessions?, deletedMessages?, message?}` | Maintenance result |
 | `connectionTestResult` | `{success, message}` | Connection test result |
 | `bearerTokenSaved` | `{hasToken}` | Token save confirmation |
+| `navigateToSettings` | `{isFirstRun}` | Navigate webview to settings page (first-run or manual) |
 
 ### Frontend → Backend Messages
 
@@ -742,8 +755,48 @@ The chat UI uses VS Code's CSS variables for theming:
 
 Keep the current folder layout clean and consistent. Do not reintroduce flat, mixed files. Follow these rules:
 
+#### Vue Component Organization (Page-per-Folder Pattern)
+
+Each major page lives in its own folder under `src/webview/components/`. The **main page component** sits at the folder root, and its **sub-components** live in a nested `components/` subfolder. This makes it immediately obvious which file is the entry point:
+
+```
+components/
+├── HeaderBar.vue              # Standalone (no sub-components)
+├── SessionsPanel.vue          # Standalone (no sub-components)
+├── chat/
+│   ├── ChatPage.vue           ← main page (obvious entry point)
+│   └── components/            ← sub-components only used by ChatPage
+│       ├── ChatInput.vue
+│       ├── CommandApproval.vue
+│       └── ...
+└── settings/
+    ├── SettingsPage.vue       ← main page (obvious entry point)
+    └── components/            ← sub-components only used by SettingsPage
+        ├── ConnectionSection.vue
+        └── ...
+```
+
+**Rules for Vue components:**
+- ✅ Main page component = folder root (e.g. `chat/ChatPage.vue`).
+- ✅ Sub-components = nested `components/` subfolder (e.g. `chat/components/ChatInput.vue`).
+- ✅ Sub-components import from `'../../../scripts/core/...'` (one extra `../` because of the nesting).
+- ✅ Main page imports sub-components via `'./components/Foo.vue'`.
+- ✅ Standalone components that have no sub-components (like `HeaderBar.vue`, `SessionsPanel.vue`) stay directly in `components/`.
+- ❌ Do NOT put all `.vue` files flat in the same folder — keep main pages and sub-components visually separated.
+- ❌ Do NOT use barrel `index.ts` files for Vue component re-exports — import `.vue` files directly for better "go to definition" support.
+
+**When adding a new page:**
+1. Create `components/mypage/MyPage.vue` as the main component.
+2. Extract large template sections into `components/mypage/components/SubComponent.vue`.
+3. Wire script logic into a composable at `scripts/core/mypage/composable.ts` + `types.ts`.
+
+**When adding a sub-component to an existing page:**
+1. Create the `.vue` file in the page's `components/` subfolder.
+2. Import it directly in the parent page component.
+
+#### Script / Logic Organization
+
 - All webview source lives under `src/webview/` (no root-level `webview/` folder).
-- UI markup goes in `src/webview/components/*.vue`.
 - App wiring and message handling live in `src/webview/scripts/app/App.ts`.
 - Shared logic lives in `src/webview/scripts/core/`:
   - State/refs: `state.ts`
@@ -760,7 +813,7 @@ Keep the current folder layout clean and consistent. Do not reintroduce flat, mi
 - ✅ Add new message handlers in `src/webview/scripts/core/messageHandlers/*` and register in `messageHandlers/index.ts`.
 - ✅ `App.ts` should only route messages and export barrels.
 
-If you add new functionality, place it in the appropriate folder above and keep files small and single-purpose. Avoid creating new “catch-all” files.
+If you add new functionality, place it in the appropriate folder above and keep files small and single-purpose. Avoid creating new "catch-all" files.
 
 ### Build Validation (Required)
 
@@ -801,7 +854,7 @@ Good Vitest targets:
 - `src/webview/scripts/core/actions.ts`: debounced search, context packaging for send, tool/approval UI updates, message/thread merging behavior.
 - `src/webview/scripts/core/computed.ts`: header/title selection, derived counts, tool timeout conversions.
 - Vue components with important contracts:
-  - `src/webview/components/CommandApproval.vue`: editable command only when `status === 'pending'`; approve sends edited command.
+  - `src/webview/components/chat/components/CommandApproval.vue`: editable command only when `status === 'pending'`; approve sends edited command.
   - `src/webview/components/SessionsPanel.vue`: pagination (`loadMoreSessions`) + selection (`loadSession`) + loading flags.
 
 **Prefer `@vscode/test-electron` (src/test) when:**
@@ -941,7 +994,10 @@ this.register({
 
 The chat UI is a Vue app under `src/webview/`:
 - `App.vue` composes UI subcomponents and contains the `onMounted` hook that sends the `ready` message
-- `components/*.vue` holds UI sections (chat page, settings, header, sessions)
+- `components/` follows the **page-per-folder** pattern (see Maintain Clean Structure above):
+  - `chat/ChatPage.vue` is the chat page entry; sub-components in `chat/components/`
+  - `settings/SettingsPage.vue` is the settings page entry; sub-components in `settings/components/`
+  - `HeaderBar.vue` and `SessionsPanel.vue` are standalone components at the root
 - `scripts/app/App.ts` wires message handling and exports state/actions
 - `scripts/core/*` holds state, computed values, actions, and types
 - `styles/styles.scss` is the SCSS entry; partials live under `styles/`
