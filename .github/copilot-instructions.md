@@ -1,5 +1,24 @@
 # Ollama Copilot - Project Instructions
 
+> **Scoped instructions & skills**: This file contains project-wide rules only. File-specific details live in scoped instruction files that are automatically loaded when editing matching files. See the full list below.
+>
+> | File | Scope (`applyTo`) | Content |
+> |------|-------------------|---------|
+> | `.github/instructions/database-rules.instructions.md` | `src/services/databaseService.ts,src/services/sessionIndexService.ts,src/views/settingsHandler.ts` | Dual-DB design, schema mismatch, LanceDB corruption, message ordering, clearing data |
+> | `.github/instructions/ui-messages.instructions.md` | `src/views/**,src/webview/**` | Backend↔frontend message protocol (full type tables), chat view structure, streaming behavior |
+> | `.github/instructions/webview-ui.instructions.md` | `src/webview/**` | Assistant thread structure, CSS theming, diff2html, Vue patterns, session UX |
+> | `.github/instructions/testing.instructions.md` | `src/test/**,src/webview/tests/**` | Test harnesses, coverage catalogs, webview test rules |
+> | `.github/instructions/agent-tools.instructions.md` | `src/agent/**,src/services/agentChatExecutor.ts,src/utils/toolCallParser.ts` | Agent execution flow, tool registry, tool call parser, terminal execution, command safety, approval flow |
+> | `.github/instructions/extension-architecture.instructions.md` | `src/extension.ts,src/config/**,src/services/**,src/types/**` | Type system (3 message interfaces), service init order, config patterns, OllamaClient API, terminal manager, model compatibility |
+>
+> **Skills** (loaded on-demand by Copilot when relevant):
+> | Skill | Description |
+> |-------|-------------|
+> | `.github/skills/copilot-custom-instructions/` | How to write `.instructions.md` and `SKILL.md` files |
+> | `.github/skills/add-agent-tool/` | Step-by-step guide for adding a new agent tool |
+> | `.github/skills/add-new-setting/` | Step-by-step guide for adding a new VS Code configuration setting |
+> | `.github/skills/add-chat-message-type/` | Step-by-step guide for adding a new backend↔frontend message type |
+
 ---
 
 ## ⚠️ CRITICAL RULE #1: UI Event Ordering & Persistence
@@ -21,7 +40,7 @@ this.emitter.postMessage({ type: 'showToolAction', status: 'pending', ..., sessi
 ```
 
 ### Events That Must Be Persisted (In Order)
- 
+
 | Event Type | When | Payload |
 |------------|------|---------|
 | `startProgressGroup` | Before first tool in a group | `{ title, groupId }` |
@@ -47,6 +66,39 @@ If live chat shows something that session history doesn't:
 2. **showToolAction with same text should update, not push** - When a `pending` action exists and a `running` action arrives with the same text, it should update the existing action in place, not push a new one.
 
 3. **Success actions should find the last running/pending action** - When `showToolAction(success)` arrives with different text than the running action, use the fallback "last running/pending" search to find and update the correct action.
+
+---
+
+## ⚠️ CRITICAL RULE #2: NEVER Auto-Delete User Data
+
+**DO NOT** implement automatic deletion or recreation of the messages table. This includes:
+
+- ❌ Auto-recreating tables on schema mismatch errors
+- ❌ Auto-dropping tables on corruption detection
+- ❌ Silent data deletion to "recover" from errors
+
+**Instead**: Provide manual controls in Advanced Settings with clear warnings via VS Code's native modal dialogs.
+
+---
+
+## ⚠️ CRITICAL RULE #3: Single Assistant Message
+
+For each **single user prompt**, the UI must show **exactly one assistant message** containing:
+1. The initial explanation text
+2. The tool UI blocks (progress groups + command approvals) **embedded inside the same message**
+3. The final summary appended **after** the tool blocks
+
+**Required**:
+- ✅ The assistant message is created once and **updated in place** as streaming continues.
+- ✅ Tool UI blocks render **inside** the assistant message, not as separate timeline items.
+- ✅ After tools finish, the final summary is appended to the **same** assistant message.
+
+**Forbidden**:
+- ❌ Do NOT create a second assistant message for the final summary.
+- ❌ Do NOT render tool blocks as standalone timeline items outside the assistant message.
+- ❌ Do NOT overwrite or erase the initial explanation when tools finish.
+
+**History loading must match real-time**: When loading from the database, the timeline must be rebuilt to produce the same structure as live streaming.
 
 ---
 
@@ -134,39 +186,13 @@ src/
 │   │   │   └── App.ts      # Entry/wiring for message handling
 │   │   └── core/
 │   │       ├── actions/    # UI actions split by concern (+ index.ts barrel)
-│   │       │   ├── approvals.ts   # Approve/skip tool & file edit approvals
-│   │       │   ├── input.ts       # Send message, Enter key, context removal
-│   │       │   ├── markdown.ts    # Markdown formatting helpers
-│   │       │   ├── scroll.ts      # Auto-scroll + resize input
-│   │       │   ├── search.ts      # Debounced session search, reveal more
-│   │       │   ├── sessions.ts    # newChat, loadSession, delete, multi-select
-│   │       │   ├── settings.ts    # Save settings, connection test, token
-│   │       │   ├── stateUpdates.ts # applySettings, updateThinking, etc.
-│   │       │   ├── status.ts      # Status message helpers
-│   │       │   ├── timeline.ts    # ensureProgressGroup, startAssistantMessage
-│   │       │   ├── timelineView.ts # formatTime, relativeTime, toggleProgress
-│   │       │   └── index.ts       # Barrel re-export
 │   │       ├── messageHandlers/ # Webview message handlers split by concern
-│   │       │   ├── approvals.ts   # Tool & file edit approval result handlers
-│   │       │   ├── progress.ts    # startProgressGroup, showToolAction, finish
-│   │       │   ├── sessions.ts    # init, loadSessions, loadSessionMessages, delete confirmations
-│   │       │   ├── streaming.ts   # streamChunk, finalMessage
-│   │       │   ├── threadUtils.ts # ensureAssistantThread, getLastTextBlock
-│   │       │   └── index.ts       # Message router (switch on msg.type)
 │   │       ├── timelineBuilder.ts # Rebuild timeline from stored messages
 │   │       ├── computed.ts # Derived state
 │   │       ├── state.ts    # Reactive state/refs
 │   │       └── types.ts    # Shared types
 │   ├── styles/            # SCSS entry + partials
-│   │   ├── styles.scss
-│   │   ├── base/
-│   │   ├── components/
-│   │   ├── layout/
-│   │   └── utils/
 │   └── tests/             # Vitest webview tests
-│       ├── setup.ts
-│       ├── components/
-│       └── core/
 ├── templates/            # Prompt templates
 ├── types/                # TypeScript type definitions
 │   └── session.ts         # Shared chat + agent session types
@@ -175,9 +201,58 @@ src/
 
 ---
 
+## Agent Mode Request Lifecycle
+
+When a user sends a message in agent mode, this is the full data flow:
+
+```
+User types message in webview
+  → vscode.postMessage({ type: 'sendMessage', text, context })
+  → chatView.ts: handleMessage()
+      ├─ Persist user message to DB (MessageRecord)
+      ├─ Post 'addMessage' + 'generationStarted' to webview
+      └─ handleAgentMode()
+          ├─ Create agent session + git branch (if git available)
+          └─ agentChatExecutor.execute()
+              └─ LOOP (max iterations):
+                  ├─ Stream LLM response via OllamaClient.chat()
+                  ├─ Post 'streamChunk' (accumulated text) to webview
+                  ├─ Parse tool calls via toolCallParser
+                  ├─ If tools found:
+                  │   ├─ Persist + post 'startProgressGroup'
+                  │   ├─ For each tool:
+                  │   │   ├─ [Terminal cmd] → commandSafety → approval flow
+                  │   │   ├─ [File edit] → fileSensitivity → approval flow
+                  │   │   ├─ [Other tool] → direct execution via ToolRegistry
+                  │   │   ├─ Persist tool result to DB
+                  │   │   └─ Persist + post 'showToolAction' (success/error)
+                  │   └─ Persist + post 'finishProgressGroup'
+                  ├─ If [TASK_COMPLETE] → break loop
+                  └─ Continue to next iteration
+              → Persist final assistant message to DB
+              → Post 'finalMessage' to webview
+              → Post 'generationStopped'
+```
+
+**Key invariant**: Every `postMessage` to the webview has a matching `persistUiEvent` to the database, in the same order. This ensures session history matches live chat exactly.
+
+---
+
 ## Core Components
 
-### 1. OllamaClient (`src/services/ollamaClient.ts`)
+### Type System — Quick Reference
+
+There are **three message interfaces**. Using the wrong one is a common mistake:
+
+| Interface | File | Use For |
+|-----------|------|---------|
+| `MessageRecord` | `src/types/session.ts` | Database persistence (snake_case fields) |
+| `ChatMessage` | `src/views/chatTypes.ts` | Webview postMessage (camelCase + UI metadata) |
+| Ollama wire format | `src/types/ollama.ts` | API requests (only `role`, `content`) |
+
+See `extension-architecture.instructions.md` for full details.
+
+### OllamaClient (`src/services/ollamaClient.ts`)
 
 The HTTP client for communicating with Ollama/OpenWebUI APIs.
 
@@ -192,7 +267,7 @@ The HTTP client for communicating with Ollama/OpenWebUI APIs.
 - Bearer token authentication for OpenWebUI
 - Automatic retry with exponential backoff
 
-### 2. ChatViewProvider (`src/views/chatView.ts`)
+### ChatViewProvider (`src/views/chatView.ts`)
 
 The main sidebar chat interface provider. It is intentionally **thin** and only handles:
 - Webview lifecycle + message routing
@@ -201,123 +276,12 @@ The main sidebar chat interface provider. It is intentionally **thin** and only 
 
 The UI is built with Vue via Vite and emitted to `media/index.html`, `media/chatView.js`, and `media/chatView.css`.
 
-**Features:**
-- **Multiple Modes**: Agent, Ask, Edit (selectable via dropdown)
-- **Sessions Management**: Create, switch, delete chat sessions
-- **Settings Page**: Continue.dev-style settings with navigation sidebar
-- **Progress Groups**: Copilot-style collapsible action groups
-- **Advanced DB Maintenance**: Manual cleanup of session/message orphans
-
-**UI Structure:**
-```
-┌─────────────────────────────────┐
-│ ← Copilot          ➕ ⚙️ 📋    │ <- Header with back, new chat, settings, sessions
-├─────────────────────────────────┤
-│                                 │
-│  How can I help you today?      │ <- Empty state or messages
-│                                 │
-│  ▼ Analyzing code               │ <- Collapsible progress group
-│    ✓ Read file.ts, 50 lines     │ <- Individual actions
-│    ⟳ Writing to output.ts      │
-│                                 │
-├─────────────────────────────────┤
-│ 📎 Add context                  │ <- Context chips
-├─────────────────────────────────┤
-│ ┌─────────────────────────────┐ │
-│ │ Ask a question...           │ │ <- Input textarea
-│ └─────────────────────────────┘ │
-│ Agent ▼  model-name ▼    Send   │ <- Mode/model selectors
-└─────────────────────────────────┘
-```
-
-**Message Flow:**
-1. User types message → `sendMessage` event
-2. Backend receives via `onDidReceiveMessage`
-3. `ChatViewProvider` dispatches to:
-  - `ChatSessionController` (session state/messages)
-  - `SettingsHandler` (settings/token/connection)
-  - `AgentChatExecutor` (agent loop + tools)
-4. Responses are posted via a `WebviewMessageEmitter` interface
-5. Frontend updates UI with `streamChunk`, `showToolAction`, etc.
-
 **Performance:**
 - Chat mode streaming is throttled at 32ms (~30fps) to reduce IPC overhead
 - `MarkdownBlock.vue` components prevent full timeline re-renders on each chunk
 - Session list updates are debounced and only sent when needed
 
-### 3. ToolRegistry (`src/agent/toolRegistry.ts`)
-
-Defines tools available to the agent for autonomous operations.
-
-**Built-in Tools:**
-| Tool | Description |
-|------|-------------|
-| `read_file` | Read file contents |
-| `write_file` | Write content to file |
-| `create_file` | Create new file |
-| `list_files` | List directory contents |
-| `search_workspace` | Search for text in files |
-| `run_terminal_command` | Execute shell commands |
-| `get_diagnostics` | Get file errors/warnings |
-
-**Tool Call Format (in LLM responses):**
-```xml
-<tool_call>{"name": "read_file", "arguments": {"path": "src/file.ts"}}</tool_call>
-```
-
-### 3.1 Tool Call Parser (`src/utils/toolCallParser.ts`)
-
-Parses tool calls from LLM responses. This is critical for agent functionality and must handle various LLM output quirks robustly.
-
-**Key Functions:**
-| Function | Purpose |
-|----------|---------|
-| `extractToolCalls(response)` | Parse all tool calls from response text |
-| `detectPartialToolCall(response)` | Detect in-progress tool call during streaming |
-| `removeToolCalls(response)` | Strip tool call markup for display |
-
-**Robustness Features:**
-
-The parser handles various LLM quirks that smaller models (like devstral-small) may produce:
-
-1. **Balanced JSON Extraction** - Uses brace counting instead of regex to properly extract nested JSON:
-   ```typescript
-   // WRONG: /<tool_call>\s*(\{[\s\S]*?\})\s*<\/tool_call>/  (stops at first })
-   // RIGHT: extractBalancedJson() counts { and } to find matching close
-   ```
-
-2. **Multiple Argument Field Names** - Accepts `arguments`, `args`, `params`, or `parameters`:
-   ```json
-   {"name": "read_file", "args": {"path": "file.ts"}}  // works
-   {"name": "read_file", "arguments": {"path": "file.ts"}}  // works
-   ```
-
-3. **Top-Level Arguments** - Accepts args at root level instead of nested:
-   ```json
-   {"name": "read_file", "path": "file.ts"}  // works (path extracted from top level)
-   ```
-
-4. **Multiple Tool Name Fields** - Accepts `name`, `tool`, or `function`:
-   ```json
-   {"tool": "read_file", "arguments": {"path": "file.ts"}}  // works
-   ```
-
-5. **Incomplete Tool Calls** - Handles LLM getting cut off mid-response:
-   ```xml
-   <tool_call>{"name": "write_file", "arguments": {"path": "x.ts", "content": "...
-   ```
-   The parser attempts to repair by adding missing closing braces.
-
-**Tool Argument Flexibility:**
-
-Tools in `toolRegistry.ts` also accept multiple argument names for the file path:
-- `path`, `file`, or `filePath` are all valid for `read_file`, `write_file`, `get_diagnostics`
-
-**Write Validation:**
-
-The agent executor tracks whether a task requires file writes (based on keywords like "rename", "modify", "create", etc.) and validates that `write_file` was actually called before accepting `[TASK_COMPLETE]`. This prevents the LLM from hallucinating task completion.
-
-### 4. Settings Configuration
+### Settings Configuration
 
 Settings are defined in `package.json` under `contributes.configuration`:
 
@@ -332,441 +296,11 @@ Settings are defined in `package.json` under `contributes.configuration`:
 
 ---
 
-## Session Storage (Chat)
-
-Chat session metadata lives in SQLite via `SessionIndexService` (`sessions.sqlite`), while messages and semantic search stay in LanceDB (`ollama-copilot.lance`).
-
-- **Storage scope**: Data is stored per-workspace using `ExtensionContext.storageUri` with a fallback to `globalStorageUri` when no workspace is open.
-
-- **Session index**: `SessionIndexService` (sql.js, offset pagination, sorted by `updated_at DESC`).
-- **Messages**: LanceDB `messages` table only (no `sessions` table). Legacy LanceDB sessions are migrated to SQLite on startup.
-- **Deletion**: `deleteSession()` removes from SQLite and deletes messages in LanceDB.
-
-## Pagination
-
-Session list uses offset-based pagination:
-
-- Backend returns `{ hasMore, nextOffset }`.
-- Webview requests `loadMoreSessions` with `{ offset }`.
-
----
-
-## Database Architecture & Critical Rules
-
-### Dual-Database Design
-
-This extension uses **two separate databases**:
-
-| Database | Technology | Purpose | Location |
-|----------|------------|---------|----------|
-| Sessions | SQLite (sql.js) | Session metadata (id, title, mode, model, timestamps) | `sessions.sqlite` |
-| Messages | LanceDB | Message content + vector embeddings for semantic search | `ollama-copilot.lance/` |
-
-**Critical**: Sessions and messages are stored separately. Any operation that clears one MUST clear the other to maintain consistency.
-
-### ⚠️ NEVER Auto-Delete User Data
-
-**DO NOT** implement automatic deletion or recreation of the messages table. This includes:
-
-- ❌ Auto-recreating tables on schema mismatch errors
-- ❌ Auto-dropping tables on corruption detection
-- ❌ Silent data deletion to "recover" from errors
-
-**Why**: Automatic deletion destroys user chat history without consent. Users lose valuable conversation context and have no way to recover it.
-
-**Instead**: Provide manual controls in Advanced Settings for destructive operations, with clear warnings via VS Code's native modal dialogs.
-
-### Schema Mismatch Handling
-
-LanceDB can throw errors like `Found field not in schema: <field_name>` when the table schema changes between versions.
-
-**Correct approach**:
-1. Log the error for debugging
-2. Do NOT automatically recreate the table
-3. Let the user manually trigger "Recreate Messages Table" from Advanced Settings if they choose to lose their data
-
-### LanceDB Corruption Patterns
-
-LanceDB stores data in `.lance` directories with metadata files referencing data files. Corruption can occur when:
-- Data files are deleted but metadata still references them
-- Extension crashes mid-write
-- Filesystem issues
-
-**Error signature**: `Not found: .../ollama-copilot.lance/messages.lance/data/<uuid>.lance`
-
-**Handling**: The `handleCorruptedMessagesTable()` function detects missing file errors and can recreate the table, but this is only called during initialization, not automatically on every query.
-
-### Message Ordering
-
-Messages must have strictly increasing timestamps to ensure correct display order. The `getNextTimestamp(sessionId)` function guarantees this by:
-1. On first call for a session (or when switching sessions), querying the database for the max timestamp in that session
-2. Caching the `lastTimestamp` and `lastTimestampSessionId` to avoid repeated DB queries
-3. Returning `max(Date.now(), lastTimestamp + 1)` for each subsequent message
-
-**Critical**: The timestamp must be fetched from the database on extension restart or session switch, because the in-memory `lastTimestamp` resets to 0. Without this, new messages could get timestamps lower than existing messages, causing them to appear out of order.
-
-### Agent Message Persistence Order
-
-During agent execution, messages must be saved to the database in the exact order they appear in real-time:
-1. **User message** - saved immediately when received
-2. **Assistant explanation** - saved BEFORE tool execution (if the LLM provides explanation text before calling tools)
-3. **Tool messages** - saved as each tool completes
-4. **Final summary** - saved after all tools complete
-
-**Why this matters**: If assistant explanations are only saved at the end (after tools), they get timestamps later than the tools, causing incorrect display order when loading from history.
-
-### Single Assistant Message (Critical UI Contract)
-
-For each **single user prompt**, the UI must show **exactly one assistant message**. The assistant message must **contain**:
-1. The initial explanation text
-2. The tool UI blocks (progress groups + command approvals) **embedded inside the same message**
-3. The final summary appended **after** the tool blocks
-
-**Absolutely required behavior**:
-- ✅ The assistant message is created once and **updated in place** as streaming continues.
-- ✅ Tool UI blocks render **inside** the assistant message, not as separate timeline items.
-- ✅ After tools finish, the final summary is appended to the **same** assistant message.
-
-**Absolutely forbidden behavior**:
-- ❌ Do NOT create a second assistant message for the final summary.
-- ❌ Do NOT render tool blocks as standalone timeline items outside the assistant message.
-- ❌ Do NOT overwrite or erase the initial explanation when tools finish.
-
-**History loading must match real-time**: When loading from the database, the timeline must be rebuilt to produce the same structure as live streaming.
-
-### Assistant Thread UI Structure (Webview)
-
-The webview represents each assistant response as a **single assistant thread item** with a `blocks` array:
-
-```typescript
-interface AssistantThreadItem {
-  id: string;
-  type: 'assistantThread';
-  role: 'assistant';
-  blocks: Array<TextBlock | ToolsBlock>;
-  model?: string;
-}
-
-interface TextBlock {
-  type: 'text';
-  content: string;
-}
-
-interface ToolsBlock {
-  type: 'tools';
-  tools: Array<ProgressItem | CommandApprovalItem>;
-}
-```
-
-**Block ordering**: Blocks are added sequentially as events occur:
-1. Thread starts with empty text block: `[{ type: 'text', content: '' }]`
-2. When tools start: `[text, { type: 'tools', tools: [...] }]`
-3. After tools, more text: `[text, tools, { type: 'text', content: '...' }]`
-4. More tools: `[text, tools, text, tools]`
-5. Final summary: `[text, tools, text, tools, text]`
-
-**Rules**:
-- The assistant thread is the only container for tool UI blocks during an assistant response.
-- Never render tool blocks as standalone timeline items outside the assistant thread.
-- Both live handlers and `timelineBuilder` create an initial empty text block for consistency.
-
-### Streaming Behavior
-
-The backend sends **accumulated content** with each stream chunk, not incremental deltas:
-
-```typescript
-// Backend sends: "Hello", then "Hello World", then "Hello World!"
-// NOT: "Hello", then " World", then "!"
-handleStreamChunk({ content: 'Hello World!' }); // replaces, not appends
-```
-
-The `handleStreamChunk` handler **replaces** the text block content, it does not append.
-
-### UI Event Persistence
-
-UI events (progress groups, tool actions, approvals) are persisted as `__ui__` tool messages:
-
-```typescript
-{
-  role: 'tool',
-  toolName: '__ui__',
-  toolOutput: JSON.stringify({
-    eventType: 'startProgressGroup' | 'showToolAction' | 'finishProgressGroup' | 'requestToolApproval' | 'toolApprovalResult' | 'requestFileEditApproval' | 'fileEditApprovalResult',
-    payload: { ... }
-  })
-}
-```
-
-**Persisted events** (saved to database):
-- `startProgressGroup` - Creates new progress group
-- `showToolAction` - Adds action to progress group (only final states, not transient "running" states)
-- `finishProgressGroup` - Marks group as done/collapsed
-- `requestToolApproval` - Creates pending terminal command approval card + "Awaiting approval" action
-- `toolApprovalResult` - Updates terminal command approval status and action status
-- `requestFileEditApproval` - Creates pending file edit approval card with diff + "Awaiting approval" action
-- `fileEditApprovalResult` - Updates file edit approval status and action status
-
-**Not persisted** (transient UI states):
-- "Running" status updates that will be replaced by final status
-- Intermediate streaming content (only final content is saved as assistant message)
-
-### Editable Command Approvals
-
-Users can edit terminal commands before approval. The edited command must be sent to the backend and executed exactly as edited.
-
-**Required behavior**:
-- The command input is editable **only while status is `pending`**.
-- Approving sends `{ approvalId, approved: true, command }` to the backend.
-- Backend must execute the edited command and echo the final command back in `toolApprovalResult` so the UI reflects what was run.
-
-**Forbidden**:
-- ❌ Do NOT ignore user edits and run the original command.
-- ❌ Do NOT allow editing after approval.
-
-### Clearing All Data
-
-When implementing "clear all data" functionality:
-1. Drop/recreate LanceDB messages table via `DatabaseService.recreateMessagesTable()`
-2. Clear SQLite sessions via `SessionIndexService.clearAllSessions()`
-3. **Refresh the sessions list in the UI** by sending `loadSessions` with an empty array:
-   ```typescript
-   this.emitter.postMessage({
-     type: 'loadSessions',
-     sessions: [],
-     hasMore: false,
-     nextOffset: null
-   });
-   ```
-
-All three steps are required - clearing databases without refreshing the UI leaves stale sessions visible.
-
-### DatabaseService.close() and LanceDB Background Init
-
-**Critical**: `close()` must await the background `lanceInitPromise` before nulling out state. Without this, closing a `DatabaseService` instance while LanceDB is still initializing in the background can leave corrupt/partial files that cause subsequent instances to fail.
-
-```typescript
-if (this.lanceInitPromise) {
-  await this.lanceInitPromise.catch(() => { /* already logged */ });
-  this.lanceInitPromise = null;
-}
-```
-
-This prevents race conditions in tests where multiple instances share the same storage directory.
-
-### Webview Dialog Restrictions
-
-Webviews run in a sandboxed iframe without `allow-modals`. This means:
-- ❌ `confirm()` throws: "The document is sandboxed, and the 'allow-modals' keyword is not set"
-- ❌ `alert()` and `prompt()` also fail
-
-**Solution**: For confirmation dialogs, send a message to the extension backend and use VS Code's native `vscode.window.showWarningMessage()` with `{ modal: true }`:
-
-```typescript
-const result = await vscode.window.showWarningMessage(
-  'This will delete all chat history. Continue?',
-  { modal: true },
-  'Delete'
-);
-if (result === 'Delete') {
-  // proceed with deletion
-}
-```
-
----
-
-## Agent Execution Flow
-
-When user sends a message in Agent mode:
-
-```
-1. handleAgentMode()
-   ├─ Create agent session
-   ├─ Create git branch (if enabled)
-   └─ executeAgent()
-       └─ Loop (max iterations):
-           ├─ Send messages to LLM
-           ├─ Stream response
-           ├─ Parse for <tool_call> blocks
-           ├─ If tool calls found:
-           │   ├─ Send 'startProgressGroup' to UI
-           │   ├─ For each tool:
-           │   │   ├─ Send 'showToolAction' (running)
-           │   │   ├─ Execute tool via ToolRegistry
-           │   │   ├─ Send 'showToolAction' (success/error)
-           │   │   └─ Add result to messages
-           │   └─ Continue loop
-           ├─ If [TASK_COMPLETE]:
-           │   └─ Break loop
-           └─ Send 'finalMessage' to UI
-```
-
----
-
-## UI Component Communication
-
-### Backend → Frontend Messages
-
-| Message Type | Payload | Purpose |
-|--------------|---------|---------|
-| `init` | `{models, settings, hasToken}` | Initialize UI with settings |
-| `settingsUpdate` | `{settings, hasToken}` | Push updated settings to webview |
-| `showThinking` | `{message, sessionId}` | Show loading state for a session |
-| `hideThinking` | `{sessionId}` | Hide loading state for a session |
-| `startProgressGroup` | `{title, sessionId}` | Start collapsible group |
-| `showToolAction` | `{status, icon, text, detail, sessionId}` | Add action to group |
-| `finishProgressGroup` | `{sessionId}` | Mark group complete |
-| `streamChunk` | `{content, model?, sessionId}` | Stream assistant response scoped to a session |
-| `finalMessage` | `{content, model?, sessionId}` | Finalize response scoped to a session |
-| `generationStarted` | `{sessionId}` | Mark session as generating |
-| `generationStopped` | `{sessionId}` | Mark session as stopped |
-| `addMessage` | `{message, sessionId}` | Append a message in a specific session |
-| `loadSessionMessages` | `{messages, sessionId}` | Load messages for a session |
-| `loadSessions` | `{sessions, hasMore, nextOffset}` | Update sessions list |
-| `appendSessions` | `{sessions, hasMore, nextOffset}` | Append sessions list |
-| `sessionDeleted` | `{sessionId}` | Confirm single session deleted |
-| `sessionsDeleted` | `{sessionIds}` | Confirm batch session deletion |
-| `deletionProgress` | `{completed, total}` | Batch deletion progress (10+ sessions) |
-| `dbMaintenanceResult` | `{success, deletedSessions?, deletedMessages?, message?}` | Maintenance result |
-| `connectionTestResult` | `{success, message}` | Connection test result |
-| `bearerTokenSaved` | `{hasToken}` | Token save confirmation |
-| `navigateToSettings` | `{isFirstRun}` | Navigate webview to settings page (first-run or manual) |
-
-### Frontend → Backend Messages
-
-| Message Type | Payload | Purpose |
-|--------------|---------|---------|
-| `ready` | `{sessionId?}` | UI initialized (triggers `init` response, optionally restores session) |
-| `sendMessage` | `{text, context}` | User message |
-| `stopGeneration` | `{sessionId}` | Cancel generation for a session |
-| `selectMode` | `{mode}` | Change mode |
-| `selectModel` | `{model}` | Change model |
-| `newChat` | - | Create new session (reuses idle empty session if one exists) |
-| `loadSession` | `{sessionId}` | Load session |
-| `deleteSession` | `{sessionId}` | Delete session (optimistic removal on frontend) |
-| `deleteMultipleSessions` | `{sessionIds}` | Batch delete with modal confirmation |
-| `saveSettings` | `{settings}` | Save settings |
-| `testConnection` | - | Test server connection |
-| `saveBearerToken` | `{token, testAfterSave?}` | Save bearer token (optionally test after) |
-| `loadMoreSessions` | `{offset}` | Load more sessions |
-| `runDbMaintenance` | - | Run DB maintenance cleanup |
-
-### Session-Concurrent Streaming
-
-- Streaming, tool actions, and progress updates are routed with `sessionId`.
-- The webview ignores updates that do not match the currently active session.
-- Background sessions continue generating; switching sessions does not stop generation.
-- The Stop button sends `stopGeneration` with the active `sessionId`.
-
----
-
-## Chat View Backend Structure (Expected)
-
-Keep `src/views/chatView.ts` small and focused. Use these files for specific concerns:
-
-- **`src/views/chatView.ts`**
-  - Webview lifecycle + routing only
-  - Implements `WebviewMessageEmitter`
-  - Delegates to services/controllers
-
-- **`src/views/chatSessionController.ts`**
-  - Session creation/loading/deletion
-  - Session list + search + status updates
-  - Current session state + message cache
-
-- **`src/views/settingsHandler.ts`**
-  - Read/save settings
-  - Test connection + token handling
-  - DB maintenance actions
-
-- **`src/services/agentChatExecutor.ts`**
-  - Agent execution loop
-  - Tool call parsing + execution
-  - Progress group + tool UI updates (via emitter)
-
-- **`src/views/toolUIFormatter.ts`**
-  - Pure helpers mapping tool calls/results → UI text/icons
-
-- **`src/views/chatTypes.ts`**
-  - Shared view types
-  - `WebviewMessageEmitter` interface
-
-**Rule:** Do not re-bloat `chatView.ts`. If a method exceeds ~50 lines or handles a distinct concern, extract it into one of the modules above.
-
----
-
-## CSS Theming
-
-The chat UI uses VS Code's CSS variables for theming:
-
-```css
---vscode-editor-background
---vscode-editor-foreground
---vscode-input-background
---vscode-input-foreground
---vscode-input-border
---vscode-focusBorder
---vscode-button-background
---vscode-button-foreground
---vscode-list-hoverBackground
---vscode-scrollbarSlider-background
-```
-
-### ⚠️ diff2html CSS (Critical — Do NOT Import Base CSS)
-
-File edit approval cards render diffs using [diff2html](https://github.com/rtfpessoa/diff2html) (side-by-side mode). The diff HTML is generated server-side in `src/utils/diffRenderer.ts` and injected via `v-html`.
-
-**Do NOT import `diff2html/bundles/css/diff2html.min.css`** — not from SCSS and not from JS. The base CSS adds ~17KB of opinionated light-theme styles (white backgrounds, colored borders, heavy line-number boxes) that look terrible in a VS Code dark-theme webview.
-
-Instead, `src/webview/styles/components/_diff2html.scss` contains **self-contained styles** that target only the HTML elements diff2html actually outputs. These styles use VS Code's native diff editor variables:
-
-```css
---vscode-diffEditor-removedLineBackground   /* deletion row bg */
---vscode-diffEditor-removedTextBackground    /* inline <del> highlight */
---vscode-diffEditor-insertedLineBackground   /* insertion row bg */
---vscode-diffEditor-insertedTextBackground   /* inline <ins> highlight */
-```
-
-**Key lessons learned:**
-
-1. **SCSS `@import` of CSS files**: Vite does NOT inline `@import 'pkg/file.css'` from SCSS — it leaves it as a raw CSS `@import` in the output. The webview then tries to load it as a local resource and fails silently. JS imports (`import 'pkg/file.css'` in `.ts`) DO get inlined by Vite, but for diff2html we don't want the base CSS at all.
-
-2. **`white-space: pre` on code line containers**: diff2html's HTML has newlines and indentation between `<span>` tags inside `<div class="d2h-code-side-line">`. With `white-space: pre`, those formatting whitespace characters render as actual visible space, creating absurdly tall rows. Use `white-space: nowrap` on the container div; the inner `.d2h-code-line-ctn` span keeps `white-space: pre` to preserve actual code indentation.
-
-3. **Side-by-side mode**: `outputFormat: 'side-by-side'` in `diffRenderer.ts` produces two `.d2h-file-side-diff` panes inside `.d2h-files-diff` (flex container). Each pane has its own table with `.d2h-code-side-linenumber` and `.d2h-code-side-line` (note the `-side-` in class names vs line-by-line mode).
-
----
-
-## UI Conventions (Chat)
-
-- Assistant responses expose the model name in the payload (`model`) and render it as a bottom-right hover label in the message container.
-- Assistant responses show a dashed divider after each assistant message, except for the very last timeline item. Divider style:
-  - `border-top: 1px dashed var(--vscode-chat-checkpointSeparator);`
-  - `margin: 15px 0;`
-
-### Responsive Sessions Panel (Webview)
-
-- Sessions is a **full-page view** (page-based navigation), not a sidebar overlay.
-- Page switching is controlled by `currentPage` ref (`'chat' | 'settings' | 'sessions'`).
-- The webview persists `currentSessionId` and `currentPage` via `vscode.setState()` (debounced 200ms) so collapsing/restoring the sidebar resumes where the user left off.
-
-### Session Management UX
-
-- **Idle session reuse**: Clicking "New Chat" when an idle empty session exists reuses it instead of creating a duplicate. Checked both on the frontend (timeline length ≤ 1) and backend (`findIdleEmptySession()` query).
-- **Single-session optimistic deletion**: `deleteSession()` immediately removes the session from the UI and shows a slide-out animation. The backend confirms with a `sessionDeleted` message. If the deleted session was the current one, a new session is created and a full `loadSessions` refresh is sent.
-- **Multi-select deletion (deferred, not optimistic)**: The sessions panel has a "Select" mode with checkboxes, "Select All", and batch "Delete (N)" button. Clicking Delete adds IDs to `deletingSessionIds` (visual dimming/spinner) but does **not** remove sessions from the list. The backend shows `vscode.window.showWarningMessage({ modal: true })`. Sessions are only removed from the list when the backend confirms with `sessionsDeleted`. If the user cancels, `sessionsDeleted` arrives with an empty array, which clears `deletingSessionIds` and `selectionMode` without removing anything.
-- **LanceDB batch delete**: `databaseService.deleteMultipleSessions()` uses a single batched LanceDB filter (`session_id = "id1" OR session_id = "id2" OR ...`) instead of per-ID sequential deletes, avoiding CPU spikes.
-- **Navigation**: `newChat()` and `loadSession()` both set `currentPage = 'chat'` so clicking them from the settings or sessions page navigates back to the chat.
-- **Active session highlighting**: `loadSession(id)` sets `currentSessionId.value = id` immediately on the frontend. The `SessionsPanel` template derives the active class from `session.id === currentSessionId` (not from a server-set `session.active` flag), so highlighting is instant.
-- **Relative timestamps**: Sessions show "2h ago", "Yesterday", "3d ago" instead of raw times.
-- **Initial load indicator**: `sessionsInitialLoaded` ref starts `false` and is set `true` on the first `loadSessions` message. While `false`, the sessions panel shows "Loading conversations..." instead of "No conversations yet".
-
----
-
 ## Development Guidelines
 
 ### Critical Meta (Non-Negotiable)
 
-- Keep this file (`.github/copilot-instructions.md`) up to date whenever behavior, message payloads, settings, storage, or UI contracts change.
+- Keep instructions up to date whenever behavior, message payloads, settings, storage, or UI contracts change. Update the **relevant scoped file** (`.github/instructions/*.instructions.md` or `.github/skills/*/SKILL.md`), not just this root file.
 - Build or update automated tests whenever features are added/updated.
   - Use Vitest for webview core logic/components (`src/webview/tests`).
   - Use `@vscode/test-electron` for VS Code/extension integration (`src/test`).
@@ -774,265 +308,12 @@ Instead, `src/webview/styles/components/_diff2html.scss` contains **self-contain
   - Run `npm run test:all` locally when practical.
   - CI must pass (webview tests + extension-host tests).
 
-### Maintain Clean Structure (Important)
-
-Keep the current folder layout clean and consistent. Do not reintroduce flat, mixed files. Follow these rules:
-
-#### Vue Component Organization (Page-per-Folder Pattern)
-
-Each major page lives in its own folder under `src/webview/components/`. The **main page component** sits at the folder root, and its **sub-components** live in a nested `components/` subfolder. This makes it immediately obvious which file is the entry point:
-
-```
-components/
-├── HeaderBar.vue              # Standalone (no sub-components)
-├── SessionsPanel.vue          # Standalone (no sub-components)
-├── chat/
-│   ├── ChatPage.vue           ← main page (obvious entry point)
-│   └── components/            ← sub-components only used by ChatPage
-│       ├── ChatInput.vue
-│       ├── CommandApproval.vue
-│       └── ...
-└── settings/
-    ├── SettingsPage.vue       ← main page (obvious entry point)
-    └── components/            ← sub-components only used by SettingsPage
-        ├── ConnectionSection.vue
-        └── ...
-```
-
-**Rules for Vue components:**
-- ✅ Main page component = folder root (e.g. `chat/ChatPage.vue`).
-- ✅ Sub-components = nested `components/` subfolder (e.g. `chat/components/ChatInput.vue`).
-- ✅ Sub-components import from `'../../../scripts/core/...'` (one extra `../` because of the nesting).
-- ✅ Main page imports sub-components via `'./components/Foo.vue'`.
-- ✅ Standalone components that have no sub-components (like `HeaderBar.vue`, `SessionsPanel.vue`) stay directly in `components/`.
-- ❌ Do NOT put all `.vue` files flat in the same folder — keep main pages and sub-components visually separated.
-- ❌ Do NOT use barrel `index.ts` files for Vue component re-exports — import `.vue` files directly for better "go to definition" support.
-
-**When adding a new page:**
-1. Create `components/mypage/MyPage.vue` as the main component.
-2. Extract large template sections into `components/mypage/components/SubComponent.vue`.
-3. Wire script logic into a composable at `scripts/core/mypage/composable.ts` + `types.ts`.
-
-**When adding a sub-component to an existing page:**
-1. Create the `.vue` file in the page's `components/` subfolder.
-2. Import it directly in the parent page component.
-
-#### Script / Logic Organization
-
-- All webview source lives under `src/webview/` (no root-level `webview/` folder).
-- App wiring and message handling live in `src/webview/scripts/app/App.ts`.
-- Shared logic lives in `src/webview/scripts/core/`:
-  - State/refs: `state.ts`
-  - Computed values: `computed.ts`
-  - Actions/helpers: `actions/` (split modules + `actions/index.ts` barrel)
-  - Message handlers: `messageHandlers/` (split modules + `messageHandlers/index.ts` router)
-  - Timeline rebuild: `timelineBuilder.ts`
-  - Types: `types.ts`
-- Styles use SCSS with an entry file at `src/webview/styles/styles.scss` and partials grouped under `src/webview/styles/` (base/layout/components/utils).
-
-**Do not reintroduce monoliths**:
-- ❌ Avoid resurrecting `src/webview/scripts/core/actions.ts` or `messageHandlers.ts` as large single files.
-- ✅ Add new actions in `src/webview/scripts/core/actions/*` and export from `actions/index.ts`.
-- ✅ Add new message handlers in `src/webview/scripts/core/messageHandlers/*` and register in `messageHandlers/index.ts`.
-- ✅ `App.ts` should only route messages and export barrels.
-
-If you add new functionality, place it in the appropriate folder above and keep files small and single-purpose. Avoid creating new "catch-all" files.
-
-### Build Validation (Required)
-
-- After making code changes, ensure the project still compiles successfully.
-- Use `npm run compile` to verify the extension and webview build.
-
-### Automated Testing (Required)
-
-This repo uses two complementary test harnesses:
-
-1) **Extension host tests (integration-ish)**
-- Runner: `@vscode/test-electron` + Mocha
-- Command: `npm test`
-- Location:
-  - Test harness + mocks: `src/test/`
-  - Test suites: `src/test/suite/`
-    - `src/test/suite/utils/` for pure utilities
-    - `src/test/suite/services/` for service-level integration tests
-
-2) **Webview tests (fast unit/component)**
-- Runner: Vitest + jsdom + Vue Test Utils
-- Command: `npm run test:webview`
-- Location: `src/webview/tests/`
-- Config: `src/webview/vitest.config.ts`
-
-To run everything locally (recommended before pushing): `npm run test:all`.
-
-#### What to test with Vitest vs `@vscode/test-electron`
-
-Use the two harnesses for different risk profiles:
-
-**Prefer Vitest (src/webview/tests) when:**
-- You’re testing UI “business logic” that should be fast, deterministic, and not depend on VS Code.
-- The target lives in `src/webview/scripts/core/*` (state/actions/computed) or a Vue component with clear props/events.
-- You want tight coverage on edge cases that are painful to validate via a full VS Code host.
-
-Good Vitest targets:
-- `src/webview/scripts/core/actions.ts`: debounced search, context packaging for send, tool/approval UI updates, message/thread merging behavior.
-- `src/webview/scripts/core/computed.ts`: header/title selection, derived counts, tool timeout conversions.
-- Vue components with important contracts:
-  - `src/webview/components/chat/components/CommandApproval.vue`: editable command only when `status === 'pending'`; approve sends edited command.
-  - `src/webview/components/SessionsPanel.vue`: pagination (`loadMoreSessions`) + selection (`loadSession`) + loading flags.
-
-**Prefer `@vscode/test-electron` (src/test) when:**
-- You need real VS Code APIs (`vscode`), extension activation, commands, view registration, or storage URIs.
-- You’re validating backend/service behavior (SQLite sessions, LanceDB messages, ordering/maintenance, tool execution).
-- You want to cover multi-module integration flows end-to-end (even if the UI is mocked).
-
-Good `@vscode/test-electron` targets:
-- Extension activation and message routing (`ChatViewProvider` → controllers/services).
-- `DatabaseService` invariants (timestamps strictly increasing; maintenance never deletes sessions; delete cascades).
-- Mocked Ollama/OpenWebUI HTTP interactions (streaming NDJSON, retry, connection test) using the local mock server.
-
-**Rule of thumb:**
-- If the bug would show up as “wrong state / wrong UI rendering / wrong postMessage payload”, write Vitest.
-- If the bug would show up as “VS Code integration broken / storage broken / commands missing / streaming broken”, write `@vscode/test-electron`.
-
-**High-ROI next webview tests to add (Vitest):**
-- Sessions UI: `SessionsPanel.vue` pagination and selection behavior (load more, click session, correct postMessage payloads).
-
-#### Existing test coverage (Vitest)
-
-The following test suites exist in `src/webview/tests/`:
-
-**`timelineBuilder.test.ts`** (23 tests) - Tests the `buildTimelineFromMessages` function:
-- Block-based structure: user messages, assistant threads, text block merging
-- UI event replay: `startProgressGroup`, `showToolAction`, `finishProgressGroup`
-- Command approval flow: `requestToolApproval`, `toolApprovalResult`, skipped status
-- **File edit approval flow**: `requestFileEditApproval`, `fileEditApprovalResult`
-- Full workflow matching live/history parity
-- Edge cases: implicit groups, orphan approvals, invalid JSON handling
-- **Critical**: finishProgressGroup converts pending/running actions to success
-
-**`messageHandlers.test.ts`** (11 tests) - Tests live message handlers:
-- Streaming handlers: `handleStreamChunk` creates/updates text blocks
-- Progress group handlers: start/show/finish progress groups
-- Approval handlers with live/history parity: both progress group action AND approval card
-- **Critical contract test**: `complete workflow produces same structure as timelineBuilder`
-- **Critical contract test**: `file edit approval workflow produces same structure as timelineBuilder`
-
-**`actions.test.ts`** (7 tests) - Tests UI actions:
-- Debounced search behavior
-- Auto-approve toggle/confirm
-- Context packaging for send
-
-**`computed.test.ts`** (4 tests) - Tests derived state:
-- Temperature display formatting
-
-**`CommandApproval.test.ts`** (2 tests) - Tests Vue component:
-- Editable command input only when status is `pending`
-
-**`MarkdownBlock.test.ts`** (4 tests) - Tests Vue component:
-- Renders markdown content via computed property
-- Updates when content prop changes
-- Caching behavior prevents unnecessary re-renders
-
-#### Existing test coverage (Extension Host)
-
-The following test suites exist in `src/test/suite/`:
-
-**`utils/toolCallParser.test.ts`** (24 tests) - Tests tool call parsing robustness:
-- Basic parsing: XML and bracket format tool calls
-- Balanced JSON extraction: nested objects, deeply nested content
-- Alternative argument names: `arguments`, `args`, `params`, `parameters`
-- Top-level arguments: when LLM puts args at root level
-- Alternative tool name fields: `name`, `tool`, `function`
-- Incomplete tool calls: LLM cutoff handling, missing closing braces
-- Edge cases: escaped quotes, newlines, surrounding text, empty args
-- Smart quote normalization: Unicode U+201C and U+201D to regular quotes
-
-**`agent/toolRegistry.test.ts`** (17 tests) - Tests tool execution:
-- read_file: accepts `path`, `file`, `filePath` arguments
-- write_file: accepts multiple path formats, writes JSON and special characters
-- list_files: lists workspace root correctly
-- get_diagnostics: accepts multiple path argument names
-- Tool registration: verifies all expected tools are registered
-
-**`services/sessionIndexService.test.ts`** (8 tests) - Tests SQLite session/message CRUD:
-- Session creation/update/listing with pagination
-- Message CRUD with tool fields (tool_name, tool_input, tool_output)
-- getNextTimestamp returns strictly increasing values
-- Foreign key constraint prevents orphan messages
-- CASCADE delete: deleteSession removes messages
-- clearAllSessions removes all sessions and messages
-
-**`services/databaseService.test.ts`** (3 tests) - Tests database facade:
-- Message timestamps are strictly increasing and persist across restart
-- Maintenance returns zero orphans (FK prevents them)
-- deleteSession removes session and cascades to messages
-
-**`utils/commandSafety.test.ts`** - Tests terminal command safety analysis:
-- Dangerous command detection (rm -rf, sudo, etc.)
-- Platform-specific filtering
-
-#### Webview test rules (important)
-
-- The webview runtime provides `acquireVsCodeApi()`. Our webview state module calls it **at import-time** in `src/webview/scripts/core/state.ts`.
-- Therefore, tests MUST stub `acquireVsCodeApi` before importing any webview core modules.
-  - This is handled centrally in `src/webview/tests/setup.ts` via Vitest `setupFiles`.
-- Prefer testing logic in `src/webview/scripts/core/*` (state/actions/computed) over directly testing `src/webview/scripts/app/App.ts`.
-  - `App.ts` wires `window.addEventListener('message', ...)` and is intentionally more integration-heavy.
-- When asserting message sends to the extension, assert calls to the stubbed `postMessage` function.
-- Keep tests deterministic: use `vi.useFakeTimers()` for debounced functions (e.g. search) and `vi.setSystemTime()` when IDs/timestamps are time-based.
-
-### Adding a New Tool
-
-1. Add to `toolRegistry.ts` in `registerBuiltInTools()`:
-```typescript
-this.register({
-  name: 'my_tool',
-  description: 'What this tool does',
-  schema: {
-    type: 'object',
-    properties: {
-      param1: { type: 'string', description: 'Param description' }
-    },
-    required: ['param1']
-  },
-  execute: async (params, context) => {
-    // Implementation
-    return 'Result string';
-  }
-});
-```
-
-2. Add UI representation in `getToolActionInfo()` in chatView.ts
-
-3. Add to Tools section in settings UI (HTML in chatView.ts)
-
 ### Adding a New Mode
 
 1. Create file in `src/modes/myMode.ts`
 2. Export `registerMyMode(context, client, ...)` function
 3. Call from `extension.ts` activate function
 4. Add to mode selector in chatView.ts HTML
-
-### Modifying the Chat UI
-
-The chat UI is a Vue app under `src/webview/`:
-- `App.vue` composes UI subcomponents and contains the `onMounted` hook that sends the `ready` message
-- `components/` follows the **page-per-folder** pattern (see Maintain Clean Structure above):
-  - `chat/ChatPage.vue` is the chat page entry; sub-components in `chat/components/`
-  - `settings/SettingsPage.vue` is the settings page entry; sub-components in `settings/components/`
-  - `HeaderBar.vue` and `SessionsPanel.vue` are standalone components at the root
-- `scripts/app/App.ts` wires message handling and exports state/actions
-- `scripts/core/*` holds state, computed values, actions, and types
-- `styles/styles.scss` is the SCSS entry; partials live under `styles/`
-- `main.ts` bootstraps the Vue app
-
-### Meta: Keep Instructions Updated
-
-When you introduce new UI behavior, message payload fields, or architectural changes, update this file to reflect the new conventions and payload shapes.
-
-**Important**: Vue lifecycle hooks like `onMounted` must be called inside a Vue component's `<script setup>` block. Do NOT place them in plain `.ts` files - they won't execute!
-
-Build output goes to `media/` and is loaded by `ChatViewProvider`.
 
 ---
 
@@ -1086,14 +367,18 @@ vsce package
 
 ## Key Files for Common Tasks
 
-| Task | File(s) |
-|------|---------|
-| Modify chat UI | `src/views/chatView.ts` |
-| Add agent tools | `src/agent/toolRegistry.ts` |
-| Change API behavior | `src/services/ollamaClient.ts` |
-| Modify settings | `package.json` + `src/config/settings.ts` |
-| Change inline completions | `src/providers/completionProvider.ts` |
-| Modify agent prompts | `buildAgentSystemPrompt()` in chatView.ts |
-| Message storage (LanceDB) | `src/services/databaseService.ts` |
-| Session storage (SQLite) | `src/services/sessionIndexService.ts` |
-| DB maintenance actions | `src/views/settingsHandler.ts` |
+| Task | File(s) | Skill/Instruction |
+|------|---------|-------------------|
+| Add a new VS Code setting | `package.json` + `src/config/settings.ts` + `src/views/settingsHandler.ts` + webview | `add-new-setting` skill |
+| Add a new message type | `src/views/chatView.ts` + `src/webview/scripts/core/messageHandlers/` | `add-chat-message-type` skill |
+| Add a new agent tool | `src/agent/toolRegistry.ts` + `src/views/toolUIFormatter.ts` | `add-agent-tool` skill |
+| Modify chat UI | `src/webview/components/chat/` + `src/webview/scripts/core/` | `webview-ui` instructions |
+| Change API behavior | `src/services/ollamaClient.ts` | `extension-architecture` instructions |
+| Change inline completions | `src/providers/completionProvider.ts` | — |
+| Modify agent prompts | `buildAgentSystemPrompt()` in `src/services/agentChatExecutor.ts` | `agent-tools` instructions |
+| Message storage (LanceDB) | `src/services/databaseService.ts` | `database-rules` instructions |
+| Session storage (SQLite) | `src/services/sessionIndexService.ts` | `database-rules` instructions |
+| DB maintenance actions | `src/views/settingsHandler.ts` | `database-rules` instructions |
+| Terminal command execution | `src/services/terminalManager.ts` + `src/utils/commandSafety.ts` | `agent-tools` instructions |
+| File edit approval | `src/utils/fileSensitivity.ts` + `src/services/agentChatExecutor.ts` | `agent-tools` instructions |
+| Write/edit instructions | `.github/instructions/` + `.github/skills/` | `copilot-custom-instructions` skill |
