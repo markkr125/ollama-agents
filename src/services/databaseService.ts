@@ -17,7 +17,6 @@ type LanceDbTable = {
     toArray: () => Promise<any[]>;
   };
   add: (rows: Record<string, unknown>[]) => Promise<void>;
-  update: (options: { where: string; values: Record<string, unknown> }) => Promise<void>;
   search: (query: string) => {
     limit: (n: number) => any;
     toArray: () => Promise<any[]>;
@@ -52,8 +51,8 @@ const generateId = (): string => {
   }
 
   const bytes = Array.from({ length: 16 }, () => Math.floor(Math.random() * 256));
-  bytes[6] = (bytes[6] & 0x0f) | 0x40; // version 4
-  bytes[8] = (bytes[8] & 0x3f) | 0x80; // variant 10
+  bytes[6] = (bytes[6] & 0x0f) | 0x40;
+  bytes[8] = (bytes[8] & 0x3f) | 0x80;
   const hex = bytes.map(b => b.toString(16).padStart(2, '0')).join('');
   return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`;
 };
@@ -66,150 +65,30 @@ export interface SearchResult {
 }
 
 // ============================================================================
-// Embedding Queue - Background processing of embeddings
-// ============================================================================
-
-interface EmbeddingQueueItem {
-  messageId: string;
-  content: string;
-}
-
-class EmbeddingQueue {
-  private queue: EmbeddingQueueItem[] = [];
-  private processing = false;
-  private embedFn: (text: string) => Promise<number[]>;
-  private updateFn: (messageId: string, vector: number[]) => Promise<void>;
-
-  constructor(
-    embedFn: (text: string) => Promise<number[]>,
-    updateFn: (messageId: string, vector: number[]) => Promise<void>
-  ) {
-    this.embedFn = embedFn;
-    this.updateFn = updateFn;
-  }
-
-  enqueue(messageId: string, content: string): void {
-    this.queue.push({ messageId, content });
-    this.processNext();
-  }
-
-  private processNext(): void {
-    if (this.processing || this.queue.length === 0) {
-      return;
-    }
-
-    this.processing = true;
-    const item = this.queue.shift()!;
-
-    setImmediate(async () => {
-      try {
-        const vector = await this.embedFn(item.content);
-        await this.updateFn(item.messageId, vector);
-      } catch (error) {
-        console.error(`Failed to embed message ${item.messageId}:`, error);
-      } finally {
-        this.processing = false;
-        this.processNext();
-      }
-    });
-  }
-
-  get pendingCount(): number {
-    return this.queue.length + (this.processing ? 1 : 0);
-  }
-}
-
-// ============================================================================
 // Database Service
 // ============================================================================
 
+/**
+ * DatabaseService is a facade that:
+ * - Delegates all session & message CRUD to SessionIndexService (SQLite).
+ * - Manages LanceDB lazily for search (FTS + future vector + RRF reranking).
+ * - Provides fire-and-forget indexMessage() for search indexing.
+ */
 export class DatabaseService {
+  // LanceDB (search-only, lazy-loaded)
   private db: LanceDbConnection | null = null;
-  private legacySessionsTable: LanceDbTable | null = null;
   private messagesTable: LanceDbTable | null = null;
   private lancedb: LanceDbModule | null = null;
-  private embeddingQueue: EmbeddingQueue | null = null;
+  private lanceInitPromise: Promise<void> | null = null;
+  private lanceInitialized = false;
+
+  // SQLite (primary storage, eager-loaded)
+  private sessionIndex: SessionIndexService;
+
   private context: vscode.ExtensionContext;
   private ollamaClient: OllamaClient | null = null;
-  private sessionIndex: SessionIndexService;
-  private embeddingDimensions = 384; // sentence-transformers default
   private initialized = false;
-  private initializing: Promise<void> | null = null;
-  private rebuildingMessagesTable = false;
-  private lastTimestamp = 0; // Ensures strictly increasing timestamps
-  private lastTimestampSessionId: string | null = null; // Session for which lastTimestamp is valid
-
-  /**
-   * Get a strictly increasing timestamp to ensure correct message ordering.
-   * On first call for a session, queries DB for max timestamp to avoid conflicts.
-   */
-  private async getNextTimestamp(sessionId: string): Promise<number> {
-    // If switching sessions or first call, sync lastTimestamp from DB
-    if (this.lastTimestampSessionId !== sessionId) {
-      this.lastTimestamp = await this.getMaxTimestampForSession(sessionId);
-      this.lastTimestampSessionId = sessionId;
-    }
-
-    const now = Date.now();
-    const timestamp = now <= this.lastTimestamp ? this.lastTimestamp + 1 : now;
-    this.lastTimestamp = timestamp;
-    return timestamp;
-  }
-
-  /**
-   * Get the max timestamp from existing messages in a session.
-   */
-  private async getMaxTimestampForSession(sessionId: string): Promise<number> {
-    try {
-      const table = await this.getMessagesTable();
-      const escapedSessionId = this.escapeSingleQuotes(sessionId);
-      const results = await table
-        .query()
-        .where(`session_id = '${escapedSessionId}'`)
-        .toArray();
-      
-      if (results.length === 0) {
-        return 0;
-      }
-      
-      let max = 0;
-      for (const row of results) {
-        const ts = (row as any).timestamp;
-        if (typeof ts === 'number' && ts > max) {
-          max = ts;
-        }
-      }
-      return max;
-    } catch {
-      return 0;
-    }
-  }
-
-  private escapeSingleQuotes(value: string): string {
-    return value.replace(/'/g, "''");
-  }
-
-  private async getMessagesTable(): Promise<LanceDbTable> {
-    await this.ensureReady();
-
-    if (!this.db) {
-      throw new Error('Database not connected');
-    }
-
-    // Return cached table if available
-    if (this.messagesTable) {
-      return this.messagesTable;
-    }
-
-    const tableNames = await this.db.tableNames();
-    if (!tableNames.includes('messages')) {
-      await this.createMessagesTable();
-    } else {
-      this.messagesTable = await this.db.openTable('messages');
-    }
-
-    return this.messagesTable!;
-  }
+  private embeddingDimensions = 384;
 
   constructor(context: vscode.ExtensionContext) {
     this.context = context;
@@ -221,14 +100,34 @@ export class DatabaseService {
   // --------------------------------------------------------------------------
 
   async initialize(ollamaClient?: OllamaClient): Promise<void> {
-    if (this.initialized) {
-      return;
-    }
+    if (this.initialized) return;
 
     this.ollamaClient = ollamaClient || null;
 
+    // Eagerly init SQLite (fast, native)
     await this.sessionIndex.initialize();
 
+    // Kick off LanceDB init in background (lazy — don't block activation)
+    this.lanceInitPromise = this.initLanceDb().catch(err => {
+      console.warn('[DatabaseService] LanceDB init failed (search will be unavailable):', err);
+    });
+
+    this.initialized = true;
+    console.log('DatabaseService initialized (SQLite ready, LanceDB loading in background)');
+  }
+
+  /**
+   * Lazy LanceDB initialization — only blocks when search is first used.
+   */
+  private async ensureLanceReady(): Promise<boolean> {
+    if (this.lanceInitialized) return true;
+    if (this.lanceInitPromise) {
+      await this.lanceInitPromise;
+    }
+    return this.lanceInitialized;
+  }
+
+  private async initLanceDb(): Promise<void> {
     try {
       if (!cachedLanceDbModule) {
         const mod = await import('@lancedb/lancedb');
@@ -239,121 +138,35 @@ export class DatabaseService {
 
       const storageUri = this.context.storageUri ?? this.context.globalStorageUri;
       const dbPath = vscode.Uri.joinPath(storageUri, 'ollama-copilot.lance').fsPath;
-
-      // Ensure directory exists
       await vscode.workspace.fs.createDirectory(storageUri);
 
       console.log(`Initializing LanceDB at: ${dbPath}`);
       this.db = await this.lancedb.connect(dbPath);
 
-      // Initialize tables
-      await this.initializeTables();
+      // Open or create messages search table
+      const tableNames = await this.db.tableNames();
+      if (tableNames.includes('messages')) {
+        this.messagesTable = await this.db.openTable('messages');
+      } else {
+        await this.createLanceSearchTable();
+      }
+
+      // Clean up legacy sessions table if it exists
+      if (tableNames.includes('sessions')) {
+        try { await this.db.dropTable('sessions'); } catch { /* ignore */ }
+      }
+
+      this.lanceInitialized = true;
+      console.log('LanceDB initialized (search ready)');
     } catch (error) {
-      console.error('Failed to initialize LanceDB. Ensure dependencies are installed.', error);
-      void vscode.window.showErrorMessage(
-        'Ollama Copilot: LanceDB failed to load. Ensure @lancedb/lancedb is installed and available.'
-      );
+      console.error('Failed to initialize LanceDB:', error);
       throw error;
     }
-
-    // Initialize embedding queue
-    this.embeddingQueue = new EmbeddingQueue(
-      (text) => this.generateEmbedding(text),
-      (messageId, vector) => this.updateMessageVector(messageId, vector)
-    );
-
-    this.initialized = true;
-    console.log('DatabaseService initialized successfully');
   }
 
-  private async ensureReady(): Promise<void> {
-    if (this.initialized) {
-      return;
-    }
+  private async createLanceSearchTable(): Promise<void> {
+    if (!this.db || !this.lancedb) return;
 
-    if (!this.initializing) {
-      this.initializing = this.initialize(this.ollamaClient ?? undefined)
-        .finally(() => {
-          this.initializing = null;
-        });
-    }
-
-    await this.initializing;
-  }
-
-  private async initializeTables(): Promise<void> {
-    if (!this.db || !this.lancedb) {
-      throw new Error('Database not connected');
-    }
-    try {
-      await this.setupTables();
-    } catch (error) {
-      // Log the error but DO NOT wipe the database - that destroys user data
-      console.error('Error during table setup (NOT wiping database):', error);
-      // Try to at least open existing tables
-      try {
-        const tableNames = await this.db.tableNames();
-        if (tableNames.includes('messages')) {
-          this.messagesTable = await this.db.openTable('messages');
-        }
-      } catch (e) {
-        console.error('Failed to recover tables:', e);
-      }
-    }
-  }
-
-  private async setupTables(): Promise<void> {
-    if (!this.db || !this.lancedb) {
-      throw new Error('Database not connected');
-    }
-
-    const tableNames = await this.db.tableNames();
-
-    // Messages table with vector column
-    if (tableNames.includes('messages')) {
-      this.messagesTable = await this.db.openTable('messages');
-      // Skip destructive validation - just use the table as-is
-      // Vector schema issues will be handled gracefully in updateMessageVector
-    }
-
-    if (!this.messagesTable) {
-      await this.createMessagesTable();
-    }
-
-    await this.migrateLegacySessions(tableNames);
-  }
-
-  private async recreateTables(): Promise<void> {
-    if (!this.db || !this.lancedb) {
-      throw new Error('Database not connected');
-    }
-
-    try {
-      await this.db.dropTable('messages');
-    } catch (error) {
-      console.debug('Drop messages table skipped:', error);
-    }
-
-    try {
-      await this.db.dropTable('sessions');
-    } catch (error) {
-      console.debug('Drop sessions table skipped:', error);
-    }
-
-    this.legacySessionsTable = null;
-    this.messagesTable = null;
-
-    // Recreate messages table from scratch
-    await this.createMessagesTable();
-  }
-
-  private async createMessagesTable(): Promise<void> {
-    if (!this.db || !this.lancedb) {
-      throw new Error('Database not connected');
-    }
-
-    // Create with initial schema including vector
-    // Use a non-integer float to ensure Float64 type in LanceDB
     const zeroVector = new Array(this.embeddingDimensions).fill(0.0);
     zeroVector[0] = 0.5;
     this.messagesTable = await this.db.createTable('messages', [
@@ -362,177 +175,24 @@ export class DatabaseService {
         session_id: '',
         role: 'user',
         content: '',
-        model: '',
-        tool_name: '',
-        tool_input: '',
-        tool_output: '',
-        progress_title: '',
         timestamp: 0,
         vector: zeroVector
       }
     ]);
-    // Remove schema row
     await this.messagesTable.delete('id = "__schema__"');
-
-    // Create FTS index on content
     await this.messagesTable.createIndex('content', {
       config: this.lancedb.Index.fts()
     });
   }
 
-  private async migrateLegacySessions(tableNames?: string[]): Promise<void> {
-    if (!this.db) {
-      return;
+  private ensureReady(): void {
+    if (!this.initialized) {
+      throw new Error('DatabaseService not initialized');
     }
-
-    const names = tableNames || await this.db.tableNames();
-    if (!names.includes('sessions')) {
-      return;
-    }
-
-    try {
-      this.legacySessionsTable = await this.db.openTable('sessions');
-      const results = await this.legacySessionsTable.query().toArray();
-      const sessions = (results as unknown as SessionRecord[])
-        .filter(session => session.id && session.id !== '__schema__');
-
-      for (const session of sessions) {
-        await this.sessionIndex.upsertSession({
-          ...session,
-          status: session.status ?? 'completed'
-        });
-      }
-
-      await this.db.dropTable('sessions');
-      this.legacySessionsTable = null;
-    } catch (error) {
-      console.error('Failed to migrate legacy sessions table:', error);
-    }
-  }
-
-  private async validateMessageVectorSchema(): Promise<void> {
-    if (!this.messagesTable) {
-      return;
-    }
-
-    const testId = `__schema_check__${Date.now()}`;
-    const zeroVector = new Array(this.embeddingDimensions).fill(0.0);
-    zeroVector[0] = 0.5;
-
-    await this.messagesTable.add([
-      {
-        id: testId,
-        session_id: '__schema__',
-        role: 'user',
-        content: '',
-        model: '',
-        tool_name: '',
-        tool_input: '',
-        tool_output: '',
-        progress_title: '',
-        timestamp: 0,
-        vector: zeroVector
-      }
-    ]);
-
-    await this.messagesTable.delete(`id = "${testId}"`);
   }
 
   // --------------------------------------------------------------------------
-  // Embedding
-  // --------------------------------------------------------------------------
-
-  private async generateEmbedding(text: string): Promise<number[]> {
-    const config = vscode.workspace.getConfiguration('ollamaCopilot');
-    const provider = config.get<string>('embedding.provider', 'builtin');
-
-    if (provider === 'ollama' && this.ollamaClient) {
-      return this.generateOllamaEmbedding(text);
-    }
-
-    return this.generateBuiltinEmbedding(text);
-  }
-
-  private async generateOllamaEmbedding(text: string): Promise<number[]> {
-    if (!this.ollamaClient) {
-      throw new Error('Ollama client not available');
-    }
-
-    const config = vscode.workspace.getConfiguration('ollamaCopilot');
-    const model = config.get<string>('embedding.model', 'nomic-embed-text');
-    const baseUrl = config.get<string>('baseUrl', 'http://localhost:11434');
-
-    const response = await fetch(`${baseUrl}/api/embeddings`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ model, prompt: text })
-    });
-
-    if (!response.ok) {
-      throw new Error(`Ollama embedding failed: ${response.statusText}`);
-    }
-
-    const data = await response.json() as { embedding: number[] };
-    return data.embedding.map(v => Number(v));
-  }
-
-  private async generateBuiltinEmbedding(text: string): Promise<number[]> {
-    // Use LanceDB's built-in embedding via the embedding registry
-    // For now, return a simple hash-based vector as placeholder
-    // TODO: Integrate with LanceDB's sentence-transformers embedding
-    // Use 0.0 to ensure Float64 type
-    const vector = new Array(this.embeddingDimensions).fill(0.0);
-    
-    // Simple hash-based embedding (placeholder until proper integration)
-    const words = text.toLowerCase().split(/\s+/);
-    for (let i = 0; i < words.length; i++) {
-      const word = words[i];
-      for (let j = 0; j < word.length; j++) {
-        const idx = (word.charCodeAt(j) * (i + 1) * (j + 1)) % this.embeddingDimensions;
-        vector[idx] += 1 / (words.length * word.length);
-      }
-    }
-
-    // Normalize
-    const magnitude = Math.sqrt(vector.reduce((sum, v) => sum + v * v, 0));
-    if (magnitude > 0) {
-      for (let i = 0; i < vector.length; i++) {
-        vector[i] /= magnitude;
-      }
-    }
-
-    return vector;
-  }
-
-  private async updateMessageVector(messageId: string, vector: number[]): Promise<void> {
-    if (!this.messagesTable) {
-      return;
-    }
-
-    try {
-      await this.messagesTable.update({
-        where: `id = "${messageId}"`,
-        values: { vector: Array.from(vector, v => Number(v)) }
-      });
-    } catch (error: any) {
-      const message = error?.message || String(error);
-      if (message.includes('Array expressions must have a consistent datatype')) {
-        await this.recoverMessagesTableForVectorMismatch();
-        return;
-      }
-      throw error;
-    }
-  }
-
-  private async recoverMessagesTableForVectorMismatch(): Promise<void> {
-    // DISABLED: This function was dropping the messages table and could lose data.
-    // Vector mismatches are not critical - just log and skip embedding updates.
-    console.warn('Vector mismatch detected - skipping embedding update (data preserved)');
-    return;
-  }
-
-  // --------------------------------------------------------------------------
-  // Session CRUD
+  // Session CRUD (delegates to SQLite)
   // --------------------------------------------------------------------------
 
   async createSession(
@@ -570,20 +230,12 @@ export class DatabaseService {
   }
 
   async deleteSession(id: string): Promise<void> {
-    // Delete the session from SQLite
+    // SQLite CASCADE handles messages deletion
     await this.sessionIndex.deleteSession(id);
 
-    // Delete all messages for this session (best-effort)
-    const table = this.messagesTable || (this.db ? await this.db.openTable('messages').catch(() => null) : null);
-    this.messagesTable = table;
-    if (!table) {
-      return;
-    }
-
-    try {
-      await table.delete(`session_id = "${id}"`);
-    } catch (error) {
-      console.error('Failed to delete session messages:', error);
+    // Best-effort cleanup LanceDB search index
+    if (this.messagesTable) {
+      try { await this.messagesTable.delete(`session_id = "${id}"`); } catch { /* ignore */ }
     }
   }
 
@@ -596,7 +248,7 @@ export class DatabaseService {
   }
 
   // --------------------------------------------------------------------------
-  // Message CRUD
+  // Message CRUD (delegates to SQLite, fire-and-forget LanceDB indexing)
   // --------------------------------------------------------------------------
 
   async addMessage(
@@ -611,6 +263,8 @@ export class DatabaseService {
       progressTitle?: string;
     } = {}
   ): Promise<MessageRecord> {
+    this.ensureReady();
+
     const message: MessageRecord = {
       id: generateId(),
       session_id: sessionId,
@@ -621,136 +275,62 @@ export class DatabaseService {
       tool_input: options.toolInput,
       tool_output: options.toolOutput,
       progress_title: options.progressTitle,
-      timestamp: await this.getNextTimestamp(sessionId),
-      vector: new Array(this.embeddingDimensions).fill(0.0)
+      timestamp: await this.sessionIndex.getNextTimestamp(sessionId)
     };
 
-    try {
-      const table = await this.getMessagesTable();
-      await table.add([message as unknown as Record<string, unknown>]);
-    } catch (error: any) {
-      const errorMsg = error?.message || String(error);
-      console.error(`[addMessage] ERROR: ${errorMsg}`);
-      
-      // Detect LanceDB corruption (missing files only - NOT schema mismatch)
-      if (errorMsg.includes('Not found:') && errorMsg.includes('.lance')) {
-        console.warn('[addMessage] LanceDB file corruption detected - recreating messages table');
-        await this.handleCorruptedMessagesTable();
-        
-        // Retry adding message after recovery
-        const table = await this.getMessagesTable();
-        await table.add([message as unknown as Record<string, unknown>]);
-      } else {
-        throw error;
-      }
-    }
+    // Primary storage: SQLite (indexed, fast)
+    await this.sessionIndex.addMessage(message);
 
     // Update session's updated_at
-    await this.updateSession(sessionId, {});
+    await this.sessionIndex.updateSession(sessionId, {});
+
+    // Fire-and-forget: index in LanceDB for search
+    this.indexMessageForSearch(message).catch(err =>
+      console.warn('[indexMessage] LanceDB index failed (non-fatal):', err)
+    );
 
     return message;
   }
 
   async getSessionMessages(sessionId: string): Promise<MessageRecord[]> {
-    try {
-      const table = await this.getMessagesTable();
-      const escapedSessionId = this.escapeSingleQuotes(sessionId);
-      
-      const results = await table
-        .query()
-        .where(`session_id = '${escapedSessionId}'`)
-        .toArray();
-
-      return (results as unknown as MessageRecord[])
-        .sort((a, b) => a.timestamp - b.timestamp);
-    } catch (error: any) {
-      const errorMsg = error?.message || String(error);
-      console.error(`[getSessionMessages] ERROR: ${errorMsg}`);
-      
-      // Detect LanceDB corruption (missing files only - NOT schema mismatch)
-      if (errorMsg.includes('Not found:') && errorMsg.includes('.lance')) {
-        console.warn('[getSessionMessages] LanceDB file corruption detected - recreating messages table');
-        await this.handleCorruptedMessagesTable();
-        return []; // Return empty after recovery
-      }
-      
-      throw error;
-    }
+    this.ensureReady();
+    return this.sessionIndex.getMessagesBySession(sessionId);
   }
 
   /**
-   * Handle corrupted messages table by deleting and recreating it.
-   * This loses existing messages but allows the extension to function.
+   * Fire-and-forget write to LanceDB for search indexing.
+   * Non-critical — if this fails, messages are still safe in SQLite.
    */
-  private async handleCorruptedMessagesTable(): Promise<void> {
-    if (!this.db) {
-      return;
-    }
+  private async indexMessageForSearch(message: MessageRecord): Promise<void> {
+    const ready = await this.ensureLanceReady();
+    if (!ready || !this.messagesTable) return;
+
+    // Only index user/assistant messages with actual content
+    if (message.role === 'tool' || !message.content?.trim()) return;
 
     try {
-      // Drop the corrupted table
-      const tableNames = await this.db.tableNames();
-      if (tableNames.includes('messages')) {
-        await this.db.dropTable('messages');
-        console.log('[handleCorruptedMessagesTable] Dropped corrupted messages table');
-      }
-      
-      this.messagesTable = null;
-      
-      // Recreate it fresh
-      await this.createMessagesTable();
-      console.log('[handleCorruptedMessagesTable] Created fresh messages table');
-    } catch (error: any) {
-      console.error('[handleCorruptedMessagesTable] Failed to recover:', error?.message || error);
+      const zeroVector = new Array(this.embeddingDimensions).fill(0.0);
+      await this.messagesTable.add([{
+        id: message.id,
+        session_id: message.session_id,
+        role: message.role,
+        content: message.content,
+        timestamp: message.timestamp,
+        vector: zeroVector
+      }]);
+    } catch (error) {
+      // Non-fatal — search index can be rebuilt from SQLite
+      console.warn('[indexMessageForSearch] Failed:', error);
     }
-  }
-
-  /**
-   * Manually recreate the messages table and clear all sessions.
-   * This is a destructive operation that deletes all chat history.
-   * Called from Advanced Settings UI.
-   */
-  async recreateMessagesTable(): Promise<void> {
-    if (!this.db) {
-      throw new Error('Database not connected');
-    }
-
-    console.log('[recreateMessagesTable] Starting manual table recreation...');
-    
-    // Drop existing messages table
-    const tableNames = await this.db.tableNames();
-    if (tableNames.includes('messages')) {
-      await this.db.dropTable('messages');
-      console.log('[recreateMessagesTable] Dropped existing messages table');
-    }
-    
-    this.messagesTable = null;
-    
-    // Create fresh messages table
-    await this.createMessagesTable();
-    console.log('[recreateMessagesTable] Created fresh messages table');
-
-    // Also clear all sessions from SQLite
-    await this.sessionIndex.clearAllSessions();
-    console.log('[recreateMessagesTable] Cleared all sessions');
-  }
-
-  async deleteMessage(id: string): Promise<void> {
-    if (!this.messagesTable) {
-      return;
-    }
-
-    await this.messagesTable.delete(`id = "${id}"`);
   }
 
   // --------------------------------------------------------------------------
-  // Search
+  // Search (LanceDB)
   // --------------------------------------------------------------------------
 
   async searchByKeyword(query: string, limit = 20): Promise<SearchResult[]> {
-    if (!this.messagesTable) {
-      return [];
-    }
+    const ready = await this.ensureLanceReady();
+    if (!ready || !this.messagesTable) return [];
 
     try {
       const results = await this.messagesTable
@@ -766,13 +346,12 @@ export class DatabaseService {
   }
 
   async searchSemantic(query: string, limit = 20): Promise<SearchResult[]> {
-    if (!this.messagesTable) {
-      return [];
-    }
+    const ready = await this.ensureLanceReady();
+    if (!ready || !this.messagesTable) return [];
 
     try {
-      const queryVector = await this.generateEmbedding(query);
-      
+      const queryVector = await this.generateBuiltinEmbedding(query);
+
       const results = await this.messagesTable
         .vectorSearch(queryVector)
         .limit(limit)
@@ -786,30 +365,29 @@ export class DatabaseService {
   }
 
   async searchHybrid(query: string, limit = 20): Promise<SearchResult[]> {
-    if (!this.messagesTable) {
+    const ready = await this.ensureLanceReady();
+    if (!ready || !this.messagesTable) {
+      // Fallback: if LanceDB isn't ready, return empty results
       return [];
     }
 
     try {
-      // Perform both searches
       const [keywordResults, semanticResults] = await Promise.all([
         this.searchByKeyword(query, limit),
         this.searchSemantic(query, limit)
       ]);
 
       // RRF (Reciprocal Rank Fusion) reranking
-      const k = 60; // RRF constant
+      const k = 60;
       const scores = new Map<string, number>();
       const resultMap = new Map<string, SearchResult>();
 
-      // Score keyword results
       keywordResults.forEach((result, rank) => {
         const score = 1 / (k + rank + 1);
         scores.set(result.message.id, (scores.get(result.message.id) || 0) + score);
         resultMap.set(result.message.id, result);
       });
 
-      // Score semantic results
       semanticResults.forEach((result, rank) => {
         const score = 1 / (k + rank + 1);
         scores.set(result.message.id, (scores.get(result.message.id) || 0) + score);
@@ -818,21 +396,18 @@ export class DatabaseService {
         }
       });
 
-      // Sort by combined score
       const rankedIds = Array.from(scores.entries())
         .sort((a, b) => b[1] - a[1])
         .slice(0, limit)
         .map(([id]) => id);
 
-      return rankedIds
-        .map(id => {
-          const result = resultMap.get(id)!;
-          result.score = scores.get(id)!;
-          return result;
-        });
+      return rankedIds.map(id => {
+        const result = resultMap.get(id)!;
+        result.score = scores.get(id)!;
+        return result;
+      });
     } catch (error) {
       console.error('Hybrid search failed:', error);
-      // Fallback to keyword search only
       return this.searchByKeyword(query, limit);
     }
   }
@@ -842,33 +417,41 @@ export class DatabaseService {
   // --------------------------------------------------------------------------
 
   async runMaintenance(): Promise<{ deletedSessions: number; deletedMessages: number }> {
-    if (!this.messagesTable) {
-      return { deletedSessions: 0, deletedMessages: 0 };
-    }
-
-    const sessions = await this.sessionIndex.listAllSessions();
-    const sessionIdSet = new Set(sessions.map(session => session.id));
-
-    const messages = await this.messagesTable.query().toArray();
-    const messageRecords = messages as unknown as MessageRecord[];
-
-    let deletedMessages = 0;
-
-    for (const message of messageRecords) {
-      const sessionId = message.session_id;
-      if (typeof sessionId !== 'string' || !sessionId) {
-        continue;
-      }
-
-      if (!sessionIdSet.has(sessionId)) {
-        await this.messagesTable.delete(`id = "${message.id}"`);
-        deletedMessages++;
-      }
-    }
-
-    // Never auto-delete sessions. A session with zero messages is still valid user data.
+    const deletedMessages = await this.sessionIndex.cleanupOrphanedMessages();
     return { deletedSessions: 0, deletedMessages };
   }
+
+  /**
+   * Manually recreate messages and clear all sessions.
+   * Destructive — called from Advanced Settings.
+   */
+  async recreateMessagesTable(): Promise<void> {
+    // 1. Recreate SQLite messages table
+    await this.sessionIndex.recreateMessagesTable();
+
+    // 2. Clear all sessions from SQLite
+    await this.sessionIndex.clearAllSessions();
+
+    // 3. Best-effort recreate LanceDB search table
+    if (this.db && this.lancedb) {
+      try {
+        const tableNames = await this.db.tableNames();
+        if (tableNames.includes('messages')) {
+          await this.db.dropTable('messages');
+        }
+        this.messagesTable = null;
+        await this.createLanceSearchTable();
+      } catch (err) {
+        console.warn('[recreateMessagesTable] LanceDB cleanup failed (non-fatal):', err);
+      }
+    }
+
+    console.log('[recreateMessagesTable] Done — all data cleared');
+  }
+
+  // --------------------------------------------------------------------------
+  // Helpers
+  // --------------------------------------------------------------------------
 
   private async enrichSearchResults(messages: MessageRecord[]): Promise<SearchResult[]> {
     const results: SearchResult[] = [];
@@ -897,10 +480,27 @@ export class DatabaseService {
   }
 
   private createSnippet(content: string, maxLength = 150): string {
-    if (content.length <= maxLength) {
-      return content;
-    }
+    if (content.length <= maxLength) return content;
     return content.substring(0, maxLength - 3) + '...';
+  }
+
+  private async generateBuiltinEmbedding(text: string): Promise<number[]> {
+    const vector = new Array(this.embeddingDimensions).fill(0.0);
+    const words = text.toLowerCase().split(/\s+/);
+    for (let i = 0; i < words.length; i++) {
+      const word = words[i];
+      for (let j = 0; j < word.length; j++) {
+        const idx = (word.charCodeAt(j) * (i + 1) * (j + 1)) % this.embeddingDimensions;
+        vector[idx] += 1 / (words.length * word.length);
+      }
+    }
+    const magnitude = Math.sqrt(vector.reduce((sum: number, v: number) => sum + v * v, 0));
+    if (magnitude > 0) {
+      for (let i = 0; i < vector.length; i++) {
+        vector[i] /= magnitude;
+      }
+    }
+    return vector;
   }
 
   // --------------------------------------------------------------------------
@@ -908,11 +508,18 @@ export class DatabaseService {
   // --------------------------------------------------------------------------
 
   async close(): Promise<void> {
-    // LanceDB connections don't need explicit close in JS
+    // Wait for any in-flight LanceDB background init to settle before tearing down.
+    // Without this, a second instance opening the same directory can hit corrupt state.
+    if (this.lanceInitPromise) {
+      await this.lanceInitPromise.catch(() => { /* already logged */ });
+      this.lanceInitPromise = null;
+    }
+
+    await this.sessionIndex.close();
     this.db = null;
-    this.legacySessionsTable = null;
     this.messagesTable = null;
     this.lancedb = null;
+    this.lanceInitialized = false;
     this.initialized = false;
   }
 

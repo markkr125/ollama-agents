@@ -109,7 +109,10 @@ src/
 │   │   ├── ChatPage.vue
 │   │   ├── HeaderBar.vue
 │   │   ├── SessionsPanel.vue
-│   │   └── SettingsPage.vue
+│   │   ├── SettingsPage.vue
+│   │   ├── CommandApproval.vue
+│   │   ├── FileEditApproval.vue
+│   │   └── MarkdownBlock.vue  # Isolated markdown rendering (prevents re-render cascade)
 │   ├── scripts/           # Webview app logic split by concern
 │   │   ├── app/
 │   │   │   └── App.ts      # Entry/wiring for message handling
@@ -200,6 +203,11 @@ The UI is built with Vue via Vite and emitted to `media/index.html`, `media/chat
   - `AgentChatExecutor` (agent loop + tools)
 4. Responses are posted via a `WebviewMessageEmitter` interface
 5. Frontend updates UI with `streamChunk`, `showToolAction`, etc.
+
+**Performance:**
+- Chat mode streaming is throttled at 32ms (~30fps) to reduce IPC overhead
+- `MarkdownBlock.vue` components prevent full timeline re-renders on each chunk
+- Session list updates are debounced and only sent when needed
 
 ### 3. ToolRegistry (`src/agent/toolRegistry.ts`)
 
@@ -495,6 +503,19 @@ When implementing "clear all data" functionality:
    ```
 
 All three steps are required - clearing databases without refreshing the UI leaves stale sessions visible.
+
+### DatabaseService.close() and LanceDB Background Init
+
+**Critical**: `close()` must await the background `lanceInitPromise` before nulling out state. Without this, closing a `DatabaseService` instance while LanceDB is still initializing in the background can leave corrupt/partial files that cause subsequent instances to fail.
+
+```typescript
+if (this.lanceInitPromise) {
+  await this.lanceInitPromise.catch(() => { /* already logged */ });
+  this.lanceInitPromise = null;
+}
+```
+
+This prevents race conditions in tests where multiple instances share the same storage directory.
 
 ### Webview Dialog Restrictions
 
@@ -796,6 +817,11 @@ The following test suites exist in `webview/tests/`:
 **`CommandApproval.test.ts`** (2 tests) - Tests Vue component:
 - Editable command input only when status is `pending`
 
+**`MarkdownBlock.test.ts`** (4 tests) - Tests Vue component:
+- Renders markdown content via computed property
+- Updates when content prop changes
+- Caching behavior prevents unnecessary re-renders
+
 #### Existing test coverage (Extension Host)
 
 The following test suites exist in `src/test/suite/`:
@@ -817,9 +843,18 @@ The following test suites exist in `src/test/suite/`:
 - get_diagnostics: accepts multiple path argument names
 - Tool registration: verifies all expected tools are registered
 
-**`services/databaseService.test.ts`** - Tests database operations:
-- Message timestamps are strictly increasing
-- Maintenance never deletes sessions
+**`services/sessionIndexService.test.ts`** (8 tests) - Tests SQLite session/message CRUD:
+- Session creation/update/listing with pagination
+- Message CRUD with tool fields (tool_name, tool_input, tool_output)
+- getNextTimestamp returns strictly increasing values
+- Foreign key constraint prevents orphan messages
+- CASCADE delete: deleteSession removes messages
+- clearAllSessions removes all sessions and messages
+
+**`services/databaseService.test.ts`** (3 tests) - Tests database facade:
+- Message timestamps are strictly increasing and persist across restart
+- Maintenance returns zero orphans (FK prevents them)
+- deleteSession removes session and cascades to messages
 
 **`utils/commandSafety.test.ts`** - Tests terminal command safety analysis:
 - Dangerous command detection (rm -rf, sudo, etc.)

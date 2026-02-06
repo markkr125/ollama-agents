@@ -33,7 +33,6 @@
         :skip-file-edit="skipFileEdit"
         :open-file-diff="openFileDiff"
         :is-generating="isGenerating"
-        :format-markdown="formatMarkdown"
         :toggle-progress="toggleProgress"
         :action-status-class="actionStatusClass"
         :add-context="addContext"
@@ -146,7 +145,6 @@ import {
     currentPage,
     dbMaintenanceStatus,
     deleteSession,
-    formatMarkdown,
     formatTime,
     handleEnter,
     handleSearchInput,

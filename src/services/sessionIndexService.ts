@@ -1,15 +1,78 @@
 import * as vscode from 'vscode';
-import { ChatSessionStatus, SessionRecord, SessionsPage } from '../types/session';
+import { ChatSessionStatus, MessageRecord, SessionRecord, SessionsPage } from '../types/session';
+
+// ---------------------------------------------------------------------------
+// Promise wrappers for @vscode/sqlite3 (callback-based API)
+// ---------------------------------------------------------------------------
+
+type SqliteDb = {
+  run(sql: string, params?: any[], callback?: (err: Error | null) => void): void;
+  all(sql: string, params?: any[], callback?: (err: Error | null, rows: any[]) => void): void;
+  get(sql: string, params?: any[], callback?: (err: Error | null, row: any) => void): void;
+  exec(sql: string, callback?: (err: Error | null) => void): void;
+  close(callback?: (err: Error | null) => void): void;
+};
+
+function dbRun(db: SqliteDb, sql: string, params: any[] = []): Promise<void> {
+  return new Promise((resolve, reject) => {
+    db.run(sql, params, (err: Error | null) => {
+      if (err) reject(err);
+      else resolve();
+    });
+  });
+}
+
+function dbAll(db: SqliteDb, sql: string, params: any[] = []): Promise<any[]> {
+  return new Promise((resolve, reject) => {
+    db.all(sql, params, (err: Error | null, rows: any[]) => {
+      if (err) reject(err);
+      else resolve(rows ?? []);
+    });
+  });
+}
+
+function dbGet(db: SqliteDb, sql: string, params: any[] = []): Promise<any | undefined> {
+  return new Promise((resolve, reject) => {
+    db.get(sql, params, (err: Error | null, row: any) => {
+      if (err) reject(err);
+      else resolve(row);
+    });
+  });
+}
+
+function dbExec(db: SqliteDb, sql: string): Promise<void> {
+  return new Promise((resolve, reject) => {
+    db.exec(sql, (err: Error | null) => {
+      if (err) reject(err);
+      else resolve();
+    });
+  });
+}
+
+function dbClose(db: SqliteDb): Promise<void> {
+  return new Promise((resolve, reject) => {
+    db.close((err: Error | null) => {
+      if (err) reject(err);
+      else resolve();
+    });
+  });
+}
+
+// ---------------------------------------------------------------------------
+// SessionIndexService — native SQLite via @vscode/sqlite3
+// ---------------------------------------------------------------------------
 
 export class SessionIndexService {
-  private db: any | null = null;
+  private db: SqliteDb | null = null;
   private initialized = false;
-  private dbUri: vscode.Uri;
   private storageUri: vscode.Uri;
+
+  // In-memory cache for getNextTimestamp fast-path
+  private lastTimestamp = 0;
+  private lastTimestampSessionId: string | null = null;
 
   constructor(private readonly context: vscode.ExtensionContext) {
     this.storageUri = this.context.storageUri ?? this.context.globalStorageUri;
-    this.dbUri = vscode.Uri.joinPath(this.storageUri, 'sessions.sqlite');
   }
 
   async initialize(): Promise<void> {
@@ -17,27 +80,23 @@ export class SessionIndexService {
 
     await vscode.workspace.fs.createDirectory(this.storageUri);
 
-    // Use runtime require to avoid bundling issues
+    const dbPath = vscode.Uri.joinPath(this.storageUri, 'sessions.sqlite').fsPath;
+
     // eslint-disable-next-line @typescript-eslint/no-var-requires
-    const initSqlJs = require('sql.js');
-    const SQL = await initSqlJs({
-      locateFile: (file: string) =>
-        vscode.Uri.joinPath(this.context.extensionUri, 'node_modules', 'sql.js', 'dist', file).fsPath
+    const sqlite3 = require('@vscode/sqlite3');
+    this.db = await new Promise<SqliteDb>((resolve, reject) => {
+      const db = new sqlite3.Database(dbPath, (err: Error | null) => {
+        if (err) reject(err);
+        else resolve(db as SqliteDb);
+      });
     });
 
-    let dbData: Uint8Array | undefined;
-    try {
-      const data = await vscode.workspace.fs.readFile(this.dbUri);
-      if (data && data.length > 0) {
-        dbData = data;
-      }
-    } catch {
-      // No existing DB
-    }
+    // Enable WAL mode for better concurrent read perf + incremental writes
+    await dbExec(this.db, 'PRAGMA journal_mode=WAL;');
+    await dbExec(this.db, 'PRAGMA foreign_keys=ON;');
 
-    this.db = new SQL.Database(dbData);
-
-    this.db.run(`
+    // ---- Sessions table ----
+    await dbExec(this.db, `
       CREATE TABLE IF NOT EXISTS sessions (
         id TEXT PRIMARY KEY,
         title TEXT NOT NULL,
@@ -51,20 +110,44 @@ export class SessionIndexService {
         updated_at INTEGER NOT NULL
       );
     `);
-
-    this.db.run(`
+    await dbExec(this.db, `
       CREATE INDEX IF NOT EXISTS idx_sessions_updated
       ON sessions(updated_at DESC);
     `);
 
-    await this.ensureStatusColumn();
-    await this.ensureAutoApproveColumn();
-    await this.ensureAutoApproveSensitiveEditsColumn();
-    await this.ensureSensitiveFilePatternsColumn();
+    // ---- Messages table ----
+    await dbExec(this.db, `
+      CREATE TABLE IF NOT EXISTS messages (
+        id TEXT PRIMARY KEY,
+        session_id TEXT NOT NULL,
+        role TEXT NOT NULL,
+        content TEXT NOT NULL DEFAULT '',
+        model TEXT,
+        tool_name TEXT,
+        tool_input TEXT,
+        tool_output TEXT,
+        progress_title TEXT,
+        timestamp INTEGER NOT NULL,
+        FOREIGN KEY (session_id) REFERENCES sessions(id) ON DELETE CASCADE
+      );
+    `);
+    await dbExec(this.db, `
+      CREATE INDEX IF NOT EXISTS idx_messages_session_ts
+      ON messages(session_id, timestamp);
+    `);
+
+    // Schema migrations (idempotent column additions)
+    await this.ensureColumn('sessions', 'status', "TEXT DEFAULT 'completed'");
+    await this.ensureColumn('sessions', 'auto_approve_commands', 'INTEGER NOT NULL DEFAULT 0');
+    await this.ensureColumn('sessions', 'auto_approve_sensitive_edits', 'INTEGER NOT NULL DEFAULT 0');
+    await this.ensureColumn('sessions', 'sensitive_file_patterns', 'TEXT DEFAULT NULL');
 
     this.initialized = true;
-    await this.persist();
   }
+
+  // ---------------------------------------------------------------------------
+  // Helpers
+  // ---------------------------------------------------------------------------
 
   private ensureReady(): void {
     if (!this.initialized || !this.db) {
@@ -72,69 +155,36 @@ export class SessionIndexService {
     }
   }
 
-  private async persist(): Promise<void> {
-    if (!this.db) return;
-    const data = this.db.export();
-    await vscode.workspace.fs.writeFile(this.dbUri, data);
-  }
-
-  private hasColumn(table: string, column: string): boolean {
+  private async hasColumn(table: string, column: string): Promise<boolean> {
     if (!this.db) return false;
     try {
-      const result = this.db.exec(`PRAGMA table_info(${table});`);
-      if (!result || result.length === 0) return false;
-      const rows = result[0].values || [];
-      return rows.some((row: any[]) => String(row[1]) === column);
+      const rows = await dbAll(this.db, `PRAGMA table_info(${table});`);
+      return rows.some((row: any) => String(row.name) === column);
     } catch (error) {
       console.error('Failed to check table column:', { table, column, error });
       return false;
     }
   }
 
-  private async ensureStatusColumn(): Promise<void> {
+  private async ensureColumn(table: string, column: string, definition: string): Promise<void> {
     if (!this.db) return;
-    if (this.hasColumn('sessions', 'status')) {
-      return;
-    }
-
-    this.db.run(`ALTER TABLE sessions ADD COLUMN status TEXT DEFAULT 'completed';`);
-    this.db.run(`UPDATE sessions SET status = 'completed' WHERE status IS NULL OR status = '';`);
-    await this.persist();
+    if (await this.hasColumn(table, column)) return;
+    await dbRun(this.db, `ALTER TABLE ${table} ADD COLUMN ${column} ${definition};`);
   }
 
-  private async ensureAutoApproveColumn(): Promise<void> {
-    if (!this.db) return;
-    if (this.hasColumn('sessions', 'auto_approve_commands')) {
-      return;
+  async close(): Promise<void> {
+    if (this.db) {
+      await dbClose(this.db);
+      this.db = null;
+      this.initialized = false;
     }
-
-    this.db.run('ALTER TABLE sessions ADD COLUMN auto_approve_commands INTEGER NOT NULL DEFAULT 0;');
-    this.db.run('UPDATE sessions SET auto_approve_commands = 0 WHERE auto_approve_commands IS NULL;');
-    await this.persist();
   }
 
-  private async ensureAutoApproveSensitiveEditsColumn(): Promise<void> {
-    if (!this.db) return;
-    if (this.hasColumn('sessions', 'auto_approve_sensitive_edits')) {
-      return;
-    }
+  // ---------------------------------------------------------------------------
+  // Session row mapper
+  // ---------------------------------------------------------------------------
 
-    this.db.run('ALTER TABLE sessions ADD COLUMN auto_approve_sensitive_edits INTEGER NOT NULL DEFAULT 0;');
-    this.db.run('UPDATE sessions SET auto_approve_sensitive_edits = 0 WHERE auto_approve_sensitive_edits IS NULL;');
-    await this.persist();
-  }
-
-  private async ensureSensitiveFilePatternsColumn(): Promise<void> {
-    if (!this.db) return;
-    if (this.hasColumn('sessions', 'sensitive_file_patterns')) {
-      return;
-    }
-
-    this.db.run('ALTER TABLE sessions ADD COLUMN sensitive_file_patterns TEXT DEFAULT NULL;');
-    await this.persist();
-  }
-
-  private mapRow(row: Record<string, any>): SessionRecord {
+  private mapSessionRow(row: Record<string, any>): SessionRecord {
     return {
       id: String(row.id),
       title: String(row.title ?? ''),
@@ -149,30 +199,29 @@ export class SessionIndexService {
     };
   }
 
+  // ---------------------------------------------------------------------------
+  // Session CRUD
+  // ---------------------------------------------------------------------------
+
   async createSession(record: SessionRecord): Promise<void> {
     this.ensureReady();
-    this.db.run(
+    await dbRun(this.db!,
       `INSERT INTO sessions (id, title, mode, model, status, auto_approve_commands, auto_approve_sensitive_edits, sensitive_file_patterns, created_at, updated_at)
        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?);`,
       [
-        record.id,
-        record.title,
-        record.mode,
-        record.model,
+        record.id, record.title, record.mode, record.model,
         record.status ?? 'completed',
         record.auto_approve_commands ? 1 : 0,
         record.auto_approve_sensitive_edits ? 1 : 0,
         record.sensitive_file_patterns ?? null,
-        record.created_at,
-        record.updated_at
+        record.created_at, record.updated_at
       ]
     );
-    await this.persist();
   }
 
   async upsertSession(record: SessionRecord): Promise<void> {
     this.ensureReady();
-    this.db.run(
+    await dbRun(this.db!,
       `INSERT INTO sessions (id, title, mode, model, status, auto_approve_commands, auto_approve_sensitive_edits, sensitive_file_patterns, created_at, updated_at)
        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
        ON CONFLICT(id) DO UPDATE SET
@@ -186,33 +235,23 @@ export class SessionIndexService {
          created_at = excluded.created_at,
          updated_at = excluded.updated_at;`,
       [
-        record.id,
-        record.title,
-        record.mode,
-        record.model,
+        record.id, record.title, record.mode, record.model,
         record.status ?? 'completed',
         record.auto_approve_commands ? 1 : 0,
         record.auto_approve_sensitive_edits ? 1 : 0,
         record.sensitive_file_patterns ?? null,
-        record.created_at,
-        record.updated_at
+        record.created_at, record.updated_at
       ]
     );
-    await this.persist();
   }
 
   async getSession(id: string): Promise<SessionRecord | null> {
     this.ensureReady();
-    const stmt = this.db.prepare(
-      'SELECT id, title, mode, model, status, auto_approve_commands, auto_approve_sensitive_edits, sensitive_file_patterns, created_at, updated_at FROM sessions WHERE id = ? LIMIT 1;'
+    const row = await dbGet(this.db!,
+      'SELECT * FROM sessions WHERE id = ? LIMIT 1;',
+      [id]
     );
-    stmt.bind([id]);
-    let result: SessionRecord | null = null;
-    if (stmt.step()) {
-      result = this.mapRow(stmt.getAsObject());
-    }
-    stmt.free();
-    return result;
+    return row ? this.mapSessionRow(row) : null;
   }
 
   async updateSession(id: string, updates: Partial<SessionRecord>): Promise<void> {
@@ -220,94 +259,193 @@ export class SessionIndexService {
     const fields: string[] = [];
     const values: any[] = [];
 
-    if (updates.title !== undefined) {
-      fields.push('title = ?');
-      values.push(updates.title);
-    }
-    if (updates.mode !== undefined) {
-      fields.push('mode = ?');
-      values.push(updates.mode);
-    }
-    if (updates.model !== undefined) {
-      fields.push('model = ?');
-      values.push(updates.model);
-    }
-    if (updates.status !== undefined) {
-      fields.push('status = ?');
-      values.push(updates.status);
-    }
+    if (updates.title !== undefined) { fields.push('title = ?'); values.push(updates.title); }
+    if (updates.mode !== undefined) { fields.push('mode = ?'); values.push(updates.mode); }
+    if (updates.model !== undefined) { fields.push('model = ?'); values.push(updates.model); }
+    if (updates.status !== undefined) { fields.push('status = ?'); values.push(updates.status); }
     if (updates.auto_approve_commands !== undefined) {
-      fields.push('auto_approve_commands = ?');
-      values.push(updates.auto_approve_commands ? 1 : 0);
+      fields.push('auto_approve_commands = ?'); values.push(updates.auto_approve_commands ? 1 : 0);
     }
     if (updates.auto_approve_sensitive_edits !== undefined) {
-      fields.push('auto_approve_sensitive_edits = ?');
-      values.push(updates.auto_approve_sensitive_edits ? 1 : 0);
+      fields.push('auto_approve_sensitive_edits = ?'); values.push(updates.auto_approve_sensitive_edits ? 1 : 0);
     }
     if (updates.sensitive_file_patterns !== undefined) {
-      fields.push('sensitive_file_patterns = ?');
-      values.push(updates.sensitive_file_patterns);
+      fields.push('sensitive_file_patterns = ?'); values.push(updates.sensitive_file_patterns);
     }
 
     const updatedAt = typeof updates.updated_at === 'number' ? updates.updated_at : Date.now();
     fields.push('updated_at = ?');
     values.push(updatedAt);
 
-    const sql = `UPDATE sessions SET ${fields.join(', ')} WHERE id = ?;`;
+    if (fields.length === 0) return;
     values.push(id);
-    this.db.run(sql, values);
-    await this.persist();
+    await dbRun(this.db!, `UPDATE sessions SET ${fields.join(', ')} WHERE id = ?;`, values);
   }
 
   async deleteSession(id: string): Promise<void> {
     this.ensureReady();
-    this.db.run('DELETE FROM sessions WHERE id = ?;', [id]);
-    await this.persist();
+    // Messages are deleted via ON DELETE CASCADE (foreign_keys=ON)
+    await dbRun(this.db!, 'DELETE FROM sessions WHERE id = ?;', [id]);
   }
 
   async listSessions(limit = 50, offset = 0): Promise<SessionsPage> {
     this.ensureReady();
-    const stmt = this.db.prepare(
-      'SELECT id, title, mode, model, status, auto_approve_commands, auto_approve_sensitive_edits, sensitive_file_patterns, created_at, updated_at FROM sessions ORDER BY updated_at DESC LIMIT ? OFFSET ?;'
+    const rows = await dbAll(this.db!,
+      'SELECT * FROM sessions ORDER BY updated_at DESC LIMIT ? OFFSET ?;',
+      [limit + 1, offset]
     );
-    stmt.bind([limit + 1, offset]);
 
-    const rows: SessionRecord[] = [];
-    while (stmt.step()) {
-      rows.push(this.mapRow(stmt.getAsObject()));
-    }
-    stmt.free();
-
-    const hasMore = rows.length > limit;
-    const sessions = hasMore ? rows.slice(0, limit) : rows;
+    const mapped = rows.map(r => this.mapSessionRow(r));
+    const hasMore = mapped.length > limit;
+    const sessions = hasMore ? mapped.slice(0, limit) : mapped;
     const nextOffset = hasMore ? offset + limit : null;
-
     return { sessions, hasMore, nextOffset };
   }
 
   async listAllSessions(): Promise<SessionRecord[]> {
     this.ensureReady();
-    const stmt = this.db.prepare(
-      'SELECT id, title, mode, model, status, auto_approve_commands, auto_approve_sensitive_edits, sensitive_file_patterns, created_at, updated_at FROM sessions;'
-    );
-    const rows: SessionRecord[] = [];
-    while (stmt.step()) {
-      rows.push(this.mapRow(stmt.getAsObject()));
-    }
-    stmt.free();
-    return rows;
+    const rows = await dbAll(this.db!, 'SELECT * FROM sessions;');
+    return rows.map(r => this.mapSessionRow(r));
   }
 
   async resetGeneratingSessions(status: ChatSessionStatus = 'idle'): Promise<void> {
     this.ensureReady();
-    this.db.run('UPDATE sessions SET status = ? WHERE status = ?;', [status, 'generating']);
-    await this.persist();
+    await dbRun(this.db!, 'UPDATE sessions SET status = ? WHERE status = ?;', [status, 'generating']);
   }
 
   async clearAllSessions(): Promise<void> {
     this.ensureReady();
-    this.db.run('DELETE FROM sessions;');
-    await this.persist();
-    console.log('[SessionIndexService] All sessions cleared');
+    // CASCADE deletes messages too
+    await dbRun(this.db!, 'DELETE FROM sessions;');
+    console.log('[SessionIndexService] All sessions and messages cleared');
+  }
+
+  // ---------------------------------------------------------------------------
+  // Message CRUD
+  // ---------------------------------------------------------------------------
+
+  async addMessage(record: MessageRecord): Promise<void> {
+    this.ensureReady();
+    await dbRun(this.db!,
+      `INSERT INTO messages (id, session_id, role, content, model, tool_name, tool_input, tool_output, progress_title, timestamp)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?);`,
+      [
+        record.id, record.session_id, record.role, record.content ?? '',
+        record.model ?? null, record.tool_name ?? null,
+        record.tool_input ?? null, record.tool_output ?? null,
+        record.progress_title ?? null, record.timestamp
+      ]
+    );
+
+    // Update the in-memory cache
+    if (record.session_id === this.lastTimestampSessionId) {
+      if (record.timestamp > this.lastTimestamp) {
+        this.lastTimestamp = record.timestamp;
+      }
+    }
+  }
+
+  async getMessagesBySession(sessionId: string): Promise<MessageRecord[]> {
+    this.ensureReady();
+    const rows = await dbAll(this.db!,
+      'SELECT * FROM messages WHERE session_id = ? ORDER BY timestamp ASC;',
+      [sessionId]
+    );
+    return rows.map(r => this.mapMessageRow(r));
+  }
+
+  async deleteSessionMessages(sessionId: string): Promise<void> {
+    this.ensureReady();
+    await dbRun(this.db!, 'DELETE FROM messages WHERE session_id = ?;', [sessionId]);
+  }
+
+  /**
+   * Returns a strictly increasing timestamp for the given session.
+   * Uses an in-memory cache to avoid DB queries on every call within
+   * the same session; queries the DB on first call or session switch.
+   */
+  async getNextTimestamp(sessionId: string): Promise<number> {
+    this.ensureReady();
+
+    // On session switch or first call, seed from DB
+    if (sessionId !== this.lastTimestampSessionId) {
+      const row = await dbGet(this.db!,
+        'SELECT MAX(timestamp) as max_ts FROM messages WHERE session_id = ?;',
+        [sessionId]
+      );
+      this.lastTimestamp = row?.max_ts ?? 0;
+      this.lastTimestampSessionId = sessionId;
+    }
+
+    const now = Date.now();
+    this.lastTimestamp = Math.max(now, this.lastTimestamp + 1);
+    return this.lastTimestamp;
+  }
+
+  /**
+   * Delete messages that reference sessions not in the sessions table.
+   */
+  async cleanupOrphanedMessages(): Promise<number> {
+    this.ensureReady();
+    const orphans = await dbAll(this.db!,
+      `SELECT m.id FROM messages m
+       LEFT JOIN sessions s ON m.session_id = s.id
+       WHERE s.id IS NULL;`
+    );
+    if (orphans.length > 0) {
+      await dbRun(this.db!,
+        'DELETE FROM messages WHERE session_id NOT IN (SELECT id FROM sessions);'
+      );
+    }
+    return orphans.length;
+  }
+
+  /**
+   * Drop and recreate the messages table.
+   */
+  async recreateMessagesTable(): Promise<void> {
+    this.ensureReady();
+    await dbExec(this.db!, 'DROP TABLE IF EXISTS messages;');
+    await dbExec(this.db!, `
+      CREATE TABLE IF NOT EXISTS messages (
+        id TEXT PRIMARY KEY,
+        session_id TEXT NOT NULL,
+        role TEXT NOT NULL,
+        content TEXT NOT NULL DEFAULT '',
+        model TEXT,
+        tool_name TEXT,
+        tool_input TEXT,
+        tool_output TEXT,
+        progress_title TEXT,
+        timestamp INTEGER NOT NULL,
+        FOREIGN KEY (session_id) REFERENCES sessions(id) ON DELETE CASCADE
+      );
+    `);
+    await dbExec(this.db!, `
+      CREATE INDEX IF NOT EXISTS idx_messages_session_ts
+      ON messages(session_id, timestamp);
+    `);
+    this.lastTimestamp = 0;
+    this.lastTimestampSessionId = null;
+    console.log('[SessionIndexService] Messages table recreated');
+  }
+
+  // ---------------------------------------------------------------------------
+  // Message row mapper
+  // ---------------------------------------------------------------------------
+
+  private mapMessageRow(row: Record<string, any>): MessageRecord {
+    return {
+      id: String(row.id),
+      session_id: String(row.session_id),
+      role: String(row.role) as 'user' | 'assistant' | 'tool',
+      content: String(row.content ?? ''),
+      model: row.model ?? undefined,
+      tool_name: row.tool_name ?? undefined,
+      tool_input: row.tool_input ?? undefined,
+      tool_output: row.tool_output ?? undefined,
+      progress_title: row.progress_title ?? undefined,
+      timestamp: Number(row.timestamp ?? 0)
+    };
   }
 }

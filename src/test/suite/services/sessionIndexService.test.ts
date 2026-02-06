@@ -129,4 +129,162 @@ suite('SessionIndexService', () => {
 
     await fs.rm(dir, { recursive: true, force: true });
   });
+
+  test('addMessage / getMessagesBySession roundtrip', async () => {
+    const dir = await makeTempDir('sessions-msg');
+    const context = makeFakeContext(dir);
+
+    const svc = new SessionIndexService(context);
+    await svc.initialize();
+
+    const now = Date.now();
+    await svc.createSession({
+      id: 's1', title: 'T', mode: 'ask', model: 'm',
+      status: 'idle', auto_approve_commands: false,
+      created_at: now, updated_at: now
+    });
+
+    await svc.addMessage({
+      id: 'm1', session_id: 's1', role: 'user', content: 'Hello',
+      timestamp: now
+    });
+    await svc.addMessage({
+      id: 'm2', session_id: 's1', role: 'assistant', content: 'World',
+      model: 'test-model', timestamp: now + 1
+    });
+    await svc.addMessage({
+      id: 'm3', session_id: 's1', role: 'tool', content: '',
+      tool_name: 'read_file', tool_input: '{"path":"x.ts"}',
+      tool_output: 'contents', timestamp: now + 2
+    });
+
+    const messages = await svc.getMessagesBySession('s1');
+    assert.strictEqual(messages.length, 3);
+    assert.strictEqual(messages[0].id, 'm1');
+    assert.strictEqual(messages[0].role, 'user');
+    assert.strictEqual(messages[0].content, 'Hello');
+    assert.strictEqual(messages[1].model, 'test-model');
+    assert.strictEqual(messages[2].tool_name, 'read_file');
+    assert.strictEqual(messages[2].tool_output, 'contents');
+
+    // Messages ordered by timestamp
+    for (let i = 1; i < messages.length; i++) {
+      assert.ok(messages[i].timestamp > messages[i - 1].timestamp);
+    }
+
+    await svc.close();
+    await fs.rm(dir, { recursive: true, force: true });
+  });
+
+  test('getNextTimestamp returns strictly increasing values', async () => {
+    const dir = await makeTempDir('sessions-ts');
+    const context = makeFakeContext(dir);
+
+    const svc = new SessionIndexService(context);
+    await svc.initialize();
+
+    const now = Date.now();
+    await svc.createSession({
+      id: 's1', title: 'T', mode: 'ask', model: 'm',
+      status: 'idle', auto_approve_commands: false,
+      created_at: now, updated_at: now
+    });
+
+    const timestamps: number[] = [];
+    for (let i = 0; i < 10; i++) {
+      timestamps.push(await svc.getNextTimestamp('s1'));
+    }
+
+    for (let i = 1; i < timestamps.length; i++) {
+      assert.ok(timestamps[i] > timestamps[i - 1],
+        `Timestamp ${i} (${timestamps[i]}) must be > timestamp ${i - 1} (${timestamps[i - 1]})`);
+    }
+
+    await svc.close();
+    await fs.rm(dir, { recursive: true, force: true });
+  });
+
+  test('FK constraint prevents adding message to non-existent session', async () => {
+    const dir = await makeTempDir('sessions-fk');
+    const context = makeFakeContext(dir);
+
+    const svc = new SessionIndexService(context);
+    await svc.initialize();
+
+    let threw = false;
+    try {
+      await svc.addMessage({
+        id: 'm1', session_id: 'no-such-session', role: 'user',
+        content: 'orphan', timestamp: Date.now()
+      });
+    } catch {
+      threw = true;
+    }
+    assert.ok(threw, 'Expected FK constraint to reject orphan message');
+
+    await svc.close();
+    await fs.rm(dir, { recursive: true, force: true });
+  });
+
+  test('deleteSession cascades to messages', async () => {
+    const dir = await makeTempDir('sessions-cascade');
+    const context = makeFakeContext(dir);
+
+    const svc = new SessionIndexService(context);
+    await svc.initialize();
+
+    const now = Date.now();
+    await svc.createSession({
+      id: 's1', title: 'T', mode: 'ask', model: 'm',
+      status: 'idle', auto_approve_commands: false,
+      created_at: now, updated_at: now
+    });
+
+    await svc.addMessage({ id: 'm1', session_id: 's1', role: 'user', content: 'hi', timestamp: now });
+    await svc.addMessage({ id: 'm2', session_id: 's1', role: 'assistant', content: 'hey', timestamp: now + 1 });
+
+    assert.strictEqual((await svc.getMessagesBySession('s1')).length, 2);
+
+    await svc.deleteSession('s1');
+
+    assert.strictEqual(await svc.getSession('s1'), null);
+    assert.strictEqual((await svc.getMessagesBySession('s1')).length, 0);
+
+    await svc.close();
+    await fs.rm(dir, { recursive: true, force: true });
+  });
+
+  test('clearAllSessions removes all sessions and cascades messages', async () => {
+    const dir = await makeTempDir('sessions-clear');
+    const context = makeFakeContext(dir);
+
+    const svc = new SessionIndexService(context);
+    await svc.initialize();
+
+    const now = Date.now();
+    for (let i = 0; i < 3; i++) {
+      await svc.createSession({
+        id: `s${i}`, title: `T${i}`, mode: 'ask', model: 'm',
+        status: 'idle', auto_approve_commands: false,
+        created_at: now + i, updated_at: now + i
+      });
+      await svc.addMessage({ id: `m${i}`, session_id: `s${i}`, role: 'user', content: `msg${i}`, timestamp: now + i });
+    }
+
+    const before = await svc.listSessions(50, 0);
+    assert.strictEqual(before.sessions.length, 3);
+
+    await svc.clearAllSessions();
+
+    const after = await svc.listSessions(50, 0);
+    assert.strictEqual(after.sessions.length, 0);
+
+    // Messages should be gone via CASCADE
+    for (let i = 0; i < 3; i++) {
+      assert.strictEqual((await svc.getMessagesBySession(`s${i}`)).length, 0);
+    }
+
+    await svc.close();
+    await fs.rm(dir, { recursive: true, force: true });
+  });
 });

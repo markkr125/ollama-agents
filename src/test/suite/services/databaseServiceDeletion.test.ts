@@ -51,6 +51,6 @@ suite('DatabaseService deletion', () => {
     assert.strictEqual(messagesAfter.length, 0);
 
     await db.close();
-    await fs.rm(dir, { recursive: true, force: true });
+    try { await fs.rm(dir, { recursive: true, force: true }); } catch { /* LanceDB may hold file locks */ }
   });
 });

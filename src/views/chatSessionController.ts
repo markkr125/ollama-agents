@@ -185,8 +185,6 @@ export class ChatSessionController {
     } else {
       this.emitter.postMessage({ type: 'generationStopped', sessionId });
     }
-
-    await this.sendSessionsList();
   }
 
   private isLatestRequest(requestId: number): boolean {
@@ -216,21 +214,18 @@ export class ChatSessionController {
     if (this.currentSession && this.currentSession.id === sessionId) {
       this.currentSession = { ...this.currentSession, auto_approve_commands: enabled, updated_at: Date.now() };
     }
-    await this.sendSessionsList();
   }
 
   async updateSessionAutoApproveSensitiveEdits(sessionId: string, enabled: boolean): Promise<void> {
     if (this.currentSession && this.currentSession.id === sessionId) {
       this.currentSession = { ...this.currentSession, auto_approve_sensitive_edits: enabled, updated_at: Date.now() };
     }
-    await this.sendSessionsList();
   }
 
   async updateSessionSensitiveFilePatterns(sessionId: string, patterns: string | null): Promise<void> {
     if (this.currentSession && this.currentSession.id === sessionId) {
       this.currentSession = { ...this.currentSession, sensitive_file_patterns: patterns, updated_at: Date.now() };
     }
-    await this.sendSessionsList();
   }
 
   async handleSearchSessions(query: string) {

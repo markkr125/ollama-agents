@@ -43,18 +43,19 @@ export async function activate(context: vscode.ExtensionContext) {
     sessionManager = new SessionManager(context);
     outputChannel = vscode.window.createOutputChannel('Ollama Copilot');
 
-    // Test connection
-    const connected = await client.testConnection();
-    if (!connected) {
-      vscode.window.showWarningMessage(
-        `Cannot connect to Ollama at ${config.baseUrl}. Please ensure it's running.`,
-        'Open Settings'
-      ).then(choice => {
-        if (choice === 'Open Settings') {
-          vscode.commands.executeCommand('workbench.action.openSettings', 'ollamaCopilot');
-        }
-      });
-    }
+    // Test connection (fire-and-forget — don't block activation)
+    client.testConnection().then(connected => {
+      if (!connected) {
+        vscode.window.showWarningMessage(
+          `Cannot connect to Ollama at ${config.baseUrl}. Please ensure it's running.`,
+          'Open Settings'
+        ).then(choice => {
+          if (choice === 'Open Settings') {
+            vscode.commands.executeCommand('workbench.action.openSettings', 'ollamaCopilot');
+          }
+        });
+      }
+    }).catch(() => { /* non-fatal */ });
 
     // Create status bar item for model selection
     statusBarItem = vscode.window.createStatusBarItem(

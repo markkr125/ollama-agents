@@ -78,7 +78,7 @@
             :data-message-id="item.id"
           >
             <template v-for="(block, bIndex) in item.blocks" :key="`${item.id}-${bIndex}`">
-              <div v-if="block.type === 'text'" class="markdown-body" v-html="formatMarkdown(block.content)"></div>
+              <MarkdownBlock v-if="block.type === 'text'" :content="block.content" />
 
               <div v-else class="assistant-tools">
                 <template v-for="toolItem in block.tools" :key="toolItem.id">
@@ -148,7 +148,7 @@
             :id="`message-${item.id}`"
             :data-message-id="item.id"
           >
-            <div v-if="item.role === 'assistant'" class="markdown-body" v-html="formatMarkdown(item.content)"></div>
+            <MarkdownBlock v-if="item.role === 'assistant'" :content="item.content" />
             <div v-else class="message-text">{{ item.content }}</div>
             <div v-if="item.role === 'assistant' && item.model" class="message-model">{{ item.model }}</div>
           </div>
@@ -258,6 +258,7 @@ import { nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue';
 import type { ActionItem, CommandApprovalItem, FileEditApprovalItem, ProgressItem, TimelineItem } from '../scripts/core/types';
 import CommandApproval from './CommandApproval.vue';
 import FileEditApproval from './FileEditApproval.vue';
+import MarkdownBlock from './MarkdownBlock.vue';
 
 type ThinkingState = {
   visible: boolean;
@@ -384,10 +385,6 @@ const props = defineProps({
   },
   isGenerating: {
     type: Boolean,
-    required: true
-  },
-  formatMarkdown: {
-    type: Function as PropType<(text: string) => string>,
     required: true
   },
   toggleProgress: {

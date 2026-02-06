@@ -225,41 +225,40 @@ export class ChatViewProvider implements vscode.WebviewViewProvider, WebviewMess
     const settings = this.settingsHandler.getSettingsPayload();
     const hasToken = await this.tokenManager.hasToken();
 
-    if (!this.sessionController.getCurrentSessionId()) {
-      const recentSessions = await this.databaseService.listSessions(1);
-      if (recentSessions.sessions.length > 0) {
-        await this.sessionController.loadSession(recentSessions.sessions[0].id);
-      } else {
-        await this.sessionController.createNewSession(this.currentMode, this.currentModel);
+    // Run session loading and model listing in parallel
+    const sessionLoadPromise = (async () => {
+      if (!this.sessionController.getCurrentSessionId()) {
+        const recentSessions = await this.databaseService.listSessions(1);
+        if (recentSessions.sessions.length > 0) {
+          await this.sessionController.loadSession(recentSessions.sessions[0].id);
+        } else {
+          await this.sessionController.createNewSession(this.currentMode, this.currentModel);
+        }
       }
-    }
+    })();
 
-    await this.sessionController.sendSessionsList();
+    const modelListPromise = this.client.listModels().catch((err: any) => {
+      console.warn('Failed to list models during init:', err);
+      return [] as { name: string }[];
+    });
 
-    try {
-      const models = await this.client.listModels();
-      const modeConfig = getModeConfig('agent');
-      this.currentModel = modeConfig.model || (models.length > 0 ? models[0].name : '');
+    const [, models] = await Promise.all([sessionLoadPromise, modelListPromise]);
 
-      this.postMessage({
-        type: 'init',
-        models: models.map(m => ({ name: m.name, selected: m.name === this.currentModel })),
-        currentMode: this.currentMode,
-        settings,
-        hasToken
-      });
-    } catch (error: any) {
-      this.postMessage({
-        type: 'init',
-        models: [],
-        currentMode: this.currentMode,
-        settings,
-        hasToken
-      });
+    const modeConfig = getModeConfig('agent');
+    this.currentModel = modeConfig.model || (models.length > 0 ? models[0].name : '');
 
+    this.postMessage({
+      type: 'init',
+      models: models.map((m: any) => ({ name: m.name, selected: m.name === this.currentModel })),
+      currentMode: this.currentMode,
+      settings,
+      hasToken
+    });
+
+    if (models.length === 0) {
       this.postMessage({
         type: 'connectionError',
-        error: error.message
+        error: 'No models available. Check your Ollama connection.'
       });
     }
   }
@@ -443,12 +442,27 @@ export class ChatViewProvider implements vscode.WebviewViewProvider, WebviewMess
       ]
     });
 
+    let streamTimer: ReturnType<typeof setTimeout> | null = null;
+    const STREAM_THROTTLE_MS = 32; // ~30fps — balances responsiveness with CPU usage
+
     for await (const chunk of stream) {
       if (token.isCancellationRequested) break;
       if (chunk.message?.content) {
         fullResponse += chunk.message.content;
-        this.postMessage({ type: 'streamChunk', content: fullResponse, model: this.currentModel, sessionId });
+        // Throttle: schedule a trailing-edge post instead of posting every token
+        if (!streamTimer) {
+          streamTimer = setTimeout(() => {
+            streamTimer = null;
+            this.postMessage({ type: 'streamChunk', content: fullResponse, model: this.currentModel, sessionId });
+          }, STREAM_THROTTLE_MS);
+        }
       }
+    }
+
+    // Flush any pending throttled update
+    if (streamTimer) {
+      clearTimeout(streamTimer);
+      streamTimer = null;
     }
 
     const assistantMessage = await this.databaseService.addMessage(

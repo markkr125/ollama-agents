@@ -63,10 +63,10 @@ suite('DatabaseService', () => {
     assert.ok(after[after.length - 1].timestamp > maxBefore);
 
     await db2.close();
-    await fs.rm(dir, { recursive: true, force: true });
+    try { await fs.rm(dir, { recursive: true, force: true }); } catch { /* LanceDB may hold file locks */ }
   });
 
-  test('runMaintenance() deletes orphan messages but never deletes sessions', async () => {
+  test('runMaintenance() returns zero orphans (FK prevents orphan messages)', async () => {
     const dir = await makeTempDir('db-maint');
     const context = makeFakeContext(dir);
 
@@ -74,20 +74,23 @@ suite('DatabaseService', () => {
     await db.initialize();
 
     const session = await db.createSession('keep-me', 'ask', 'test-model');
+    await db.addMessage(session.id, 'user', 'valid message');
 
-    // Orphan message: session id not present in SQLite
-    await db.addMessage('orphan-session', 'user', 'orphan');
-    const orphanBefore = await db.getSessionMessages('orphan-session');
-    assert.strictEqual(orphanBefore.length, 1);
+    // Attempting to add a message with a non-existent session_id should fail (FK constraint)
+    let fkError = false;
+    try {
+      await db.addMessage('orphan-session', 'user', 'orphan');
+    } catch {
+      fkError = true;
+    }
+    assert.ok(fkError, 'Expected FK constraint to reject orphan message insert');
 
+    // Maintenance should find zero orphans since FK prevents them
     const result = await db.runMaintenance();
     assert.strictEqual(result.deletedSessions, 0);
-    assert.strictEqual(result.deletedMessages, 1);
+    assert.strictEqual(result.deletedMessages, 0);
 
-    const orphanAfter = await db.getSessionMessages('orphan-session');
-    assert.strictEqual(orphanAfter.length, 0);
-
-    // Session should still exist even with zero messages
+    // Session should still exist
     const stillThere = await db.getSession(session.id);
     assert.ok(stillThere);
 
@@ -95,6 +98,6 @@ suite('DatabaseService', () => {
     assert.ok(sessionsPage.sessions.some(s => s.id === session.id));
 
     await db.close();
-    await fs.rm(dir, { recursive: true, force: true });
+    try { await fs.rm(dir, { recursive: true, force: true }); } catch { /* LanceDB may hold file locks */ }
   });
 });
