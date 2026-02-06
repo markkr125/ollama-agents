@@ -4,5 +4,7 @@ import { vi } from 'vitest';
 export const vscodePostMessage = vi.fn();
 
 vi.stubGlobal('acquireVsCodeApi', () => ({
-  postMessage: vscodePostMessage
+  postMessage: vscodePostMessage,
+  getState: vi.fn(() => null),
+  setState: vi.fn()
 }));

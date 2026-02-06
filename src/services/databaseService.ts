@@ -247,6 +247,30 @@ export class DatabaseService {
     await this.sessionIndex.resetGeneratingSessions(status);
   }
 
+  async findIdleEmptySession(): Promise<string | null> {
+    return this.sessionIndex.findIdleEmptySession();
+  }
+
+  async deleteMultipleSessions(
+    ids: string[],
+    onProgress?: (completed: number, total: number) => void
+  ): Promise<void> {
+    // SQLite: batch delete in single transaction (CASCADE handles messages)
+    await this.sessionIndex.deleteMultipleSessions(ids);
+
+    // Best-effort LanceDB cleanup — single batched filter instead of per-id loop
+    if (this.messagesTable && ids.length > 0) {
+      try {
+        const filter = ids.map(id => `session_id = "${id}"`).join(' OR ');
+        await this.messagesTable.delete(filter);
+      } catch { /* ignore */ }
+    }
+
+    if (onProgress) {
+      onProgress(ids.length, ids.length);
+    }
+  }
+
   // --------------------------------------------------------------------------
   // Message CRUD (delegates to SQLite, fire-and-forget LanceDB indexing)
   // --------------------------------------------------------------------------

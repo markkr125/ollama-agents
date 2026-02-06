@@ -17,6 +17,7 @@ import {
     handleConnectionError,
     handleConnectionTestResult,
     handleDbMaintenanceResult,
+    handleDeletionProgress,
     handleGenerationStarted,
     handleGenerationStopped,
     handleHideThinking,
@@ -26,6 +27,8 @@ import {
     handleRecreateMessagesResult,
     handleSearchSessionsResult,
     handleSessionApprovalSettings,
+    handleSessionDeleted,
+    handleSessionsDeleted,
     handleSettingsUpdate,
     handleShowThinking,
     handleUpdateSessionStatus
@@ -123,6 +126,15 @@ export const handleMessage = (msg: any) => {
       break;
     case 'recreateMessagesResult':
       handleRecreateMessagesResult(msg);
+      break;
+    case 'sessionDeleted':
+      handleSessionDeleted(msg);
+      break;
+    case 'sessionsDeleted':
+      handleSessionsDeleted(msg);
+      break;
+    case 'deletionProgress':
+      handleDeletionProgress(msg);
       break;
   }
 };

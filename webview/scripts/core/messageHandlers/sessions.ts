@@ -21,15 +21,20 @@ import {
     currentSessionId,
     currentStreamIndex,
     dbMaintenanceStatus,
+    deletingSessionIds,
+    deletionProgress,
     hasToken,
     isSearching,
     modelOptions,
     recreateMessagesStatus,
     scrollTargetMessageId,
+    selectedSessionIds,
+    selectionMode,
     sessions,
     sessionsCursor,
     sessionSensitiveFilePatterns,
     sessionsHasMore,
+    sessionsInitialLoaded,
     sessionsLoading,
     settings,
     temperatureSlider,
@@ -56,6 +61,7 @@ export const handleLoadSessions = (msg: any) => {
   sessionsHasMore.value = !!msg.hasMore;
   sessionsCursor.value = typeof msg.nextOffset === 'number' ? msg.nextOffset : null;
   sessionsLoading.value = false;
+  sessionsInitialLoaded.value = true;
   if (Array.isArray(sessions.value)) {
     const active = sessions.value.find(session => session.active);
     if (active) {
@@ -250,4 +256,36 @@ export const handleRecreateMessagesResult = (msg: any) => {
   const success = !!msg.success;
   const message = msg.message || (success ? 'Messages table recreated.' : 'Failed to recreate messages table.');
   showStatus(recreateMessagesStatus, message, success);
+};
+
+export const handleSessionDeleted = (msg: any) => {
+  const sessionId = msg.sessionId;
+  if (!sessionId) return;
+  // Remove from sessions list (idempotent with optimistic removal)
+  sessions.value = sessions.value.filter(s => s.id !== sessionId);
+  // Clear from deleting set
+  const newSet = new Set(deletingSessionIds.value);
+  newSet.delete(sessionId);
+  deletingSessionIds.value = newSet;
+};
+
+export const handleSessionsDeleted = (msg: any) => {
+  const sessionIds: string[] = msg.sessionIds || [];
+  if (sessionIds.length > 0) {
+    const deletedSet = new Set(sessionIds);
+    // Remove confirmed-deleted sessions from list
+    sessions.value = sessions.value.filter(s => !deletedSet.has(s.id));
+  }
+  // Always clear UI state (handles both confirm and cancel)
+  deletingSessionIds.value = new Set();
+  selectionMode.value = false;
+  selectedSessionIds.value = new Set();
+  deletionProgress.value = null;
+};
+
+export const handleDeletionProgress = (msg: any) => {
+  deletionProgress.value = {
+    completed: msg.completed || 0,
+    total: msg.total || 0
+  };
 };

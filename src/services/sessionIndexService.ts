@@ -313,6 +313,33 @@ export class SessionIndexService {
     await dbRun(this.db!, 'UPDATE sessions SET status = ? WHERE status = ?;', [status, 'generating']);
   }
 
+  /**
+   * Find an idle session with zero messages (for reuse instead of creating new).
+   */
+  async findIdleEmptySession(): Promise<string | null> {
+    this.ensureReady();
+    const row = await dbGet(this.db!,
+      `SELECT s.id FROM sessions s
+       LEFT JOIN messages m ON m.session_id = s.id
+       WHERE s.status = 'idle'
+       GROUP BY s.id
+       HAVING COUNT(m.id) = 0
+       ORDER BY s.updated_at DESC
+       LIMIT 1;`
+    );
+    return row ? String(row.id) : null;
+  }
+
+  /**
+   * Delete multiple sessions in a single statement (CASCADE handles messages).
+   */
+  async deleteMultipleSessions(ids: string[]): Promise<void> {
+    this.ensureReady();
+    if (ids.length === 0) return;
+    const placeholders = ids.map(() => '?').join(',');
+    await dbRun(this.db!, `DELETE FROM sessions WHERE id IN (${placeholders});`, ids);
+  }
+
   async clearAllSessions(): Promise<void> {
     this.ensureReady();
     // CASCADE deletes messages too

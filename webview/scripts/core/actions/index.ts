@@ -19,15 +19,20 @@ export {
 } from './search';
 export {
     addContext,
+    clearSelection,
+    deleteSelectedSessions,
     deleteSession,
     getActiveSessionId,
     loadMoreSessions,
     loadSession,
     loadSessionWithMessage,
     newChat,
+    selectAllSessions,
     selectMode,
     selectModel,
     showPage,
+    toggleSelectionMode,
+    toggleSessionSelection,
     updateSessionSensitivePatterns
 } from './sessions';
 export {
@@ -36,5 +41,5 @@ export {
 export { applySettings, clearToken, setGenerating, updateInitState, updateThinking } from './stateUpdates';
 export { showDbMaintenanceStatus, showRecreateMessagesStatus, showStatus } from './status';
 export { ensureProgressGroup, startAssistantMessage } from './timeline';
-export { actionStatusClass, formatTime, toggleProgress } from './timelineView';
+export { actionStatusClass, formatTime, relativeTime, toggleProgress } from './timelineView';
 

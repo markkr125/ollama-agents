@@ -587,6 +587,9 @@ When user sends a message in Agent mode:
 | `loadSessionMessages` | `{messages, sessionId}` | Load messages for a session |
 | `loadSessions` | `{sessions, hasMore, nextOffset}` | Update sessions list |
 | `appendSessions` | `{sessions, hasMore, nextOffset}` | Append sessions list |
+| `sessionDeleted` | `{sessionId}` | Confirm single session deleted |
+| `sessionsDeleted` | `{sessionIds}` | Confirm batch session deletion |
+| `deletionProgress` | `{completed, total}` | Batch deletion progress (10+ sessions) |
 | `dbMaintenanceResult` | `{success, deletedSessions?, deletedMessages?, message?}` | Maintenance result |
 | `connectionTestResult` | `{success, message}` | Connection test result |
 | `bearerTokenSaved` | `{hasToken}` | Token save confirmation |
@@ -595,14 +598,15 @@ When user sends a message in Agent mode:
 
 | Message Type | Payload | Purpose |
 |--------------|---------|---------|
-| `ready` | - | UI initialized (triggers `init` response) |
+| `ready` | `{sessionId?}` | UI initialized (triggers `init` response, optionally restores session) |
 | `sendMessage` | `{text, context}` | User message |
 | `stopGeneration` | `{sessionId}` | Cancel generation for a session |
 | `selectMode` | `{mode}` | Change mode |
 | `selectModel` | `{model}` | Change model |
-| `newChat` | - | Create new session |
+| `newChat` | - | Create new session (reuses idle empty session if one exists) |
 | `loadSession` | `{sessionId}` | Load session |
-| `deleteSession` | `{sessionId}` | Delete session |
+| `deleteSession` | `{sessionId}` | Delete session (optimistic removal on frontend) |
+| `deleteMultipleSessions` | `{sessionIds}` | Batch delete with modal confirmation |
 | `saveSettings` | `{settings}` | Save settings |
 | `testConnection` | - | Test server connection |
 | `saveBearerToken` | `{token, testAfterSave?}` | Save bearer token (optionally test after) |
@@ -681,13 +685,17 @@ The chat UI uses VS Code's CSS variables for theming:
 
 ### Responsive Sessions Panel (Webview)
 
-- The sessions panel is responsive and auto-opens/closes based on webview width.
-- The sessions panel width is `17.5rem` in `webview/styles/components/_sessions.scss`.
-- The auto-close threshold is rem-based (currently `34rem`) and is enforced in `webview/App.vue` using a `ResizeObserver`.
-- Manual toggles trigger sidebar resize via a `resizeSidebar` message from webview to the extension.
-- Extension handles `resizeSidebar` in `src/views/chatView.ts` by executing:
-  - `workbench.action.increaseSideBarWidth`
-  - `workbench.action.decreaseSideBarWidth`
+- Sessions is a **full-page view** (page-based navigation), not a sidebar overlay.
+- Page switching is controlled by `currentPage` ref (`'chat' | 'settings' | 'sessions'`).
+- The webview persists `currentSessionId` and `currentPage` via `vscode.setState()` (debounced 200ms) so collapsing/restoring the sidebar resumes where the user left off.
+
+### Session Management UX
+
+- **Idle session reuse**: Clicking "New Chat" when an idle empty session exists reuses it instead of creating a duplicate. Checked both on the frontend (timeline length ≤ 1) and backend (`findIdleEmptySession()` query).
+- **Optimistic deletion**: `deleteSession()` immediately removes the session from the UI and shows a slide-out animation. The backend confirms with a `sessionDeleted` message. If the deleted session was the current one, a new session is created and a full `loadSessions` refresh is sent.
+- **Multi-select deletion**: The sessions panel has a "Select" mode with checkboxes, "Select All", and batch "Delete (N)" button. The backend confirms via `vscode.window.showWarningMessage({ modal: true })`. For 10+ sessions, incremental `deletionProgress` messages are sent.
+- **Navigation**: `newChat()` and `loadSession()` both set `currentPage = 'chat'` so clicking them from the settings or sessions page navigates back to the chat.
+- **Relative timestamps**: Sessions show "2h ago", "Yesterday", "3d ago" instead of raw times.
 
 ---
 

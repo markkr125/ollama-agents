@@ -112,7 +112,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider, WebviewMess
     webviewView.webview.onDidReceiveMessage(async data => {
       switch (data.type) {
         case 'ready':
-          await this.initialize();
+          await this.initialize(data.sessionId);
           await this.settingsHandler.sendSettingsUpdate();
           break;
         case 'sendMessage':
@@ -127,18 +127,24 @@ export class ChatViewProvider implements vscode.WebviewViewProvider, WebviewMess
         case 'selectMode':
           this.currentMode = data.mode;
           break;
-        case 'newChat':
-          await this.sessionController.createNewSession(this.currentMode, this.currentModel);
-          this.postMessage({ type: 'clearMessages', sessionId: this.sessionController.getCurrentSessionId() });
-          this.postMessage({
-            type: 'sessionApprovalSettings',
-            sessionId: this.sessionController.getCurrentSessionId(),
-            autoApproveCommands: false,
-            autoApproveSensitiveEdits: false,
-            sessionSensitiveFilePatterns: null
-          });
-          await this.sessionController.sendSessionsList();
+        case 'newChat': {
+          const idleSessionId = await this.databaseService.findIdleEmptySession();
+          if (idleSessionId) {
+            await this.sessionController.loadSession(idleSessionId);
+          } else {
+            await this.sessionController.createNewSession(this.currentMode, this.currentModel);
+            this.postMessage({ type: 'clearMessages', sessionId: this.sessionController.getCurrentSessionId() });
+            this.postMessage({
+              type: 'sessionApprovalSettings',
+              sessionId: this.sessionController.getCurrentSessionId(),
+              autoApproveCommands: false,
+              autoApproveSensitiveEdits: false,
+              sessionSensitiveFilePatterns: null
+            });
+            await this.sessionController.sendSessionsList();
+          }
           break;
+        }
         case 'addContext':
           await this.handleAddContext();
           break;
@@ -157,6 +163,23 @@ export class ChatViewProvider implements vscode.WebviewViewProvider, WebviewMess
         case 'saveBearerToken':
           await this.settingsHandler.saveBearerToken(data.token, data.testAfterSave);
           break;
+        case 'deleteMultipleSessions': {
+          const ids: string[] = data.sessionIds || [];
+          if (ids.length === 0) break;
+          const confirm = await vscode.window.showWarningMessage(
+            `Delete ${ids.length} conversation${ids.length > 1 ? 's' : ''}? This cannot be undone.`,
+            { modal: true },
+            'Delete'
+          );
+          if (confirm === 'Delete') {
+            await this.sessionController.deleteMultipleSessions(ids, this.currentMode, this.currentModel);
+          } else {
+            // Cancelled — tell frontend to undo optimistic removal
+            this.postMessage({ type: 'sessionsDeleted', sessionIds: [] });
+            await this.sessionController.sendSessionsList();
+          }
+          break;
+        }
         case 'searchSessions':
           await this.sessionController.handleSearchSessions(data.query);
           break;
@@ -221,12 +244,20 @@ export class ChatViewProvider implements vscode.WebviewViewProvider, WebviewMess
     });
   }
 
-  private async initialize() {
+  private async initialize(requestedSessionId?: string) {
     const settings = this.settingsHandler.getSettingsPayload();
     const hasToken = await this.tokenManager.hasToken();
 
     // Run session loading and model listing in parallel
     const sessionLoadPromise = (async () => {
+      // Try to restore the session the webview was showing before collapse
+      if (requestedSessionId) {
+        const session = await this.databaseService.getSession(requestedSessionId);
+        if (session) {
+          await this.sessionController.loadSession(requestedSessionId);
+          return;
+        }
+      }
       if (!this.sessionController.getCurrentSessionId()) {
         const recentSessions = await this.databaseService.listSessions(1);
         if (recentSessions.sessions.length > 0) {
@@ -254,6 +285,9 @@ export class ChatViewProvider implements vscode.WebviewViewProvider, WebviewMess
       settings,
       hasToken
     });
+
+    // Populate the sessions list for the sidebar
+    await this.sessionController.sendSessionsList();
 
     if (models.length === 0) {
       this.postMessage({

@@ -1,7 +1,11 @@
-import { reactive, ref } from 'vue';
+import { reactive, ref, watch } from 'vue';
 import type { SearchResultGroup, SessionItem, StatusMessage, TimelineItem } from './types';
 
-declare const acquireVsCodeApi: () => { postMessage: (message: any) => void };
+declare const acquireVsCodeApi: () => {
+  postMessage: (message: any) => void;
+  getState: () => any;
+  setState: (state: any) => void;
+};
 
 export const vscode = acquireVsCodeApi();
 
@@ -12,6 +16,7 @@ export const timeline = ref<TimelineItem[]>([]);
 export const sessions = ref<SessionItem[]>([]);
 export const sessionsHasMore = ref(false);
 export const sessionsLoading = ref(false);
+export const sessionsInitialLoaded = ref(false);
 export const sessionsCursor = ref<number | null>(null);
 export const modelOptions = ref<string[]>([]);
 export const currentMode = ref('agent');
@@ -98,3 +103,23 @@ export const searchIsRevealing = ref(false);
 export const isSearching = ref(false);
 export const scrollTargetMessageId = ref<string | null>(null);
 export const autoScrollLocked = ref(false);
+
+// Session deletion state
+export const deletingSessionIds = ref(new Set<string>());
+
+// Multi-select state
+export const selectionMode = ref(false);
+export const selectedSessionIds = ref(new Set<string>());
+export const deletionProgress = ref<{ completed: number; total: number } | null>(null);
+
+// State persistence for webview collapse/restore
+let _persistTimer: ReturnType<typeof setTimeout> | null = null;
+watch([currentSessionId, currentPage], () => {
+  if (_persistTimer) clearTimeout(_persistTimer);
+  _persistTimer = setTimeout(() => {
+    vscode.setState({
+      sessionId: currentSessionId.value,
+      currentPage: currentPage.value
+    });
+  }, 200);
+});

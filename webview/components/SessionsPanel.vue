@@ -3,95 +3,133 @@
     <div class="sessions-page">
       <!-- Search input -->
       <div class="sessions-search">
-      <input
-        type="text"
-        class="search-input"
-        placeholder="Search conversations..."
-        :value="searchQuery"
-        @input="onSearchInput"
-      />
-      <button 
-        v-if="searchQuery" 
-        class="search-clear" 
-        @click="onClearSearch"
-      >✕</button>
-      <span v-if="isSearching" class="search-spinner">⟳</span>
+        <input
+          type="text"
+          class="search-input"
+          placeholder="Search conversations..."
+          :value="searchQuery"
+          @input="onSearchInput"
+        />
+        <button v-if="searchQuery" class="search-clear" @click="onClearSearch">✕</button>
+        <span v-if="isSearching" class="search-spinner">⟳</span>
       </div>
 
-    <!-- Search results -->
+      <!-- Selection mode toolbar -->
+      <div v-if="!searchQuery && sessions.length > 0" class="sessions-toolbar">
+        <button
+          v-if="!selectionMode"
+          class="toolbar-btn"
+          @click="toggleSelectionMode"
+          title="Select sessions"
+        >Select</button>
+        <template v-else>
+          <button class="toolbar-btn" @click="selectAllSessions">All</button>
+          <span class="toolbar-count" v-if="selectedCount > 0">{{ selectedCount }} selected</span>
+          <button
+            class="toolbar-btn toolbar-btn-danger"
+            :disabled="selectedCount === 0"
+            @click="deleteSelectedSessions"
+          >Delete ({{ selectedCount }})</button>
+          <button class="toolbar-btn" @click="clearSelection">Cancel</button>
+        </template>
+      </div>
+
+      <!-- Deletion progress -->
+      <div v-if="deletionProgress" class="deletion-progress">
+        <div class="deletion-progress-bar">
+          <div class="deletion-progress-fill" :style="{ width: deletionProgressPercent + '%' }"></div>
+        </div>
+        <span class="deletion-progress-text">Deleting {{ deletionProgress.completed }}/{{ deletionProgress.total }}...</span>
+      </div>
+
+      <!-- Search results -->
       <div v-if="searchResults.length > 0" class="search-results" @scroll="onSearchResultsScroll">
-      <div 
-        class="search-result-group" 
-        v-for="group in searchResults" 
-        :key="group.session.id"
-      >
-        <div class="search-result-session" @click="onLoadSession(group.session.id)">
-          <span class="session-title">{{ group.session.title }}</span>
-          <span class="session-time">{{ formatTime(group.session.timestamp) }}</span>
-        </div>
-        <div 
-          class="search-result-message"
-          v-for="message in group.messages"
-          :key="message.id"
-          @click="onLoadWithMessage(group.session.id, message.id)"
+        <div
+          class="search-result-group"
+          v-for="group in searchResults"
+          :key="group.session.id"
         >
-          <span class="message-role">{{ message.role }}</span>
-          <span class="message-snippet" v-html="highlightSnippet(message.snippet, searchQuery)"></span>
+          <div class="search-result-session" @click="onLoadSession(group.session.id)">
+            <span class="session-title">{{ group.session.title }}</span>
+            <span class="session-time">{{ relativeTime(group.session.timestamp) }}</span>
+          </div>
+          <div
+            class="search-result-message"
+            v-for="message in group.messages"
+            :key="message.id"
+            @click="onLoadWithMessage(group.session.id, message.id)"
+          >
+            <span class="message-role">{{ message.role }}</span>
+            <span class="message-snippet" v-html="highlightSnippet(message.snippet, searchQuery)"></span>
+          </div>
         </div>
-      </div>
-      <div v-if="isSearchRevealing" class="search-loading">Loading more...</div>
+        <div v-if="isSearchRevealing" class="search-loading">Loading more...</div>
       </div>
 
-    <!-- Regular sessions list (when not searching) -->
-      <div v-else class="sessions-list" ref="sessionsListRef" @scroll="onSessionsScroll">
-      <div class="sessions-group" v-for="group in categorizedSessions" :key="group.key">
-        <div class="sessions-group-title">{{ group.label }}</div>
-        <div
-          class="session-item"
-          v-for="session in group.items"
-          :key="session.id"
-          :class="{ active: session.active }"
-          @click="onLoadSession(session.id)"
-        >
-          <div class="session-details">
-            <span class="session-title">{{ session.title }}</span>
-            <span class="session-status" :class="`status-${session.status}`">
-              <span
-                v-if="session.status === 'generating'"
-                class="status-icon status-spinner"
-                aria-hidden="true"
-              >⟳</span>
-              <span
-                v-else-if="session.status === 'error'"
-                class="status-icon"
-                aria-hidden="true"
-              >✕</span>
-              <span
-                v-else-if="session.status === 'idle'"
-                class="status-icon"
-                aria-hidden="true"
-              >•</span>
-              <span
-                v-else
-                class="status-icon"
-                aria-hidden="true"
-              >✓</span>
-              <span class="status-text">
-                {{ session.status === 'generating'
-                  ? 'Loading...'
-                  : session.status === 'error'
-                    ? 'Error'
-                    : session.status === 'idle'
-                      ? 'Idle'
-                      : 'Completed' }}
-              </span>
-            </span>
-          </div>
-          <span class="session-time">{{ formatTime(session.timestamp) }}</span>
-          <span class="session-delete" @click.stop="deleteSession(session.id)">✕</span>
-        </div>
+      <!-- Initial loading state -->
+      <div v-else-if="!searchQuery && sessions.length === 0 && !sessionsInitialLoaded" class="sessions-empty">
+        <div class="sessions-empty-icon">⟳</div>
+        <div class="sessions-empty-title">Loading conversations...</div>
       </div>
-      <div v-if="isLoadingMore" class="sessions-loading">Loading...</div>
+
+      <!-- Empty state -->
+      <div v-else-if="!searchQuery && sessions.length === 0" class="sessions-empty">
+        <div class="sessions-empty-icon">💬</div>
+        <div class="sessions-empty-title">No conversations yet</div>
+        <div class="sessions-empty-subtitle">Start a new chat to begin</div>
+      </div>
+
+      <!-- Regular sessions list (when not searching) -->
+      <div v-else-if="!searchQuery" class="sessions-list" ref="sessionsListRef" @scroll="onSessionsScroll">
+        <div class="sessions-group" v-for="group in categorizedSessions" :key="group.key">
+          <div class="sessions-group-title">{{ group.label }}</div>
+          <div
+            class="session-item"
+            v-for="session in group.items"
+            :key="session.id"
+            :class="{
+              active: session.id === currentSessionId && !selectionMode,
+              selected: selectionMode && selectedSessionIds.has(session.id),
+              deleting: deletingSessionIds.has(session.id)
+            }"
+            @click="onSessionClick(session)"
+          >
+            <input
+              v-if="selectionMode"
+              type="checkbox"
+              class="session-checkbox"
+              :checked="selectedSessionIds.has(session.id)"
+              @click.stop
+              @change="toggleSessionSelection(session.id)"
+            />
+            <div class="session-details">
+              <span class="session-title">{{ session.title }}</span>
+              <span class="session-status" :class="`status-${session.status}`">
+                <span v-if="session.status === 'generating'" class="status-icon status-spinner" aria-hidden="true">⟳</span>
+                <span v-else-if="session.status === 'error'" class="status-icon" aria-hidden="true">✕</span>
+                <span v-else-if="session.status === 'idle'" class="status-icon" aria-hidden="true">•</span>
+                <span v-else class="status-icon" aria-hidden="true">✓</span>
+                <span class="status-text">
+                  {{ session.status === 'generating' ? 'Loading...' :
+                     session.status === 'error' ? 'Error' :
+                     session.status === 'idle' ? 'Idle' : 'Completed' }}
+                </span>
+              </span>
+            </div>
+            <span class="session-time">{{ relativeTime(session.timestamp) }}</span>
+            <button
+              v-if="!selectionMode"
+              class="session-delete"
+              :disabled="deletingSessionIds.has(session.id)"
+              @click.stop="onDeleteSession(session.id)"
+              title="Delete conversation"
+            >
+              <span v-if="deletingSessionIds.has(session.id)" class="delete-spinner">⟳</span>
+              <span v-else class="delete-icon">🗑</span>
+            </button>
+          </div>
+        </div>
+        <div v-if="isLoadingMore" class="sessions-loading">Loading...</div>
       </div>
     </div>
   </div>
@@ -100,7 +138,15 @@
 <script setup lang="ts">
 import type { PropType } from 'vue';
 import { computed, ref } from 'vue';
-import { loadSession, loadSessionWithMessage } from '../scripts/core/actions/index';
+import {
+  clearSelection,
+  deleteSelectedSessions,
+  loadSession,
+  loadSessionWithMessage,
+  selectAllSessions,
+  toggleSelectionMode,
+  toggleSessionSelection
+} from '../scripts/core/actions/index';
 import type { SearchResultGroup, SessionItem } from '../scripts/core/types';
 
 const props = defineProps({
@@ -108,9 +154,17 @@ const props = defineProps({
     type: String as PropType<'chat' | 'settings' | 'sessions'>,
     required: true
   },
+  currentSessionId: {
+    type: String as PropType<string | null>,
+    default: null
+  },
   sessions: {
     type: Array as PropType<SessionItem[]>,
     required: true
+  },
+  sessionsInitialLoaded: {
+    type: Boolean,
+    default: false
   },
   hasMoreSessions: {
     type: Boolean,
@@ -152,6 +206,10 @@ const props = defineProps({
     type: Function as PropType<(timestamp: number) => string>,
     required: true
   },
+  relativeTime: {
+    type: Function as PropType<(timestamp: number) => string>,
+    required: true
+  },
   handleSearchInput: {
     type: Function as PropType<(query: string) => void>,
     required: true
@@ -175,10 +233,53 @@ const props = defineProps({
   highlightSnippet: {
     type: Function as PropType<(snippet: string, query: string) => string>,
     required: true
+  },
+  deletingSessionIds: {
+    type: Object as PropType<Set<string>>,
+    default: () => new Set()
+  },
+  selectionMode: {
+    type: Boolean,
+    default: false
+  },
+  selectedSessionIds: {
+    type: Object as PropType<Set<string>>,
+    default: () => new Set()
+  },
+  deletionProgress: {
+    type: Object as PropType<{ completed: number; total: number } | null>,
+    default: null
+  },
+  toggleSelectionMode: {
+    type: Function as PropType<() => void>,
+    default: () => {}
+  },
+  toggleSessionSelection: {
+    type: Function as PropType<(id: string) => void>,
+    default: () => {}
+  },
+  selectAllSessions: {
+    type: Function as PropType<() => void>,
+    default: () => {}
+  },
+  deleteSelectedSessions: {
+    type: Function as PropType<() => void>,
+    default: () => {}
+  },
+  clearSelection: {
+    type: Function as PropType<() => void>,
+    default: () => {}
   }
 });
 
 const sessionsListRef = ref<HTMLDivElement | null>(null);
+
+const selectedCount = computed(() => props.selectedSessionIds.size);
+
+const deletionProgressPercent = computed(() => {
+  if (!props.deletionProgress) return 0;
+  return Math.round((props.deletionProgress.completed / props.deletionProgress.total) * 100);
+});
 
 const categorizedSessions = computed(() => {
   const now = new Date();
@@ -224,6 +325,19 @@ const onLoadWithMessage = (sessionId: string, messageId: string) => {
 
 const onLoadSession = (sessionId: string) => {
   loadSession(sessionId);
+};
+
+const onSessionClick = (session: SessionItem) => {
+  if (props.selectionMode) {
+    toggleSessionSelection(session.id);
+  } else {
+    loadSession(session.id);
+  }
+};
+
+const onDeleteSession = (id: string) => {
+  if (props.deletingSessionIds.has(id)) return;
+  props.deleteSession(id);
 };
 
 const onSessionsScroll = (event: Event) => {

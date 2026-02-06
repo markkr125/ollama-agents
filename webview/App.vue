@@ -89,7 +89,9 @@
 
       <SessionsPanel
         :current-page="currentPage"
+        :current-session-id="currentSessionId"
         :sessions="sessions"
+        :sessions-initial-loaded="sessionsInitialLoaded"
         :has-more-sessions="sessionsHasMore"
         :is-loading-more="sessionsLoading"
         :search-query="searchQuery"
@@ -100,12 +102,22 @@
         :load-session="loadSession"
         :delete-session="deleteSession"
         :format-time="formatTime"
+        :relative-time="relativeTime"
         :handle-search-input="handleSearchInput"
         :clear-search="clearSearch"
         :load-session-with-message="loadSessionWithMessage"
         :load-more-sessions="loadMoreSessions"
         :reveal-more-search-results="revealMoreSearchResults"
         :highlight-snippet="highlightSnippet"
+        :deleting-session-ids="deletingSessionIds"
+        :selection-mode="selectionMode"
+        :selected-session-ids="selectedSessionIds"
+        :deletion-progress="deletionProgress"
+        :toggle-selection-mode="toggleSelectionMode"
+        :toggle-session-selection="toggleSessionSelection"
+        :select-all-sessions="selectAllSessions"
+        :delete-selected-sessions="deleteSelectedSessions"
+        :clear-selection="clearSelection"
       />
     </div>
   </div>
@@ -136,6 +148,7 @@ import {
     chatSettings,
     clearScrollTarget,
     clearSearch,
+    clearSelection,
     confirmAutoApproveCommands,
     confirmAutoApproveSensitiveEdits,
     connectionStatus,
@@ -143,8 +156,12 @@ import {
     currentMode,
     currentModel,
     currentPage,
+    currentSessionId,
     dbMaintenanceStatus,
+    deleteSelectedSessions,
     deleteSession,
+    deletingSessionIds,
+    deletionProgress,
     formatTime,
     handleEnter,
     handleSearchInput,
@@ -166,6 +183,7 @@ import {
     openFileDiff,
     recreateMessagesStatus,
     recreateMessagesTable,
+    relativeTime,
     removeContext,
     resizeInput,
     revealMoreSearchResults,
@@ -179,10 +197,14 @@ import {
     searchIsRevealing,
     searchQuery,
     searchResults,
+    selectAllSessions,
+    selectedSessionIds,
+    selectionMode,
     selectMode,
     selectModel,
     sessions,
     sessionsHasMore,
+    sessionsInitialLoaded,
     sessionsLoading,
     settings,
     showPage,
@@ -198,6 +220,8 @@ import {
     toggleAutoApproveSensitiveEdits,
     toggleAutocomplete,
     toggleProgress,
+    toggleSelectionMode,
+    toggleSessionSelection,
     toggleToken,
     tokenVisible,
     tools,
@@ -207,7 +231,11 @@ import {
 
 // Initialize when mounted - send ready message to extension
 onMounted(() => {
-  vscode.postMessage({ type: 'ready' });
+  const savedState = vscode.getState?.();
+  vscode.postMessage({ type: 'ready', sessionId: savedState?.sessionId });
+  if (savedState?.currentPage) {
+    currentPage.value = savedState.currentPage;
+  }
   resizeInput();
 });
 

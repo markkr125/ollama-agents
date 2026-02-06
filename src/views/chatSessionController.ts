@@ -206,7 +206,29 @@ export class ChatSessionController {
     if (sessionId === this.currentSessionId) {
       await this.createNewSession(mode, model);
       this.emitter.postMessage({ type: 'clearMessages', sessionId: this.currentSessionId });
+      await this.sendSessionsList();
+    } else {
+      this.emitter.postMessage({ type: 'sessionDeleted', sessionId });
     }
+  }
+
+  async deleteMultipleSessions(sessionIds: string[], mode: string, model: string) {
+    const total = sessionIds.length;
+    const needsNewSession = sessionIds.includes(this.currentSessionId);
+
+    await this.databaseService.deleteMultipleSessions(
+      sessionIds,
+      total >= 10 ? (completed, t) => {
+        this.emitter.postMessage({ type: 'deletionProgress', completed, total: t });
+      } : undefined
+    );
+
+    if (needsNewSession) {
+      await this.createNewSession(mode, model);
+      this.emitter.postMessage({ type: 'clearMessages', sessionId: this.currentSessionId });
+    }
+
+    this.emitter.postMessage({ type: 'sessionsDeleted', sessionIds });
     await this.sendSessionsList();
   }
 
