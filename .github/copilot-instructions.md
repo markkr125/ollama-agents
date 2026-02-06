@@ -88,12 +88,12 @@ src/
 ├── services/             # Core services
 │   ├── contextBuilder.ts # Builds context for prompts
 │   ├── editManager.ts    # Manages edit operations
-│   ├── historyManager.ts # Conversation history
 │   ├── agentChatExecutor.ts # Agent chat execution loop + tool handling
 │   ├── modelCompatibility.ts # Model feature detection
 │   ├── modelManager.ts   # Model listing/selection
 │   ├── ollamaClient.ts   # Ollama API client
 │   ├── sessionIndexService.ts # SQLite-backed chat session index
+│   ├── terminalManager.ts # Terminal lifecycle + command execution
 │   └── tokenManager.ts   # Bearer token management
 ├── views/
 │   ├── chatView.ts       # Webview provider (thin orchestration)
@@ -118,7 +118,25 @@ src/
 │   │   │   └── App.ts      # Entry/wiring for message handling
 │   │   └── core/
 │   │       ├── actions/    # UI actions split by concern (+ index.ts barrel)
+│   │       │   ├── approvals.ts   # Approve/skip tool & file edit approvals
+│   │       │   ├── input.ts       # Send message, Enter key, context removal
+│   │       │   ├── markdown.ts    # Markdown formatting helpers
+│   │       │   ├── scroll.ts      # Auto-scroll + resize input
+│   │       │   ├── search.ts      # Debounced session search, reveal more
+│   │       │   ├── sessions.ts    # newChat, loadSession, delete, multi-select
+│   │       │   ├── settings.ts    # Save settings, connection test, token
+│   │       │   ├── stateUpdates.ts # applySettings, updateThinking, etc.
+│   │       │   ├── status.ts      # Status message helpers
+│   │       │   ├── timeline.ts    # ensureProgressGroup, startAssistantMessage
+│   │       │   ├── timelineView.ts # formatTime, relativeTime, toggleProgress
+│   │       │   └── index.ts       # Barrel re-export
 │   │       ├── messageHandlers/ # Webview message handlers split by concern
+│   │       │   ├── approvals.ts   # Tool & file edit approval result handlers
+│   │       │   ├── progress.ts    # startProgressGroup, showToolAction, finish
+│   │       │   ├── sessions.ts    # init, loadSessions, loadSessionMessages, delete confirmations
+│   │       │   ├── streaming.ts   # streamChunk, finalMessage
+│   │       │   ├── threadUtils.ts # ensureAssistantThread, getLastTextBlock
+│   │       │   └── index.ts       # Message router (switch on msg.type)
 │   │       ├── timelineBuilder.ts # Rebuild timeline from stored messages
 │   │       ├── computed.ts # Derived state
 │   │       ├── state.ts    # Reactive state/refs
@@ -692,10 +710,13 @@ The chat UI uses VS Code's CSS variables for theming:
 ### Session Management UX
 
 - **Idle session reuse**: Clicking "New Chat" when an idle empty session exists reuses it instead of creating a duplicate. Checked both on the frontend (timeline length ≤ 1) and backend (`findIdleEmptySession()` query).
-- **Optimistic deletion**: `deleteSession()` immediately removes the session from the UI and shows a slide-out animation. The backend confirms with a `sessionDeleted` message. If the deleted session was the current one, a new session is created and a full `loadSessions` refresh is sent.
-- **Multi-select deletion**: The sessions panel has a "Select" mode with checkboxes, "Select All", and batch "Delete (N)" button. The backend confirms via `vscode.window.showWarningMessage({ modal: true })`. For 10+ sessions, incremental `deletionProgress` messages are sent.
+- **Single-session optimistic deletion**: `deleteSession()` immediately removes the session from the UI and shows a slide-out animation. The backend confirms with a `sessionDeleted` message. If the deleted session was the current one, a new session is created and a full `loadSessions` refresh is sent.
+- **Multi-select deletion (deferred, not optimistic)**: The sessions panel has a "Select" mode with checkboxes, "Select All", and batch "Delete (N)" button. Clicking Delete adds IDs to `deletingSessionIds` (visual dimming/spinner) but does **not** remove sessions from the list. The backend shows `vscode.window.showWarningMessage({ modal: true })`. Sessions are only removed from the list when the backend confirms with `sessionsDeleted`. If the user cancels, `sessionsDeleted` arrives with an empty array, which clears `deletingSessionIds` and `selectionMode` without removing anything.
+- **LanceDB batch delete**: `databaseService.deleteMultipleSessions()` uses a single batched LanceDB filter (`session_id = "id1" OR session_id = "id2" OR ...`) instead of per-ID sequential deletes, avoiding CPU spikes.
 - **Navigation**: `newChat()` and `loadSession()` both set `currentPage = 'chat'` so clicking them from the settings or sessions page navigates back to the chat.
+- **Active session highlighting**: `loadSession(id)` sets `currentSessionId.value = id` immediately on the frontend. The `SessionsPanel` template derives the active class from `session.id === currentSessionId` (not from a server-set `session.active` flag), so highlighting is instant.
 - **Relative timestamps**: Sessions show "2h ago", "Yesterday", "3d ago" instead of raw times.
+- **Initial load indicator**: `sessionsInitialLoaded` ref starts `false` and is set `true` on the first `loadSessions` message. While `false`, the sessions panel shows "Loading conversations..." instead of "No conversations yet".
 
 ---
 
