@@ -711,6 +711,29 @@ The chat UI uses VS Code's CSS variables for theming:
 --vscode-scrollbarSlider-background
 ```
 
+### ⚠️ diff2html CSS (Critical — Do NOT Import Base CSS)
+
+File edit approval cards render diffs using [diff2html](https://github.com/rtfpessoa/diff2html) (side-by-side mode). The diff HTML is generated server-side in `src/utils/diffRenderer.ts` and injected via `v-html`.
+
+**Do NOT import `diff2html/bundles/css/diff2html.min.css`** — not from SCSS and not from JS. The base CSS adds ~17KB of opinionated light-theme styles (white backgrounds, colored borders, heavy line-number boxes) that look terrible in a VS Code dark-theme webview.
+
+Instead, `src/webview/styles/components/_diff2html.scss` contains **self-contained styles** that target only the HTML elements diff2html actually outputs. These styles use VS Code's native diff editor variables:
+
+```css
+--vscode-diffEditor-removedLineBackground   /* deletion row bg */
+--vscode-diffEditor-removedTextBackground    /* inline <del> highlight */
+--vscode-diffEditor-insertedLineBackground   /* insertion row bg */
+--vscode-diffEditor-insertedTextBackground   /* inline <ins> highlight */
+```
+
+**Key lessons learned:**
+
+1. **SCSS `@import` of CSS files**: Vite does NOT inline `@import 'pkg/file.css'` from SCSS — it leaves it as a raw CSS `@import` in the output. The webview then tries to load it as a local resource and fails silently. JS imports (`import 'pkg/file.css'` in `.ts`) DO get inlined by Vite, but for diff2html we don't want the base CSS at all.
+
+2. **`white-space: pre` on code line containers**: diff2html's HTML has newlines and indentation between `<span>` tags inside `<div class="d2h-code-side-line">`. With `white-space: pre`, those formatting whitespace characters render as actual visible space, creating absurdly tall rows. Use `white-space: nowrap` on the container div; the inner `.d2h-code-line-ctn` span keeps `white-space: pre` to preserve actual code indentation.
+
+3. **Side-by-side mode**: `outputFormat: 'side-by-side'` in `diffRenderer.ts` produces two `.d2h-file-side-diff` panes inside `.d2h-files-diff` (flex container). Each pane has its own table with `.d2h-code-side-linenumber` and `.d2h-code-side-line` (note the `-side-` in class names vs line-by-line mode).
+
 ---
 
 ## UI Conventions (Chat)

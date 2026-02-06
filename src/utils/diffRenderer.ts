@@ -22,6 +22,6 @@ export const renderDiffHtml = (
     inputFormat: 'diff',
     drawFileList: false,
     matching: 'lines',
-    outputFormat: 'line-by-line'
+    outputFormat: 'side-by-side'
   });
 };

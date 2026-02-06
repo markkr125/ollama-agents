@@ -523,3 +523,88 @@ describe('live/history consistency contract', () => {
     expect(liveApproval.severity).toBe(historyApproval.severity);
   });
 });
+
+// --- Regression: connectionTestResult correctly populates model list ---
+
+describe('connectionTestResult handler', () => {
+  test('handleConnectionTestResult populates modelOptions from models array', async () => {
+    const state = await import('../../scripts/core/state');
+    const handlers = await import('../../scripts/core/messageHandlers/sessions');
+
+    state.modelOptions.value = [];
+
+    handlers.handleConnectionTestResult({
+      type: 'connectionTestResult',
+      success: true,
+      message: 'Connected successfully!',
+      models: [
+        { name: 'llama3.1:8b' },
+        { name: 'codestral:latest' },
+        { name: 'devstral:latest' }
+      ]
+    });
+
+    expect(state.modelOptions.value).toEqual([
+      'llama3.1:8b',
+      'codestral:latest',
+      'devstral:latest'
+    ]);
+  });
+
+  test('handleConnectionTestResult sets currentModel via syncModelSelection', async () => {
+    const state = await import('../../scripts/core/state');
+    const handlers = await import('../../scripts/core/messageHandlers/sessions');
+
+    state.modelOptions.value = [];
+    state.currentModel.value = '';
+    state.settings.agentModel = '';
+
+    handlers.handleConnectionTestResult({
+      type: 'connectionTestResult',
+      success: true,
+      message: 'Connected!',
+      models: [{ name: 'model-a' }, { name: 'model-b' }]
+    });
+
+    // syncModelSelection should pick the first model when no preference is set
+    expect(state.currentModel.value).toBe('model-a');
+  });
+
+  test('handleConnectionTestResult does not clear models on error (no models field)', async () => {
+    const state = await import('../../scripts/core/state');
+    const handlers = await import('../../scripts/core/messageHandlers/sessions');
+
+    // Pre-populate models
+    state.modelOptions.value = ['existing-model'];
+
+    handlers.handleConnectionTestResult({
+      type: 'connectionTestResult',
+      success: false,
+      message: 'Connection refused'
+      // No models field — should NOT clear existing models
+    });
+
+    expect(state.modelOptions.value).toEqual(['existing-model']);
+  });
+
+  test('handleSettingsUpdate does not clear modelOptions', async () => {
+    const state = await import('../../scripts/core/state');
+    const handlers = await import('../../scripts/core/messageHandlers/sessions');
+
+    // Pre-populate models (from a previous connectionTestResult)
+    state.modelOptions.value = ['model-a', 'model-b'];
+    state.currentModel.value = 'model-a';
+
+    // settingsUpdate arrives (from saveSettings completing) — should NOT clear models
+    handlers.handleSettingsUpdate({
+      type: 'settingsUpdate',
+      settings: {
+        baseUrl: 'http://localhost:11434',
+        agentModel: 'model-a'
+      },
+      hasToken: true
+    });
+
+    expect(state.modelOptions.value).toEqual(['model-a', 'model-b']);
+  });
+});

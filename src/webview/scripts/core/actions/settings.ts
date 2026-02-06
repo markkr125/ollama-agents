@@ -22,7 +22,12 @@ export const saveBearerToken = () => {
     type: 'saveSettings',
     settings: { baseUrl: settings.baseUrl }
   });
-  vscode.postMessage({ type: 'saveBearerToken', token: bearerToken.value, testAfterSave: true });
+  vscode.postMessage({
+    type: 'saveBearerToken',
+    token: bearerToken.value,
+    testAfterSave: true,
+    baseUrl: settings.baseUrl
+  });
   hasToken.value = true;
 };
 
@@ -31,7 +36,7 @@ export const testConnection = () => {
     type: 'saveSettings',
     settings: { baseUrl: settings.baseUrl }
   });
-  vscode.postMessage({ type: 'testConnection' });
+  vscode.postMessage({ type: 'testConnection', baseUrl: settings.baseUrl });
 };
 
 export const saveBaseUrl = () => {

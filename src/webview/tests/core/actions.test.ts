@@ -134,3 +134,57 @@ test('highlightSnippet wraps query terms in <mark>', async () => {
   const out = actions.highlightSnippet('Hello world, hello!', 'hello');
   expect(out).toContain('<mark>Hello</mark>');
 });
+
+// --- Regression: saveBearerToken includes baseUrl to avoid race condition ---
+
+test('saveBearerToken includes baseUrl in message to avoid race with saveSettings', async () => {
+  const state = await import('../../scripts/core/state');
+  const actions = await import('../../scripts/core/actions/index');
+
+  state.bearerToken.value = 'test-token-123';
+  state.settings.baseUrl = 'http://my-openwebui:3000';
+
+  actions.saveBearerToken();
+
+  // Should send saveSettings first (for persistence)
+  expect(vscodePostMessage).toHaveBeenCalledWith({
+    type: 'saveSettings',
+    settings: { baseUrl: 'http://my-openwebui:3000' }
+  });
+
+  // saveBearerToken message must include baseUrl so backend can apply it
+  // before calling testConnection, avoiding the async race condition
+  expect(vscodePostMessage).toHaveBeenCalledWith({
+    type: 'saveBearerToken',
+    token: 'test-token-123',
+    testAfterSave: true,
+    baseUrl: 'http://my-openwebui:3000'
+  });
+});
+
+test('saveBearerToken does nothing when token is empty', async () => {
+  const state = await import('../../scripts/core/state');
+  const actions = await import('../../scripts/core/actions/index');
+
+  state.bearerToken.value = '';
+  actions.saveBearerToken();
+  expect(vscodePostMessage).not.toHaveBeenCalled();
+});
+
+test('testConnection includes baseUrl in message to avoid race with saveSettings', async () => {
+  const state = await import('../../scripts/core/state');
+  const actions = await import('../../scripts/core/actions/index');
+
+  state.settings.baseUrl = 'http://my-ollama:11434';
+
+  actions.testConnection();
+
+  expect(vscodePostMessage).toHaveBeenCalledWith({
+    type: 'saveSettings',
+    settings: { baseUrl: 'http://my-ollama:11434' }
+  });
+  expect(vscodePostMessage).toHaveBeenCalledWith({
+    type: 'testConnection',
+    baseUrl: 'http://my-ollama:11434'
+  });
+});

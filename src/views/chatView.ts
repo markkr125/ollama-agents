@@ -178,10 +178,10 @@ export class ChatViewProvider implements vscode.WebviewViewProvider, WebviewMess
           await this.settingsHandler.saveSettings(data.settings);
           break;
         case 'testConnection':
-          await this.settingsHandler.testConnection();
+          await this.settingsHandler.testConnection(data.baseUrl);
           break;
         case 'saveBearerToken':
-          await this.settingsHandler.saveBearerToken(data.token, data.testAfterSave);
+          await this.settingsHandler.saveBearerToken(data.token, data.testAfterSave, data.baseUrl);
           break;
         case 'deleteMultipleSessions': {
           const ids: string[] = data.sessionIds || [];
