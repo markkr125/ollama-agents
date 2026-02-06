@@ -10,6 +10,7 @@
 > | `.github/instructions/testing.instructions.md` | `src/test/**,src/webview/tests/**` | Test harnesses, coverage catalogs, webview test rules |
 > | `.github/instructions/agent-tools.instructions.md` | `src/agent/**,src/services/agentChatExecutor.ts,src/utils/toolCallParser.ts` | Agent execution flow, tool registry, tool call parser, terminal execution, command safety, approval flow |
 > | `.github/instructions/extension-architecture.instructions.md` | `src/extension.ts,src/config/**,src/services/**,src/types/**` | Type system (3 message interfaces), service init order, config patterns, OllamaClient API, terminal manager, model compatibility |
+> | `.github/instructions/documentation.instructions.md` | `docs/**,README.md` | Doc index maintenance, cross-link rules, TOC requirement, content rules, when to update |
 >
 > **Skills** (loaded on-demand by Copilot when relevant):
 > | Skill | Description |
