@@ -7,7 +7,7 @@ export default defineConfig({
   plugins: [vue()],
   base: './',
   build: {
-    outDir: resolve(__dirname, '../media'),
+    outDir: resolve(__dirname, '../../media'),
     emptyOutDir: false,
     rollupOptions: {
       input: {

@@ -101,10 +101,14 @@ src/
 │   ├── settingsHandler.ts # Settings + token + connection handling
 │   ├── toolUIFormatter.ts # Pure mapping for tool UI text/icons
 │   └── chatTypes.ts       # Shared view types + WebviewMessageEmitter
-├── webview/
+├── webview/              # Vue frontend (built by Vite) + setup wizard
 │   ├── App.vue            # Vue root SFC (composes child components)
 │   ├── main.ts            # Webview bootstrap
 │   ├── index.html         # Webview HTML entry
+│   ├── vite.config.ts     # Vite build config for webview
+│   ├── vitest.config.ts   # Vitest config for webview tests
+│   ├── setupWizard.ts     # First-run setup wizard (backend, compiled by tsc)
+│   ├── setupWizard.html   # Setup wizard HTML template
 │   ├── components/        # Vue UI subcomponents
 │   │   ├── ChatPage.vue
 │   │   ├── HeaderBar.vue
@@ -147,8 +151,10 @@ src/
 │   │   ├── components/
 │   │   ├── layout/
 │   │   └── utils/
-│   ├── setupWizard.ts     # First-run setup wizard
-│   └── vite.config.ts     # Vite build for webview
+│   └── tests/             # Vitest webview tests
+│       ├── setup.ts
+│       ├── components/
+│       └── core/
 ├── templates/            # Prompt templates
 ├── types/                # TypeScript type definitions
 │   └── session.ts         # Shared chat + agent session types
@@ -726,7 +732,7 @@ The chat UI uses VS Code's CSS variables for theming:
 
 - Keep this file (`.github/copilot-instructions.md`) up to date whenever behavior, message payloads, settings, storage, or UI contracts change.
 - Build or update automated tests whenever features are added/updated.
-  - Use Vitest for webview core logic/components (`webview/tests`).
+  - Use Vitest for webview core logic/components (`src/webview/tests`).
   - Use `@vscode/test-electron` for VS Code/extension integration (`src/test`).
 - Do not land changes unless the project is green:
   - Run `npm run test:all` locally when practical.
@@ -736,22 +742,22 @@ The chat UI uses VS Code's CSS variables for theming:
 
 Keep the current folder layout clean and consistent. Do not reintroduce flat, mixed files. Follow these rules:
 
-- Webview source stays directly under `webview/` (no extra `chatView/` folder).
-- UI markup goes in `webview/components/*.vue`.
-- App wiring and message handling live in `webview/scripts/app/App.ts`.
-- Shared logic lives in `webview/scripts/core/`:
+- All webview source lives under `src/webview/` (no root-level `webview/` folder).
+- UI markup goes in `src/webview/components/*.vue`.
+- App wiring and message handling live in `src/webview/scripts/app/App.ts`.
+- Shared logic lives in `src/webview/scripts/core/`:
   - State/refs: `state.ts`
   - Computed values: `computed.ts`
   - Actions/helpers: `actions/` (split modules + `actions/index.ts` barrel)
   - Message handlers: `messageHandlers/` (split modules + `messageHandlers/index.ts` router)
   - Timeline rebuild: `timelineBuilder.ts`
   - Types: `types.ts`
-- Styles use SCSS with an entry file at `webview/styles/styles.scss` and partials grouped under `webview/styles/` (base/layout/components/utils).
+- Styles use SCSS with an entry file at `src/webview/styles/styles.scss` and partials grouped under `src/webview/styles/` (base/layout/components/utils).
 
 **Do not reintroduce monoliths**:
-- ❌ Avoid resurrecting `webview/scripts/core/actions.ts` or `messageHandlers.ts` as large single files.
-- ✅ Add new actions in `webview/scripts/core/actions/*` and export from `actions/index.ts`.
-- ✅ Add new message handlers in `webview/scripts/core/messageHandlers/*` and register in `messageHandlers/index.ts`.
+- ❌ Avoid resurrecting `src/webview/scripts/core/actions.ts` or `messageHandlers.ts` as large single files.
+- ✅ Add new actions in `src/webview/scripts/core/actions/*` and export from `actions/index.ts`.
+- ✅ Add new message handlers in `src/webview/scripts/core/messageHandlers/*` and register in `messageHandlers/index.ts`.
 - ✅ `App.ts` should only route messages and export barrels.
 
 If you add new functionality, place it in the appropriate folder above and keep files small and single-purpose. Avoid creating new “catch-all” files.
@@ -777,8 +783,8 @@ This repo uses two complementary test harnesses:
 2) **Webview tests (fast unit/component)**
 - Runner: Vitest + jsdom + Vue Test Utils
 - Command: `npm run test:webview`
-- Location: `webview/tests/`
-- Config: `webview/vitest.config.ts`
+- Location: `src/webview/tests/`
+- Config: `src/webview/vitest.config.ts`
 
 To run everything locally (recommended before pushing): `npm run test:all`.
 
@@ -786,17 +792,17 @@ To run everything locally (recommended before pushing): `npm run test:all`.
 
 Use the two harnesses for different risk profiles:
 
-**Prefer Vitest (webview/tests) when:**
+**Prefer Vitest (src/webview/tests) when:**
 - You’re testing UI “business logic” that should be fast, deterministic, and not depend on VS Code.
-- The target lives in `webview/scripts/core/*` (state/actions/computed) or a Vue component with clear props/events.
+- The target lives in `src/webview/scripts/core/*` (state/actions/computed) or a Vue component with clear props/events.
 - You want tight coverage on edge cases that are painful to validate via a full VS Code host.
 
 Good Vitest targets:
-- `webview/scripts/core/actions.ts`: debounced search, context packaging for send, tool/approval UI updates, message/thread merging behavior.
-- `webview/scripts/core/computed.ts`: header/title selection, derived counts, tool timeout conversions.
+- `src/webview/scripts/core/actions.ts`: debounced search, context packaging for send, tool/approval UI updates, message/thread merging behavior.
+- `src/webview/scripts/core/computed.ts`: header/title selection, derived counts, tool timeout conversions.
 - Vue components with important contracts:
-  - `webview/components/CommandApproval.vue`: editable command only when `status === 'pending'`; approve sends edited command.
-  - `webview/components/SessionsPanel.vue`: pagination (`loadMoreSessions`) + selection (`loadSession`) + loading flags.
+  - `src/webview/components/CommandApproval.vue`: editable command only when `status === 'pending'`; approve sends edited command.
+  - `src/webview/components/SessionsPanel.vue`: pagination (`loadMoreSessions`) + selection (`loadSession`) + loading flags.
 
 **Prefer `@vscode/test-electron` (src/test) when:**
 - You need real VS Code APIs (`vscode`), extension activation, commands, view registration, or storage URIs.
@@ -817,7 +823,7 @@ Good `@vscode/test-electron` targets:
 
 #### Existing test coverage (Vitest)
 
-The following test suites exist in `webview/tests/`:
+The following test suites exist in `src/webview/tests/`:
 
 **`timelineBuilder.test.ts`** (23 tests) - Tests the `buildTimelineFromMessages` function:
 - Block-based structure: user messages, assistant threads, text block merging
@@ -891,10 +897,10 @@ The following test suites exist in `src/test/suite/`:
 
 #### Webview test rules (important)
 
-- The webview runtime provides `acquireVsCodeApi()`. Our webview state module calls it **at import-time** in `webview/scripts/core/state.ts`.
+- The webview runtime provides `acquireVsCodeApi()`. Our webview state module calls it **at import-time** in `src/webview/scripts/core/state.ts`.
 - Therefore, tests MUST stub `acquireVsCodeApi` before importing any webview core modules.
-  - This is handled centrally in `webview/tests/setup.ts` via Vitest `setupFiles`.
-- Prefer testing logic in `webview/scripts/core/*` (state/actions/computed) over directly testing `webview/scripts/app/App.ts`.
+  - This is handled centrally in `src/webview/tests/setup.ts` via Vitest `setupFiles`.
+- Prefer testing logic in `src/webview/scripts/core/*` (state/actions/computed) over directly testing `src/webview/scripts/app/App.ts`.
   - `App.ts` wires `window.addEventListener('message', ...)` and is intentionally more integration-heavy.
 - When asserting message sends to the extension, assert calls to the stubbed `postMessage` function.
 - Keep tests deterministic: use `vi.useFakeTimers()` for debounced functions (e.g. search) and `vi.setSystemTime()` when IDs/timestamps are time-based.
@@ -933,7 +939,7 @@ this.register({
 
 ### Modifying the Chat UI
 
-The chat UI is a Vue app under `webview/`:
+The chat UI is a Vue app under `src/webview/`:
 - `App.vue` composes UI subcomponents and contains the `onMounted` hook that sends the `ready` message
 - `components/*.vue` holds UI sections (chat page, settings, header, sessions)
 - `scripts/app/App.ts` wires message handling and exports state/actions
