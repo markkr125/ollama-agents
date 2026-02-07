@@ -1,4 +1,4 @@
-import { bearerToken, isGenerating, settings, thinking } from '../state';
+import { bearerToken, isGenerating, modelInfo, modelOptions, settings, thinking } from '../state';
 
 export const updateThinking = (visible: boolean, message?: string) => {
   thinking.visible = visible;
@@ -19,8 +19,11 @@ export const setGenerating = (value: boolean) => {
 };
 
 export const updateInitState = (msg: any) => {
-  const models = (msg.models || []).map((m: { name: string }) => m.name);
-  return models;
+  const models = msg.models || [];
+  modelInfo.value = models;
+  const modelNames = models.filter((m: any) => m.enabled !== false).map((m: { name: string }) => m.name);
+  modelOptions.value = modelNames;
+  return modelNames;
 };
 
 export const applySettings = (msg: any) => {

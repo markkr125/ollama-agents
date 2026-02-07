@@ -40,7 +40,7 @@ export {
     updateSessionSensitivePatterns
 } from './sessions';
 export {
-    recreateMessagesTable, runDbMaintenance, saveAgentSettings, saveBaseUrl, saveBearerToken, saveModelSettings, testConnection, toggleAutocomplete, toggleToken
+    recreateMessagesTable, refreshCapabilities, runDbMaintenance, saveAgentSettings, saveBaseUrl, saveBearerToken, saveModelSettings, testConnection, toggleAutocomplete, toggleModelEnabled, toggleToken
 } from './settings';
 export { applySettings, clearToken, setGenerating, updateInitState, updateThinking } from './stateUpdates';
 export { showDbMaintenanceStatus, showRecreateMessagesStatus, showStatus } from './status';

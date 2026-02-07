@@ -4,7 +4,6 @@ import {
     bearerToken,
     dbMaintenanceStatus,
     hasToken,
-    modelsStatus,
     recreateMessagesStatus,
     settings,
     tokenVisible,
@@ -56,7 +55,6 @@ export const saveModelSettings = () => {
       completionModel: settings.completionModel
     }
   });
-  showStatus(modelsStatus, 'Model settings saved!', true);
 };
 
 export const saveAgentSettings = () => {
@@ -90,4 +88,12 @@ export const toggleAutocomplete = () => {
     type: 'saveSettings',
     settings: { enableAutoComplete: settings.enableAutoComplete }
   });
+};
+
+export const refreshCapabilities = () => {
+  vscode.postMessage({ type: 'refreshCapabilities' });
+};
+
+export const toggleModelEnabled = (modelName: string, enabled: boolean) => {
+  vscode.postMessage({ type: 'toggleModelEnabled', modelName, enabled });
 };

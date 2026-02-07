@@ -44,7 +44,6 @@ function makeProps(overrides: Record<string, any> = {}) {
     connectionStatus: { ...status },
     modelOptions: ['model-a', 'model-b'],
     saveModelSettings: vi.fn(),
-    modelsStatus: { ...status },
     chatSettings: { streamResponses: true, showToolActions: true },
     temperatureSlider: 70,
     setTemperatureSlider: vi.fn(),
@@ -59,6 +58,10 @@ function makeProps(overrides: Record<string, any> = {}) {
     tools: [
       { name: 'read_file', icon: '📄', desc: 'Read file contents' }
     ],
+    modelInfo: [],
+    capabilityCheckProgress: { running: false, completed: 0, total: 0 },
+    refreshCapabilities: vi.fn(),
+    toggleModelEnabled: vi.fn(),
     runDbMaintenance: vi.fn(),
     dbMaintenanceStatus: { ...status },
     recreateMessagesTable: vi.fn(),

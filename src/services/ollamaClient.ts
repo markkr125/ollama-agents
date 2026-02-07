@@ -6,6 +6,7 @@ import {
     OllamaAuthError,
     OllamaConnectionError,
     OllamaError,
+    ShowModelResponse,
     StreamChunk
 } from '../types/ollama';
 import { parseNDJSON } from '../utils/streamParser';
@@ -163,6 +164,48 @@ export class OllamaClient {
 
     const data = await response.json() as ModelsResponse;
     return data.models || [];
+  }
+
+  /**
+   * Show model information including capabilities.
+   * Calls POST /api/show with { model: name }.
+   */
+  async showModel(name: string): Promise<ShowModelResponse> {
+    const url = `${this.baseUrl}/api/show`;
+
+    const response = await this.fetchWithRetry(url, {
+      method: 'POST',
+      headers: this.getHeaders(),
+      body: JSON.stringify({ model: name })
+    });
+
+    if (!response.ok) {
+      throw new OllamaError(`Show model failed for ${name}: ${response.statusText}`, response.status);
+    }
+
+    return await response.json() as ShowModelResponse;
+  }
+
+  /**
+   * Fetch all models and enrich each with capabilities from /api/show.
+   * Calls listModels() then showModel() in parallel for each model.
+   */
+  async fetchModelsWithCapabilities(): Promise<Model[]> {
+    const models = await this.listModels();
+
+    // Call /api/show in parallel for all models to get capabilities
+    const showResults = await Promise.allSettled(
+      models.map(m => this.showModel(m.name))
+    );
+
+    for (let i = 0; i < models.length; i++) {
+      const result = showResults[i];
+      if (result.status === 'fulfilled' && result.value.capabilities) {
+        models[i].capabilities = result.value.capabilities;
+      }
+    }
+
+    return models;
   }
 
   /**

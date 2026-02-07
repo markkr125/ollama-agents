@@ -18,7 +18,7 @@
 Click the **Ollama Copilot** icon (robot) in the Activity Bar to open the sidebar chat. The chat interface has:
 
 - **Mode selector** — switch between Agent, Ask, and Edit
-- **Model selector** — choose which model to use
+- **Model selector** — choose which model to use (only enabled models appear; shows "No enabled models" if all are disabled)
 - **Context button** — attach code from the active editor
 - **Sessions panel** — view, search, and manage conversation history
 

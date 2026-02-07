@@ -1,5 +1,6 @@
 import { randomUUID } from 'crypto';
 import * as vscode from 'vscode';
+import { Model } from '../types/ollama';
 import { ChatSessionStatus, MessageRecord, SessionRecord, SessionsPage } from '../types/session';
 import { OllamaClient } from './ollamaClient';
 import { SessionIndexService } from './sessionIndexService';
@@ -269,6 +270,25 @@ export class DatabaseService {
     if (onProgress) {
       onProgress(ids.length, ids.length);
     }
+  }
+
+  // --------------------------------------------------------------------------
+  // Model cache (delegates to SQLite)
+  // --------------------------------------------------------------------------
+
+  async upsertModels(models: Model[]): Promise<void> {
+    this.ensureReady();
+    await this.sessionIndex.upsertModels(models);
+  }
+
+  async getCachedModels(): Promise<Model[]> {
+    this.ensureReady();
+    return this.sessionIndex.getCachedModels();
+  }
+
+  async setModelEnabled(name: string, enabled: boolean): Promise<void> {
+    this.ensureReady();
+    await this.sessionIndex.setModelEnabled(name, enabled);
   }
 
   // --------------------------------------------------------------------------

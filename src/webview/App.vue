@@ -67,8 +67,11 @@
         :status-class="statusClass"
         :connection-status="connectionStatus"
         :model-options="modelOptions"
+        :model-info="modelInfo"
+        :capability-check-progress="capabilityCheckProgress"
+        :refresh-capabilities="refreshCapabilities"
+        :toggle-model-enabled="toggleModelEnabled"
         :save-model-settings="saveModelSettings"
-        :models-status="modelsStatus"
         :chat-settings="chatSettings"
         :temperature-slider="temperatureSlider"
         :set-temperature-slider="setTemperatureSliderValue"
@@ -145,6 +148,7 @@ import {
     bearerToken,
     cancelAutoApproveCommands,
     cancelAutoApproveSensitiveEdits,
+    capabilityCheckProgress,
     chatSettings,
     clearScrollTarget,
     clearSearch,
@@ -177,12 +181,13 @@ import {
     loadSession,
     loadSessionWithMessage,
     messagesEl,
+    modelInfo,
     modelOptions,
-    modelsStatus,
     newChat,
     openFileDiff,
     recreateMessagesStatus,
     recreateMessagesTable,
+    refreshCapabilities,
     relativeTime,
     removeContext,
     resizeInput,
@@ -219,6 +224,7 @@ import {
     toggleAutoApproveCommands,
     toggleAutoApproveSensitiveEdits,
     toggleAutocomplete,
+    toggleModelEnabled,
     toggleProgress,
     toggleSelectionMode,
     toggleSessionSelection,

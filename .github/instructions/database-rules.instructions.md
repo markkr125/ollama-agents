@@ -16,6 +16,26 @@ This extension uses **two separate databases**:
 
 **Critical**: Sessions and messages are stored separately. Any operation that clears one MUST clear the other to maintain consistency.
 
+### SQLite `models` Table
+
+The `models` table caches model metadata fetched from Ollama for offline fallback and capability display:
+
+| Column | Type | Purpose |
+|--------|------|----------|
+| `name` | `TEXT PRIMARY KEY` | Model name (e.g. `qwen2.5-coder:7b`) |
+| `size` | `INTEGER` | Model file size in bytes |
+| `modified_at` | `TEXT` | Last modified timestamp from Ollama |
+| `digest` | `TEXT` | Model digest hash |
+| `family` | `TEXT` | Model family |
+| `families` | `TEXT` | All families (JSON array string) |
+| `parameter_size` | `TEXT` | Human-readable param count |
+| `quantization_level` | `TEXT` | Quantization level (e.g. `Q4_K_M`) |
+| `capabilities` | `TEXT` | JSON array of capability strings from `/api/show` |
+| `enabled` | `INTEGER NOT NULL DEFAULT 1` | 1 = visible in dropdowns, 0 = hidden |
+| `fetched_at` | `TEXT` | When this row was last refreshed |
+
+`upsertModels()` replaces the entire table (`DELETE FROM models` + batch `INSERT`) on each refresh, so stale models are automatically removed.
+
 ## ⚠️ NEVER Auto-Delete User Data
 
 **DO NOT** implement automatic deletion or recreation of the messages table. This includes:

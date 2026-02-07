@@ -53,10 +53,30 @@ export interface Model {
     parameter_size?: string;
     quantization_level?: string;
   };
+  /** Capabilities reported by the /api/show endpoint (e.g. "completion", "vision", "tools"). */
+  capabilities?: string[];
+  /** Whether the model is enabled for use in chat/agent/completion. Defaults to true. */
+  enabled?: boolean;
 }
 
 export interface ModelsResponse {
   models: Model[];
+}
+
+/**
+ * Response from POST /api/show.
+ * Only the fields we care about are typed here.
+ */
+export interface ShowModelResponse {
+  details?: {
+    format?: string;
+    family?: string;
+    families?: string[];
+    parameter_size?: string;
+    quantization_level?: string;
+  };
+  model_info?: Record<string, any>;
+  capabilities?: string[];
 }
 
 export interface ToolDefinition {

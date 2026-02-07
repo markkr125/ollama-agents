@@ -1,31 +1,48 @@
 // Model compatibility checking
+//
+// Capabilities are sourced from the Ollama /api/show endpoint which returns
+// a `capabilities` string array (e.g. ["completion", "vision", "tools"]).
+// This module maps those strings to the UI-facing ModelCapabilities type and
+// provides helpers for the model-selection quick pick.
+
+import type { Model } from '../types/ollama';
+
+// ---- Capability names returned by /api/show ---------------------
+// Known values (as of Ollama 0.6+):
+//   "completion"  – can generate text
+//   "vision"      – can process images
+//   "tools"       – supports function/tool calling
+//   "embedding"   – can produce embeddings
+//   "insert"      – supports fill-in-middle (FIM)
+// -----------------------------------------------------------------
 
 /**
- * Models known to support Fill-In-Middle (FIM) prompting
+ * Capabilities detected for a model.
  */
-export const FIM_CAPABLE_MODELS: RegExp[] = [
-  /codellama/i,
-  /deepseek[-_]coder/i,
-  /qwen.*coder/i,
-  /starcoder/i,
-  /granite[-_]code/i,
-  /codegemma/i,
-  /stable[-_]code/i
-];
+export interface ModelCapabilities {
+  chat: boolean;
+  fim: boolean;
+  tools: boolean;
+  vision: boolean;
+  embedding: boolean;
+}
 
 /**
- * Models known to support structured tool calling
+ * Compute all capabilities for a model.
+ * Reads from `model.capabilities` (populated by /api/show) when available.
  */
-export const TOOL_CAPABLE_MODELS: RegExp[] = [
-  /llama3\.[123]/i,
-  /llama[-_]?3\.[123]/i,
-  /qwen2\.5/i,
-  /mistral/i,
-  /mixtral/i,
-  /command[-_]r/i,
-  /gemini/i,
-  /gpt/i
-];
+export function getModelCapabilities(model: Model): ModelCapabilities {
+  const caps = model.capabilities ?? [];
+  return {
+    chat: caps.includes('completion'),
+    fim: caps.includes('insert'),
+    tools: caps.includes('tools'),
+    vision: caps.includes('vision'),
+    embedding: caps.includes('embedding')
+  };
+}
+
+// ---- Compatibility check for model selection quick pick ----------
 
 export interface CompatibilityCheck {
   compatible: boolean;
@@ -34,62 +51,49 @@ export interface CompatibilityCheck {
 }
 
 /**
- * Check if a model supports FIM (Fill-In-Middle) prompting
+ * Check model compatibility for a specific capability.
+ * Uses the `model.capabilities` array when available.
  */
-export function isFIMCapable(modelName: string): boolean {
-  return FIM_CAPABLE_MODELS.some(pattern => pattern.test(modelName));
-}
-
-/**
- * Check if a model supports tool calling
- */
-export function isToolCapable(modelName: string): boolean {
-  return TOOL_CAPABLE_MODELS.some(pattern => pattern.test(modelName));
-}
-
-/**
- * Check model compatibility for a specific capability
- */
-export function checkCompatibility(
-  modelName: string,
+export function checkModelCompatibility(
+  model: Model,
   required: 'fim' | 'tool' | 'both'
 ): CompatibilityCheck {
-  const hasFIM = isFIMCapable(modelName);
-  const hasTool = isToolCapable(modelName);
+  const caps = getModelCapabilities(model);
 
   switch (required) {
     case 'fim':
-      if (!hasFIM) {
+      if (!caps.fim) {
         return {
           compatible: false,
-          warning: `Model '${modelName}' may not support FIM (Fill-In-Middle) prompting`,
+          warning: `Model '${model.name}' may not support FIM (Fill-In-Middle) prompting`,
           recommendation: 'Consider using codellama, deepseek-coder, or qwen-coder for better completions'
         };
       }
       return { compatible: true };
 
     case 'tool':
-      if (!hasTool) {
+      if (!caps.tools) {
         return {
           compatible: false,
-          warning: `Model '${modelName}' may not support tool calling`,
+          warning: `Model '${model.name}' may not support tool calling`,
           recommendation: 'Consider using llama3.1+, qwen2.5+, or mistral for agent mode'
         };
       }
       return { compatible: true };
 
-    case 'both':
-      if (!hasFIM || !hasTool) {
-        const missing = [];
-        if (!hasFIM) {missing.push('FIM');}
-        if (!hasTool) {missing.push('tool calling');}
+    case 'both': {
+      const missing: string[] = [];
+      if (!caps.fim) { missing.push('FIM'); }
+      if (!caps.tools) { missing.push('tool calling'); }
+      if (missing.length > 0) {
         return {
           compatible: false,
-          warning: `Model '${modelName}' may not support ${missing.join(' or ')}`,
+          warning: `Model '${model.name}' may not support ${missing.join(' or ')}`,
           recommendation: 'Consider using qwen2.5-coder for full compatibility'
         };
       }
       return { compatible: true };
+    }
   }
 }
 

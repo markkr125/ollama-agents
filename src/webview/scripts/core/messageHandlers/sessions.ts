@@ -1,46 +1,48 @@
 import {
-    applySearchResults,
-    applySettings,
-    clearToken,
-    scrollToBottom,
-    setGenerating,
-    showStatus,
-    updateInitState,
-    updateThinking
+  applySearchResults,
+  applySettings,
+  clearToken,
+  scrollToBottom,
+  setGenerating,
+  showStatus,
+  updateInitState,
+  updateThinking
 } from '../actions/index';
 import {
-    autoApproveCommands,
-    autoApproveConfirmVisible,
-    autoApproveSensitiveEdits,
-    connectionStatus,
-    contextList,
-    currentAssistantThreadId,
-    currentMode,
-    currentModel,
-    currentPage,
-    currentProgressIndex,
-    currentSessionId,
-    currentStreamIndex,
-    dbMaintenanceStatus,
-    deletingSessionIds,
-    deletionProgress,
-    hasToken,
-    isFirstRun,
-    isSearching,
-    modelOptions,
-    recreateMessagesStatus,
-    scrollTargetMessageId,
-    selectedSessionIds,
-    selectionMode,
-    sessions,
-    sessionsCursor,
-    sessionSensitiveFilePatterns,
-    sessionsHasMore,
-    sessionsInitialLoaded,
-    sessionsLoading,
-    settings,
-    temperatureSlider,
-    timeline
+  autoApproveCommands,
+  autoApproveConfirmVisible,
+  autoApproveSensitiveEdits,
+  capabilityCheckProgress,
+  connectionStatus,
+  contextList,
+  currentAssistantThreadId,
+  currentMode,
+  currentModel,
+  currentPage,
+  currentProgressIndex,
+  currentSessionId,
+  currentStreamIndex,
+  dbMaintenanceStatus,
+  deletingSessionIds,
+  deletionProgress,
+  hasToken,
+  isFirstRun,
+  isSearching,
+  modelInfo,
+  modelOptions,
+  recreateMessagesStatus,
+  scrollTargetMessageId,
+  selectedSessionIds,
+  selectionMode,
+  sessions,
+  sessionsCursor,
+  sessionSensitiveFilePatterns,
+  sessionsHasMore,
+  sessionsInitialLoaded,
+  sessionsLoading,
+  settings,
+  temperatureSlider,
+  timeline
 } from '../state';
 import { buildTimelineFromMessages } from '../timelineBuilder';
 import type { InitMessage, LoadSessionMessagesMessage, SearchResultGroup } from '../types';
@@ -216,7 +218,16 @@ export const handleClearMessages = (msg: any) => {
 export const handleConnectionTestResult = (msg: any) => {
   showStatus(connectionStatus, msg.message || '', !!msg.success);
   if (Array.isArray(msg.models)) {
-    modelOptions.value = msg.models.map((m: { name: string }) => m.name);
+    modelInfo.value = msg.models;
+    modelOptions.value = msg.models.filter((m: any) => m.enabled !== false).map((m: { name: string }) => m.name);
+    syncModelSelection();
+  }
+};
+
+export const handleModelEnabledChanged = (msg: any) => {
+  if (Array.isArray(msg.models)) {
+    modelInfo.value = msg.models;
+    modelOptions.value = msg.models.filter((m: any) => m.enabled !== false).map((m: { name: string }) => m.name);
     syncModelSelection();
   }
 };
@@ -295,4 +306,17 @@ export const handleDeletionProgress = (msg: any) => {
 export const handleNavigateToSettings = (msg: any) => {
   currentPage.value = 'settings';
   isFirstRun.value = !!msg.isFirstRun;
+};
+
+export const handleCapabilityCheckProgress = (msg: any) => {
+  capabilityCheckProgress.running = true;
+  capabilityCheckProgress.completed = msg.completed || 0;
+  capabilityCheckProgress.total = msg.total || 0;
+  if (Array.isArray(msg.models)) {
+    modelInfo.value = msg.models;
+  }
+};
+
+export const handleCapabilityCheckComplete = () => {
+  capabilityCheckProgress.running = false;
 };

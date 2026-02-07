@@ -7,6 +7,7 @@
 - [Mode-Specific Models](#mode-specific-models)
 - [Agent Settings](#agent-settings)
 - [Inline Completions](#inline-completions)
+- [Model Capabilities](#model-capabilities)
 - [Embeddings](#embeddings)
 - [Example Configurations](#example-configurations)
 
@@ -83,6 +84,58 @@ This auto-approves all files except `.env` files and `package.json`.
 | `ollamaCopilot.enableAutoComplete` | `true` | Enable/disable inline autocomplete |
 
 Completions require a FIM (Fill-In-Middle) capable model. Recommended: `codellama:7b-code`, `deepseek-coder:6.7b`, `qwen2.5-coder:7b`.
+
+## Model Capabilities
+
+The **Models** tab in the settings page shows every downloaded model alongside its detected features:
+
+| Column | Meaning |
+|--------|---------|
+| **On** | Enable/disable toggle — disabled models are hidden from all model selection dropdowns |
+| **Chat** | Conversational chat — model has a chat template for multi-turn conversations |
+| **Vision** | Image understanding (detected via `/api/show` capabilities) |
+| **FIM** | Fill-In-Middle — required for inline code completions |
+| **Tools** | Function/tool calling — required for agent mode |
+| **Embed** | Embedding model — generates vector embeddings, cannot chat |
+
+Capabilities are sourced from the **Ollama `/api/show` endpoint**, which returns a `capabilities` array for each model (e.g. `["completion", "vision", "tools"]`). The extension calls `/api/show` in parallel for every model when the model list is fetched and maps the results:
+
+| API capability | UI column |
+|---------------|-----------|
+| `completion` | Chat |
+| `vision` | Vision |
+| `insert` | FIM |
+| `tools` | Tools |
+| `embedding` | Embed |
+
+This is accurate for all models — no name-based heuristics or regex patterns are used.
+
+### Model Enable/Disable
+
+Each model can be toggled on or off using the checkbox in the **On** column. Disabled models are:
+- Hidden from all model selection dropdowns (Agent, Ask, Edit, Completion)
+- Still visible in the capabilities table (with a dimmed row style)
+
+Use the **Enable All** / **Disable All** buttons below the table for bulk operations.
+
+### Model Selection (Auto-Save)
+
+The Model Selection section lets you assign a model to each mode (Agent, Ask, Edit, Completion). Only enabled models appear in the dropdowns. If no models are enabled, the dropdown shows "No enabled models".
+
+Changes are **saved automatically** when you select a different model — there is no Save button.
+
+### Stale Model Cleanup
+
+When the model list is refreshed from Ollama (on startup, manual refresh, or connection test), the entire SQLite `models` table is replaced. Models that were deleted from Ollama are automatically removed from the cache.
+
+### Offline Model Cache
+
+The model list is persisted in SQLite every time it is successfully fetched from the Ollama server. If the server becomes unreachable (network error, bad token, server down), the extension falls back to the last cached list so that model dropdowns and the capabilities table remain populated.
+
+The cache is updated automatically on:
+- Extension activation (webview init)
+- Clicking **Test Connection** in settings
+- Clicking **↻ Refresh All** in the Models tab
 
 ## Embeddings
 

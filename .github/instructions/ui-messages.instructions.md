@@ -43,6 +43,9 @@ description: "Backend-to-frontend and frontend-to-backend message protocol for t
 | `connectionTestResult` | `{success, message}` | Connection test result |
 | `bearerTokenSaved` | `{hasToken}` | Token save confirmation |
 | `navigateToSettings` | `{isFirstRun}` | Navigate webview to settings page (first-run or manual) |
+| `modelEnabledChanged` | `{models}` | Broadcast updated model list after enable/disable toggle |
+| `capabilityCheckProgress` | `{completed, total}` | Progressive capability detection progress |
+| `capabilityCheckComplete` | - | Capability detection finished |
 
 ## Frontend → Backend Messages
 
@@ -70,6 +73,8 @@ description: "Backend-to-frontend and frontend-to-backend message protocol for t
 | `setAutoApproveSensitiveEdits` | `{sessionId, enabled}` | Toggle auto-approve sensitive edits for session |
 | `updateSessionSensitivePatterns` | `{sessionId, patterns}` | Update session-level sensitive file patterns |
 | `openFileDiff` | `{approvalId}` | Open file diff in VS Code editor |
+| `refreshCapabilities` | - | Trigger background `/api/show` for all models |
+| `toggleModelEnabled` | `{modelName, enabled}` | Enable/disable a model in SQLite |
 
 ## Session-Concurrent Streaming
 

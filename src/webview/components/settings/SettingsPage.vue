@@ -36,13 +36,15 @@
             :statusClass="statusClass"
             :connectionStatus="connectionStatus"
           />
-          <ModelsSection
+          <ModelCapabilitiesSection
             :activeSection="activeSection"
+            :modelInfo="modelInfo"
+            :capabilityCheckProgress="capabilityCheckProgress"
+            :refreshCapabilities="refreshCapabilities"
+            :toggleModelEnabled="toggleModelEnabled"
             :settings="settings"
             :modelOptions="modelOptions"
             :saveModelSettings="saveModelSettings"
-            :statusClass="statusClass"
-            :modelsStatus="modelsStatus"
           />
           <ChatSection
             :activeSection="activeSection"
@@ -96,7 +98,7 @@ import AgentSection from './components/AgentSection.vue';
 import AutocompleteSection from './components/AutocompleteSection.vue';
 import ChatSection from './components/ChatSection.vue';
 import ConnectionSection from './components/ConnectionSection.vue';
-import ModelsSection from './components/ModelsSection.vue';
+import ModelCapabilitiesSection from './components/ModelCapabilitiesSection.vue';
 import ToolsSection from './components/ToolsSection.vue';
 
 const props = defineProps<SettingsPageProps>();

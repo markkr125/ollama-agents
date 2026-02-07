@@ -1,16 +1,27 @@
 import * as vscode from 'vscode';
 import { Model } from '../types/ollama';
-import { checkCompatibility } from './modelCompatibility';
+import { DatabaseService } from './databaseService';
+import { checkModelCompatibility } from './modelCompatibility';
 import { OllamaClient } from './ollamaClient';
 
 export class ModelManager {
   private cache: { models: Model[]; timestamp: number } | null = null;
   private readonly CACHE_TTL = 5 * 60 * 1000; // 5 minutes
+  private databaseService: DatabaseService | null = null;
 
   constructor(private client: OllamaClient) {}
 
   /**
-   * Fetch models from Ollama/OpenWebUI with caching
+   * Set the DatabaseService for SQLite-backed model cache fallback.
+   * Called after DatabaseService is initialised.
+   */
+  setDatabaseService(db: DatabaseService): void {
+    this.databaseService = db;
+  }
+
+  /**
+   * Fetch models from Ollama/OpenWebUI with caching.
+   * Falls back to in-memory cache, then SQLite cache, then empty.
    */
   async fetchModels(forceRefresh = false): Promise<Model[]> {
     const now = Date.now();
@@ -21,11 +32,41 @@ export class ModelManager {
 
     try {
       const models = await this.client.listModels();
+      // Merge cached capabilities from SQLite (fast offline fallback)
+      if (this.databaseService) {
+        try {
+          const cached = await this.databaseService.getCachedModels();
+          const capMap = new Map(cached.filter(m => m.capabilities).map(m => [m.name, m.capabilities!]));
+          for (const model of models) {
+            if (!model.capabilities) {
+              const caps = capMap.get(model.name);
+              if (caps) model.capabilities = caps;
+            }
+          }
+        } catch { /* ignore */ }
+      }
       this.cache = { models, timestamp: now };
+      // Persist to SQLite (fire-and-forget)
+      this.databaseService?.upsertModels(models).catch(err =>
+        console.warn('[ModelManager] Failed to cache models:', err)
+      );
       return models;
     } catch (error: any) {
+      // In-memory cache first
+      if (this.cache?.models?.length) {
+        return this.cache.models;
+      }
+      // SQLite fallback
+      if (this.databaseService) {
+        try {
+          const cached = await this.databaseService.getCachedModels();
+          if (cached.length > 0) {
+            return cached;
+          }
+        } catch { /* ignore */ }
+      }
       vscode.window.showErrorMessage(`Failed to fetch models: ${error.message}`);
-      return this.cache?.models || [];
+      return [];
     }
   }
 
@@ -68,8 +109,15 @@ export class ModelManager {
       return true; // Allow empty (will use default or prompt)
     }
 
+    // Try to find the full Model object in cache for accurate capability check
+    const models = await this.fetchModels();
+    const model = models.find(m => m.name === modelName);
+    if (!model) {
+      return true; // Model not found in cache — allow it
+    }
+
     const requiredCapability = mode === 'completion' ? 'fim' : 'tool';
-    const check = checkCompatibility(modelName, requiredCapability);
+    const check = checkModelCompatibility(model, requiredCapability);
 
     if (!check.compatible && check.warning) {
       const choice = await vscode.window.showWarningMessage(

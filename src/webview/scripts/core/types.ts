@@ -1,3 +1,20 @@
+export type ModelCapabilities = {
+  chat: boolean;
+  fim: boolean;
+  tools: boolean;
+  vision: boolean;
+  embedding: boolean;
+};
+
+export type ModelInfo = {
+  name: string;
+  size: number;
+  parameterSize?: string;
+  quantizationLevel?: string;
+  capabilities: ModelCapabilities;
+  enabled: boolean;
+};
+
 export type MessageItem = {
   id: string;
   type: 'message';

@@ -1,9 +1,17 @@
 // --- Shared types for SettingsPage ---
 
+import type { ModelInfo } from '../types';
+
 export type StatusMessage = {
   visible: boolean;
   success: boolean;
   message: string;
+};
+
+export type CapabilityCheckProgress = {
+  running: boolean;
+  completed: number;
+  total: number;
 };
 
 export type Settings = {
@@ -60,8 +68,11 @@ export interface SettingsPageProps {
   statusClass: (status: StatusMessage) => Record<string, boolean>;
   connectionStatus: StatusMessage;
   modelOptions: string[];
+  modelInfo: ModelInfo[];
+  capabilityCheckProgress: CapabilityCheckProgress;
+  refreshCapabilities: () => void;
+  toggleModelEnabled: (modelName: string, enabled: boolean) => void;
   saveModelSettings: () => void;
-  modelsStatus: StatusMessage;
   chatSettings: ChatSettings;
   temperatureSlider: number;
   setTemperatureSlider: (value: number) => void;
