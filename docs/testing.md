@@ -9,6 +9,9 @@ How to run, write, and organize tests for Ollama Copilot.
 - [Dual-Harness Architecture](#dual-harness-architecture)
 - [Directory Structure](#directory-structure)
 - [Running Tests](#running-tests)
+  - [Running a Single Test](#running-a-single-test)
+  - [Debugging with Breakpoints](#debugging-with-breakpoints)
+  - [Common Test Failures](#common-test-failures)
 - [When to Use Which Harness](#when-to-use-which-harness)
 - [Adding a New Extension Test](#adding-a-new-extension-test)
 - [Adding a New Webview Test](#adding-a-new-webview-test)
@@ -100,6 +103,48 @@ npx vitest --config tests/webview/vitest.config.ts
 The `test` script does: `npm run compile` → `tsc -p tsconfig.test.json` → `node ./out/tests/extension/runTest.js`.
 
 The `test:webview` script does: `vitest --config tests/webview/vitest.config.ts run`.
+
+### Running a Single Test
+
+**Extension host tests (Mocha):**
+```bash
+# Run tests matching a describe/it name pattern
+npm test -- --grep "toolCallParser"
+npm test -- --grep "should parse XML format"
+```
+
+**Webview tests (Vitest):**
+```bash
+# Run a specific test file
+npm run test:webview -- tests/webview/core/timelineBuilder.test.ts
+
+# Run tests matching a name pattern
+npm run test:webview -- -t "should merge text blocks"
+
+# Verbose output (shows each test name)
+npm run test:webview -- --reporter verbose
+```
+
+### Debugging with Breakpoints
+
+Three launch configurations are provided in `.vscode/launch.json`:
+
+| Configuration | Use For |
+|---------------|---------|
+| **Run Extension** | Launch Extension Development Host with the extension loaded |
+| **Extension Tests** | Debug Mocha tests inside a VS Code instance — set breakpoints in `tests/extension/` or `src/` |
+| **Debug Webview Tests** | Debug Vitest tests via Node — set breakpoints in `tests/webview/` or `src/webview/` |
+
+To debug, set breakpoints in VS Code, open the Run & Debug panel (Ctrl+Shift+D), select the configuration, and press F5.
+
+### Common Test Failures
+
+| Error | Cause | Fix |
+|-------|-------|-----|
+| `acquireVsCodeApi is not defined` | Test imports a webview module but setup stub didn't run | Ensure `setupFiles` in `vitest.config.ts` includes `setup.ts` |
+| `Cannot find module 'vscode'` | Running extension tests outside VS Code host | Use `npm test`, not `node`/`ts-node` directly |
+| Extension tests hang | Shell integration unavailable or `waitForCommandEnd()` stuck | Ensure display is available (Xvfb in CI); add timeouts |
+| Tests pass alone, fail in suite | Shared mutable state leaking | Reset state in `beforeEach`; use `vi.resetModules()` for singletons |
 
 ---
 

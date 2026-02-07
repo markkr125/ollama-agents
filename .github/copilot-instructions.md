@@ -104,6 +104,25 @@ For each **single user prompt**, the UI must show **exactly one assistant messag
 
 ---
 
+## ⚠️ Common Pitfalls (Quick Reference)
+
+These are the mistakes most frequently made when editing this codebase. **Check this list before submitting any change.**
+
+| # | Pitfall | Why It Breaks | Correct Approach |
+|---|---------|---------------|------------------|
+| 1 | Importing `vscode` in webview code (`src/webview/**`) | Webview runs in a sandboxed iframe — `vscode` module does not exist there. Build will succeed but runtime crashes. | Use `acquireVsCodeApi()` (already called in `state.ts`). Communicate with the extension via `postMessage`. |
+| 2 | Editing files in `media/`, `dist/`, or `out/` | These are **build outputs**, not source. Changes are overwritten on next build. | Edit source in `src/` and `src/webview/`. See **Build Output Directories** in `extension-architecture.instructions.md`. |
+| 3 | Treating `streamChunk` content as a delta | `streamChunk` sends **accumulated** content ("Hello World"), not incremental (" World"). The handler **replaces** the text block, not appends. | Always replace the entire text block content with the received `content` string. |
+| 4 | Using `isPathSafe()` result without inverting | `isPathSafe()` returns `true` = path IS safe (no approval needed), `false` = requires approval. The name is intuitive but the usage often gets flipped. | `if (!isPathSafe(path)) { /* require approval */ }` — see `⚠️ INVERTED BOOLEAN` in `agent-tools.instructions.md`. |
+| 5 | Adding logic directly to `chatView.ts` | `chatView.ts` is intentionally thin — only lifecycle + routing. | Delegate to `chatSessionController.ts` (sessions), `settingsHandler.ts` (settings), or `agentChatExecutor.ts` (agent). |
+| 6 | `sensitiveFilePatterns` value `true` means "is sensitive" | **Wrong.** `true` = auto-approve (NOT sensitive). `false` = require approval (IS sensitive). The boolean is inverted from what the key name suggests. | `{ "**/.env*": false }` → `.env` files require approval. |
+| 7 | Posting a UI event without persisting it | Breaks session history — live chat shows the event but reloaded sessions don't. Violates CRITICAL RULE #1. | Always call `persistUiEvent()` alongside every `postMessage()`, in the same order. |
+| 8 | Placing Vue lifecycle hooks in plain `.ts` files | `onMounted`, `onUnmounted`, etc. silently do nothing outside a Vue component's `<script setup>` block. | Keep lifecycle hooks inside `.vue` files only. |
+| 9 | Importing webview core modules in tests without stubbing `acquireVsCodeApi` | `state.ts` calls `acquireVsCodeApi()` at **import time**. Any test importing state (or modules that import state) crashes immediately. | This is handled by `tests/webview/setup.ts` — ensure Vitest config includes it in `setupFiles`. |
+| 10 | Using `out/` as extension runtime output | `out/` is only for **test compilation** (`tsc`). The extension runtime bundle is in `dist/` (webpack). | Never reference `out/` in `package.json` "main" or runtime code paths. |
+
+---
+
 ## Project Overview
 
 **Ollama Copilot** is a VS Code extension that provides GitHub Copilot-like AI assistance using local Ollama or OpenWebUI as the backend. It's designed to be a fully local, privacy-preserving alternative to cloud-based AI coding assistants.
@@ -318,6 +337,19 @@ Settings are defined in `package.json` under `contributes.configuration`:
 - Do not land changes unless the project is green:
   - Run `npm run test:all` locally when practical.
   - CI must pass (webview tests + extension-host tests).
+
+### Post-Change Verification (Required)
+
+After **any** code change, run through this checklist:
+
+1. **Compile check**: `npm run compile` — must exit 0 (builds both webview via Vite and extension via webpack)
+2. **Type check tests**: `npx tsc -p tsconfig.test.json --noEmit` — ensures test files still compile against changed source
+3. **Run relevant tests**:
+   - Changed `src/webview/**` → `npm run test:webview`
+   - Changed `src/**` (non-webview) → `npm test`
+   - Changed both or unsure → `npm run test:all`
+4. **Check for regressions**: If you modified a message type, verify both the live handler (in `messageHandlers/`) and `timelineBuilder.ts` still agree
+5. **Verify no stale imports**: If you moved or renamed a file, search for old import paths across the codebase
 
 ### Adding a New Mode
 

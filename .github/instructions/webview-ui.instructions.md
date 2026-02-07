@@ -5,6 +5,42 @@ description: "Webview UI conventions, Vue component patterns, CSS theming, and a
 
 # Webview UI Rules
 
+## ⚠️ Webview Sandbox Boundaries
+
+### NEVER Import `vscode` in Webview Code
+
+Files under `src/webview/**` run inside a **sandboxed iframe**. The `vscode` Node module does **not** exist in this context. Any `import * as vscode from 'vscode'` or `require('vscode')` will:
+- ✅ Compile without errors (TypeScript sees the `@types/vscode` declarations)
+- ❌ **Crash at runtime** — the module is not available in the webview sandbox
+
+**How to communicate with the extension host instead:**
+```typescript
+// In src/webview/scripts/core/state.ts (already done — do NOT duplicate)
+const vscodeApi = acquireVsCodeApi();
+
+// Send message TO the extension:
+vscodeApi.postMessage({ type: 'myMessage', ... });
+
+// Receive messages FROM the extension:
+window.addEventListener('message', (event) => { /* event.data */ });
+```
+
+**Allowed imports in webview code:**
+- ✅ Vue, vue-router, other npm packages bundled by Vite
+- ✅ Relative imports within `src/webview/`
+- ✅ Type-only imports from `src/types/` (e.g., `import type { SessionRecord } from '../../types/session'`)
+- ❌ `vscode` module (runtime crash)
+- ❌ `src/services/*`, `src/views/*`, `src/agent/*` (these import `vscode` internally)
+
+### `acquireVsCodeApi()` — Import-Time Side Effect
+
+`acquireVsCodeApi()` is called **at import time** in `src/webview/scripts/core/state.ts`. This means:
+
+1. **Any module that imports `state.ts`** (directly or transitively) triggers the call immediately.
+2. **In tests**, this function doesn't exist. The stub is set up in `tests/webview/setup.ts` via Vitest's `setupFiles` — this runs *before* any test imports.
+3. **If you create a new webview module** that imports from `state.ts`, `actions/`, `computed.ts`, or `messageHandlers/`, it will work in the browser but **crash in tests** unless the setup file is loaded first.
+4. **Never call `acquireVsCodeApi()` a second time** — VS Code throws if it's called more than once. Always import the existing `vscodeApi` from `state.ts`.
+
 ## Assistant Thread UI Structure
 
 The webview represents each assistant response as a **single assistant thread item** with a `blocks` array:

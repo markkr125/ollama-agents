@@ -71,6 +71,18 @@ const mode = getModeConfig('agent'); // shortcut for config.agentMode
 const agent = getAgentConfig();      // shortcut for config.agent
 ```
 
+## Build Output Directories
+
+Three output directories exist. **Never edit files in these directories** — they are overwritten on every build.
+
+| Directory | Build Tool | Contains | Source |
+|-----------|-----------|----------|--------|
+| `dist/` | **Webpack** | Extension bundle (`extension.js`) — this is the runtime entry point (`"main"` in `package.json`) | `src/**` (excluding `src/webview/`) |
+| `media/` | **Vite** | Webview bundle (`index.html`, `chatView.js`, `chatView.css`) — loaded by `ChatViewProvider` | `src/webview/**` |
+| `out/` | **tsc** (`tsconfig.test.json`) | Compiled test files — used **only** by `@vscode/test-electron` runner | `tests/extension/**` |
+
+**Common mistake**: Editing `media/chatView.js` or `dist/extension.js` directly. These changes are silently lost on the next `npm run compile`.
+
 **Settings scope rule**: Only `baseUrl` respects workspace vs global scope (uses `config.inspect()` to detect existing scope). All other settings are always saved to `ConfigurationTarget.Global`.
 
 ## Settings Mapping Asymmetry

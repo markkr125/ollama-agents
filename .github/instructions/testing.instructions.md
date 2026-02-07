@@ -155,3 +155,45 @@ The following test suites exist in `tests/extension/suite/`:
   - `App.ts` wires `window.addEventListener('message', ...)` and is intentionally more integration-heavy.
 - When asserting message sends to the extension, assert calls to the stubbed `postMessage` function.
 - Keep tests deterministic: use `vi.useFakeTimers()` for debounced functions (e.g. search) and `vi.setSystemTime()` when IDs/timestamps are time-based.
+
+## Debugging Tests
+
+### Running a Single Test or Suite
+
+**Extension host tests (Mocha):**
+```bash
+# Run a specific test file by grep pattern
+npm test -- --grep "toolCallParser"
+
+# Run tests matching a describe/it name
+npm test -- --grep "should parse XML format"
+```
+
+**Webview tests (Vitest):**
+```bash
+# Run a specific test file
+npm run test:webview -- tests/webview/core/timelineBuilder.test.ts
+
+# Run tests matching a name pattern
+npm run test:webview -- -t "should merge text blocks"
+
+# Verbose output (shows each test name)
+npm run test:webview -- --reporter verbose
+```
+
+### Debugging with Breakpoints
+
+**Extension host tests**: Use the VS Code debugger with the "Extension Tests" launch configuration (see `.vscode/launch.json`). Set breakpoints in `tests/extension/suite/**` or in `src/**` — the debugger attaches to the VS Code Extension Host process.
+
+**Webview tests**: Use the "Debug Webview Tests" launch configuration which runs Vitest in debug mode. Breakpoints work in both test files (`tests/webview/**`) and source files (`src/webview/**`).
+
+### Common Test Failures & What They Mean
+
+| Error | Cause | Fix |
+|-------|-------|-----|
+| `acquireVsCodeApi is not defined` | Test imports a webview module but `tests/webview/setup.ts` didn't run first | Ensure `setupFiles` includes `'./setup.ts'` in `tests/webview/vitest.config.ts` |
+| `Cannot find module 'vscode'` | Extension test can't find VS Code APIs | Ensure you're running via `npm test` (which uses `@vscode/test-electron`), not `node` or `ts-node` directly |
+| Extension tests hang indefinitely | Shell integration not available (CI, headless) or `waitForCommandEnd()` never resolves | Check that the test runner has a display (Xvfb in CI); add timeouts to terminal-dependent tests |
+| `vi.resetModules()` doesn't clear state | Modules imported before `resetModules()` keep old references | Call `vi.resetModules()` then re-import the module via dynamic `import()` inside the test |
+| Test passes alone but fails in suite | Shared mutable state between tests (e.g., `state.ts` refs) | Use `beforeEach` to reset state; use `vi.resetModules()` for module-level singletons |
+| `SQLITE_CONSTRAINT: FOREIGN KEY` | Test tried to insert a message without creating the parent session first | Always call `createSession()` before `addMessage()` — FK constraints are enforced |
