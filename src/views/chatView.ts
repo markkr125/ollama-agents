@@ -78,6 +78,26 @@ export class ChatViewProvider implements vscode.WebviewViewProvider, WebviewMess
     this.view?.webview.postMessage(message);
   }
 
+  /**
+   * Reveal the sidebar and navigate the webview to the settings page.
+   * Called by the `ollamaCopilot.showSetup` command and on first-run.
+   */
+  public navigateToSettings(isFirstRun = false) {
+    if (this.view) {
+      this.view.show?.(true);
+      this.postMessage({ type: 'navigateToSettings', isFirstRun });
+    } else {
+      // Sidebar hasn't been resolved yet — reveal the view which will
+      // trigger resolveWebviewView, then queue the navigation.
+      vscode.commands.executeCommand('ollamaCopilot.chatView.focus').then(() => {
+        // Small delay to let the webview finish initializing
+        setTimeout(() => {
+          this.postMessage({ type: 'navigateToSettings', isFirstRun });
+        }, 500);
+      });
+    }
+  }
+
   private refreshExplorer() {
     vscode.commands.executeCommand('workbench.files.action.refreshFilesExplorer');
   }
@@ -112,7 +132,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider, WebviewMess
     webviewView.webview.onDidReceiveMessage(async data => {
       switch (data.type) {
         case 'ready':
-          await this.initialize();
+          await this.initialize(data.sessionId);
           await this.settingsHandler.sendSettingsUpdate();
           break;
         case 'sendMessage':
@@ -127,18 +147,24 @@ export class ChatViewProvider implements vscode.WebviewViewProvider, WebviewMess
         case 'selectMode':
           this.currentMode = data.mode;
           break;
-        case 'newChat':
-          await this.sessionController.createNewSession(this.currentMode, this.currentModel);
-          this.postMessage({ type: 'clearMessages', sessionId: this.sessionController.getCurrentSessionId() });
-          this.postMessage({
-            type: 'sessionApprovalSettings',
-            sessionId: this.sessionController.getCurrentSessionId(),
-            autoApproveCommands: false,
-            autoApproveSensitiveEdits: false,
-            sessionSensitiveFilePatterns: null
-          });
-          await this.sessionController.sendSessionsList();
+        case 'newChat': {
+          const idleSessionId = await this.databaseService.findIdleEmptySession();
+          if (idleSessionId) {
+            await this.sessionController.loadSession(idleSessionId);
+          } else {
+            await this.sessionController.createNewSession(this.currentMode, this.currentModel);
+            this.postMessage({ type: 'clearMessages', sessionId: this.sessionController.getCurrentSessionId() });
+            this.postMessage({
+              type: 'sessionApprovalSettings',
+              sessionId: this.sessionController.getCurrentSessionId(),
+              autoApproveCommands: false,
+              autoApproveSensitiveEdits: false,
+              sessionSensitiveFilePatterns: null
+            });
+            await this.sessionController.sendSessionsList();
+          }
           break;
+        }
         case 'addContext':
           await this.handleAddContext();
           break;
@@ -152,11 +178,28 @@ export class ChatViewProvider implements vscode.WebviewViewProvider, WebviewMess
           await this.settingsHandler.saveSettings(data.settings);
           break;
         case 'testConnection':
-          await this.settingsHandler.testConnection();
+          await this.settingsHandler.testConnection(data.baseUrl);
           break;
         case 'saveBearerToken':
-          await this.settingsHandler.saveBearerToken(data.token, data.testAfterSave);
+          await this.settingsHandler.saveBearerToken(data.token, data.testAfterSave, data.baseUrl);
           break;
+        case 'deleteMultipleSessions': {
+          const ids: string[] = data.sessionIds || [];
+          if (ids.length === 0) break;
+          const confirm = await vscode.window.showWarningMessage(
+            `Delete ${ids.length} conversation${ids.length > 1 ? 's' : ''}? This cannot be undone.`,
+            { modal: true },
+            'Delete'
+          );
+          if (confirm === 'Delete') {
+            await this.sessionController.deleteMultipleSessions(ids, this.currentMode, this.currentModel);
+          } else {
+            // Cancelled — tell frontend to undo optimistic removal
+            this.postMessage({ type: 'sessionsDeleted', sessionIds: [] });
+            await this.sessionController.sendSessionsList();
+          }
+          break;
+        }
         case 'searchSessions':
           await this.sessionController.handleSearchSessions(data.query);
           break;
@@ -221,45 +264,55 @@ export class ChatViewProvider implements vscode.WebviewViewProvider, WebviewMess
     });
   }
 
-  private async initialize() {
+  private async initialize(requestedSessionId?: string) {
     const settings = this.settingsHandler.getSettingsPayload();
     const hasToken = await this.tokenManager.hasToken();
 
-    if (!this.sessionController.getCurrentSessionId()) {
-      const recentSessions = await this.databaseService.listSessions(1);
-      if (recentSessions.sessions.length > 0) {
-        await this.sessionController.loadSession(recentSessions.sessions[0].id);
-      } else {
-        await this.sessionController.createNewSession(this.currentMode, this.currentModel);
+    // Run session loading and model listing in parallel
+    const sessionLoadPromise = (async () => {
+      // Try to restore the session the webview was showing before collapse
+      if (requestedSessionId) {
+        const session = await this.databaseService.getSession(requestedSessionId);
+        if (session) {
+          await this.sessionController.loadSession(requestedSessionId);
+          return;
+        }
       }
-    }
+      if (!this.sessionController.getCurrentSessionId()) {
+        const recentSessions = await this.databaseService.listSessions(1);
+        if (recentSessions.sessions.length > 0) {
+          await this.sessionController.loadSession(recentSessions.sessions[0].id);
+        } else {
+          await this.sessionController.createNewSession(this.currentMode, this.currentModel);
+        }
+      }
+    })();
 
+    const modelListPromise = this.client.listModels().catch((err: any) => {
+      console.warn('Failed to list models during init:', err);
+      return [] as { name: string }[];
+    });
+
+    const [, models] = await Promise.all([sessionLoadPromise, modelListPromise]);
+
+    const modeConfig = getModeConfig('agent');
+    this.currentModel = modeConfig.model || (models.length > 0 ? models[0].name : '');
+
+    this.postMessage({
+      type: 'init',
+      models: models.map((m: any) => ({ name: m.name, selected: m.name === this.currentModel })),
+      currentMode: this.currentMode,
+      settings,
+      hasToken
+    });
+
+    // Populate the sessions list for the sidebar
     await this.sessionController.sendSessionsList();
 
-    try {
-      const models = await this.client.listModels();
-      const modeConfig = getModeConfig('agent');
-      this.currentModel = modeConfig.model || (models.length > 0 ? models[0].name : '');
-
-      this.postMessage({
-        type: 'init',
-        models: models.map(m => ({ name: m.name, selected: m.name === this.currentModel })),
-        currentMode: this.currentMode,
-        settings,
-        hasToken
-      });
-    } catch (error: any) {
-      this.postMessage({
-        type: 'init',
-        models: [],
-        currentMode: this.currentMode,
-        settings,
-        hasToken
-      });
-
+    if (models.length === 0) {
       this.postMessage({
         type: 'connectionError',
-        error: error.message
+        error: 'No models available. Check your Ollama connection.'
       });
     }
   }
@@ -443,12 +496,27 @@ export class ChatViewProvider implements vscode.WebviewViewProvider, WebviewMess
       ]
     });
 
+    let streamTimer: ReturnType<typeof setTimeout> | null = null;
+    const STREAM_THROTTLE_MS = 32; // ~30fps — balances responsiveness with CPU usage
+
     for await (const chunk of stream) {
       if (token.isCancellationRequested) break;
       if (chunk.message?.content) {
         fullResponse += chunk.message.content;
-        this.postMessage({ type: 'streamChunk', content: fullResponse, model: this.currentModel, sessionId });
+        // Throttle: schedule a trailing-edge post instead of posting every token
+        if (!streamTimer) {
+          streamTimer = setTimeout(() => {
+            streamTimer = null;
+            this.postMessage({ type: 'streamChunk', content: fullResponse, model: this.currentModel, sessionId });
+          }, STREAM_THROTTLE_MS);
+        }
       }
+    }
+
+    // Flush any pending throttled update
+    if (streamTimer) {
+      clearTimeout(streamTimer);
+      streamTimer = null;
     }
 
     const assistantMessage = await this.databaseService.addMessage(

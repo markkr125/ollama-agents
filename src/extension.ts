@@ -11,7 +11,6 @@ import { ModelManager } from './services/modelManager';
 import { OllamaClient } from './services/ollamaClient';
 import { TokenManager } from './services/tokenManager';
 import { ChatViewProvider } from './views/chatView';
-import { registerSetupWizard } from './webview/setupWizard';
 
 let client: OllamaClient;
 let tokenManager: TokenManager;
@@ -43,18 +42,19 @@ export async function activate(context: vscode.ExtensionContext) {
     sessionManager = new SessionManager(context);
     outputChannel = vscode.window.createOutputChannel('Ollama Copilot');
 
-    // Test connection
-    const connected = await client.testConnection();
-    if (!connected) {
-      vscode.window.showWarningMessage(
-        `Cannot connect to Ollama at ${config.baseUrl}. Please ensure it's running.`,
-        'Open Settings'
-      ).then(choice => {
-        if (choice === 'Open Settings') {
-          vscode.commands.executeCommand('workbench.action.openSettings', 'ollamaCopilot');
-        }
-      });
-    }
+    // Test connection (fire-and-forget — don't block activation)
+    client.testConnection().then(connected => {
+      if (!connected) {
+        vscode.window.showWarningMessage(
+          `Cannot connect to Ollama at ${config.baseUrl}. Please ensure it's running.`,
+          'Open Settings'
+        ).then(choice => {
+          if (choice === 'Open Settings') {
+            vscode.commands.executeCommand('workbench.action.openSettings', 'ollamaCopilot');
+          }
+        });
+      }
+    }).catch(() => { /* non-fatal */ });
 
     // Create status bar item for model selection
     statusBarItem = vscode.window.createStatusBarItem(
@@ -134,26 +134,21 @@ export async function activate(context: vscode.ExtensionContext) {
     registerAgentMode(context, client, sessionManager, outputChannel);
 
 
-    // Register setup wizard
-    registerSetupWizard(context, client, tokenManager);
-
     // Register Edit mode
     await registerEditMode(context, client);
+
+    // Register showSetup command — opens the sidebar settings page
+    context.subscriptions.push(
+      vscode.commands.registerCommand('ollamaCopilot.showSetup', () => {
+        chatViewProvider.navigateToSettings(true);
+      })
+    );
 
     // Check for first run
     const isFirstRun = !context.globalState.get('setupCompleted');
     if (isFirstRun) {
-      const choice = await vscode.window.showInformationMessage(
-        'Welcome to Ollama Copilot! Would you like to configure it now?',
-        'Configure',
-        'Later'
-      );
-      
-      if (choice === 'Configure') {
-        vscode.commands.executeCommand('ollamaCopilot.showSetup');
-      }
-      
       await context.globalState.update('setupCompleted', true);
+      chatViewProvider.navigateToSettings(true);
     }
 
     console.log('Ollama Copilot activated successfully!');

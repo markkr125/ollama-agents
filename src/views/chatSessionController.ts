@@ -185,8 +185,6 @@ export class ChatSessionController {
     } else {
       this.emitter.postMessage({ type: 'generationStopped', sessionId });
     }
-
-    await this.sendSessionsList();
   }
 
   private isLatestRequest(requestId: number): boolean {
@@ -208,7 +206,29 @@ export class ChatSessionController {
     if (sessionId === this.currentSessionId) {
       await this.createNewSession(mode, model);
       this.emitter.postMessage({ type: 'clearMessages', sessionId: this.currentSessionId });
+      await this.sendSessionsList();
+    } else {
+      this.emitter.postMessage({ type: 'sessionDeleted', sessionId });
     }
+  }
+
+  async deleteMultipleSessions(sessionIds: string[], mode: string, model: string) {
+    const total = sessionIds.length;
+    const needsNewSession = sessionIds.includes(this.currentSessionId);
+
+    await this.databaseService.deleteMultipleSessions(
+      sessionIds,
+      total >= 10 ? (completed, t) => {
+        this.emitter.postMessage({ type: 'deletionProgress', completed, total: t });
+      } : undefined
+    );
+
+    if (needsNewSession) {
+      await this.createNewSession(mode, model);
+      this.emitter.postMessage({ type: 'clearMessages', sessionId: this.currentSessionId });
+    }
+
+    this.emitter.postMessage({ type: 'sessionsDeleted', sessionIds });
     await this.sendSessionsList();
   }
 
@@ -216,21 +236,18 @@ export class ChatSessionController {
     if (this.currentSession && this.currentSession.id === sessionId) {
       this.currentSession = { ...this.currentSession, auto_approve_commands: enabled, updated_at: Date.now() };
     }
-    await this.sendSessionsList();
   }
 
   async updateSessionAutoApproveSensitiveEdits(sessionId: string, enabled: boolean): Promise<void> {
     if (this.currentSession && this.currentSession.id === sessionId) {
       this.currentSession = { ...this.currentSession, auto_approve_sensitive_edits: enabled, updated_at: Date.now() };
     }
-    await this.sendSessionsList();
   }
 
   async updateSessionSensitiveFilePatterns(sessionId: string, patterns: string | null): Promise<void> {
     if (this.currentSession && this.currentSession.id === sessionId) {
       this.currentSession = { ...this.currentSession, sensitive_file_patterns: patterns, updated_at: Date.now() };
     }
-    await this.sendSessionsList();
   }
 
   async handleSearchSessions(query: string) {

@@ -1,0 +1,148 @@
+// Self-contained diff2html styles for the VS Code webview (side-by-side mode).
+// We do NOT import diff2html's base CSS — it adds too much visual clutter.
+// Instead we style only the HTML elements diff2html actually outputs,
+// themed to match VS Code's native diff editor colors.
+
+// ── Wrapper & file chrome ────────────────────────────────────────────
+.d2h-wrapper {
+  font-size: 12px;
+  background: transparent;
+  text-align: left;
+}
+
+.d2h-file-header {
+  display: none; // file path is shown in the approval card header
+}
+
+.d2h-file-wrapper {
+  border: 1px solid var(--surface-border);
+  border-radius: 6px;
+  overflow: hidden;
+}
+
+// ── Side-by-side layout ──────────────────────────────────────────────
+.d2h-files-diff {
+  display: flex;
+  width: 100%;
+}
+
+.d2h-file-side-diff {
+  flex: 1;
+  min-width: 0;
+  overflow-x: auto;
+
+  // Divider between left and right panes
+  &:first-child {
+    border-right: 1px solid var(--surface-border);
+  }
+}
+
+// ── Diff table ───────────────────────────────────────────────────────
+.d2h-diff-table {
+  border-collapse: collapse;
+  font-family: var(--vscode-editor-font-family, Consolas, 'Courier New', monospace);
+  font-size: 12px;
+  width: 100%;
+}
+
+// ── Line numbers (side-by-side uses d2h-code-side-linenumber) ────────
+.d2h-code-linenumber,
+.d2h-code-side-linenumber {
+  background: var(--vscode-editor-background);
+  color: var(--muted);
+  border-right: 1px solid var(--surface-border);
+  padding: 0 6px;
+  text-align: right;
+  vertical-align: middle;
+  user-select: none;
+  width: 1%;
+  white-space: nowrap;
+  font-size: 11px;
+  line-height: 20px;
+}
+
+// line-by-line dual line numbers
+.line-num1,
+.line-num2 {
+  display: inline-block;
+  min-width: 2em;
+  text-align: right;
+  padding: 0 2px;
+}
+
+// ── Code lines ───────────────────────────────────────────────────────
+.d2h-code-line,
+.d2h-code-side-line {
+  padding: 0 8px;
+  white-space: nowrap;
+  line-height: 20px;
+}
+
+.d2h-code-line-prefix {
+  user-select: none;
+  display: inline;
+  padding-right: 4px;
+  color: var(--muted);
+}
+
+.d2h-code-line-ctn {
+  display: inline;
+  word-wrap: normal;
+  white-space: pre;
+  color: var(--fg);
+}
+
+// ── Row backgrounds (unchanged / del / ins / info) ───────────────────
+
+// Default (context rows)
+.d2h-diff-tbody tr {
+  background: var(--vscode-editor-background);
+}
+
+// Context rows
+.d2h-cntx {
+  background: var(--vscode-editor-background);
+}
+
+// Deletions (left pane)
+.d2h-del {
+  background-color: var(--vscode-diffEditor-removedLineBackground, rgba(255, 0, 0, 0.12));
+}
+.d2h-del.d2h-change {
+  background-color: var(--vscode-diffEditor-removedLineBackground, rgba(255, 0, 0, 0.12));
+}
+.d2h-code-line del,
+.d2h-code-side-line del {
+  background-color: var(--vscode-diffEditor-removedTextBackground, rgba(255, 0, 0, 0.22));
+  text-decoration: none;
+  border-radius: 2px;
+  display: inline;
+}
+
+// Insertions (right pane)
+.d2h-ins {
+  background-color: var(--vscode-diffEditor-insertedLineBackground, rgba(0, 200, 0, 0.12));
+}
+.d2h-ins.d2h-change {
+  background-color: var(--vscode-diffEditor-insertedLineBackground, rgba(0, 200, 0, 0.12));
+}
+.d2h-code-line ins,
+.d2h-code-side-line ins {
+  background-color: var(--vscode-diffEditor-insertedTextBackground, rgba(0, 200, 0, 0.22));
+  text-decoration: none;
+  border-radius: 2px;
+  display: inline;
+}
+
+// Empty placeholder (when one side has no matching line)
+.d2h-code-side-emptyplaceholder,
+.d2h-emptyplaceholder {
+  background-color: var(--surface-bg);
+}
+
+// Hunk header (@@ … @@)
+.d2h-info {
+  background: var(--surface-bg);
+  color: var(--muted);
+  font-style: italic;
+}

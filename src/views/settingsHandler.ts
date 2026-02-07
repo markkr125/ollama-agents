@@ -100,7 +100,11 @@ export class SettingsHandler {
     await this.sendSettingsUpdate();
   }
 
-  async testConnection() {
+  async testConnection(baseUrl?: string) {
+    // Apply base URL if provided (avoids race with concurrent saveSettings)
+    if (baseUrl) {
+      this.client.setBaseUrl(baseUrl);
+    }
     try {
       const models = await this.client.listModels();
       this.emitter.postMessage({
@@ -118,7 +122,11 @@ export class SettingsHandler {
     }
   }
 
-  async saveBearerToken(token: string, testAfterSave?: boolean) {
+  async saveBearerToken(token: string, testAfterSave?: boolean, baseUrl?: string) {
+    // Apply base URL if provided (avoids race with concurrent saveSettings)
+    if (baseUrl) {
+      this.client.setBaseUrl(baseUrl);
+    }
     if (token) {
       await this.tokenManager.setToken(token);
       this.client.setBearerToken(token);

@@ -2,6 +2,10 @@ node_modules
 out
 dist
 *.vsix
+.vscode/*
+!.vscode/launch.json
+!.vscode/tasks.json
+!.vscode/extensions.json
 .vscode-test
 .vscode-test/
 .vscode-test-extensions/

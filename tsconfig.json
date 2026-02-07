@@ -21,5 +21,17 @@
     "noFallthroughCasesInSwitch": true
   },
   "include": ["src/**/*"],
-  "exclude": ["node_modules", ".vscode-test", "out", "dist"]
+  "exclude": [
+    "node_modules",
+    ".vscode-test",
+    "out",
+    "dist",
+    "src/webview/*.vue",
+    "src/webview/main.ts",
+    "src/webview/index.html",
+    "src/webview/components",
+    "src/webview/scripts",
+    "src/webview/styles",
+    "src/webview/vite.config.ts"
+  ]
 }
