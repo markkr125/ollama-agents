@@ -127,9 +127,10 @@
       <div class="settings-item">
         <label class="settings-label">Completion Model</label>
         <select v-model="settings.completionModel" @change="autoSave">
-          <option v-if="modelOptions.length === 0" value="" disabled>No enabled models</option>
-          <option v-for="m in modelOptions" :key="m" :value="m">{{ m }}</option>
+          <option v-if="fimModelOptions.length === 0" value="" disabled>No FIM-capable models</option>
+          <option v-for="m in fimModelOptions" :key="m" :value="m">{{ m }}</option>
         </select>
+        <p class="field-hint">Only models with Fill-in-Middle (FIM) support are shown.</p>
       </div>
     </div>
   </div>
@@ -154,6 +155,15 @@ const props = defineProps<{
 const progressPercent = computed(() => {
   if (props.capabilityCheckProgress.total === 0) return 0;
   return Math.round((props.capabilityCheckProgress.completed / props.capabilityCheckProgress.total) * 100);
+});
+
+const fimModelOptions = computed(() => {
+  const fimNames = new Set(
+    props.modelInfo
+      .filter(m => m.enabled && m.capabilities.fim)
+      .map(m => m.name)
+  );
+  return props.modelOptions.filter(name => fimNames.has(name));
 });
 
 const allEnabled = computed(() => props.modelInfo.length > 0 && props.modelInfo.every(m => m.enabled));
@@ -327,6 +337,13 @@ function formatSize(bytes: number): string {
 
 .table-actions .btn {
   font-size: 12px;
+}
+
+.field-hint {
+  font-size: 11px;
+  color: var(--vscode-descriptionForeground);
+  margin-top: 4px;
+  opacity: 0.85;
 }
 
 /* Model selection sub-section */
