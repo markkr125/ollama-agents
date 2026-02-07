@@ -32,8 +32,6 @@
     "src/webview/components",
     "src/webview/scripts",
     "src/webview/styles",
-    "src/webview/tests",
-    "src/webview/vite.config.ts",
-    "src/webview/vitest.config.ts"
+    "src/webview/vite.config.ts"
   ]
 }

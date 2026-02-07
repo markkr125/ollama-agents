@@ -5,16 +5,16 @@ beforeEach(async () => {
 });
 
 test('temperatureDisplay formats slider value', async () => {
-  const state = await import('../../scripts/core/state');
-  const computed = await import('../../scripts/core/computed');
+  const state = await import('../../../src/webview/scripts/core/state');
+  const computed = await import('../../../src/webview/scripts/core/computed');
 
   state.temperatureSlider.value = 75;
   expect(computed.temperatureDisplay.value).toBe('0.8');
 });
 
 test('toolTimeoutSeconds getter/setter clamps to >=1s', async () => {
-  const state = await import('../../scripts/core/state');
-  const computed = await import('../../scripts/core/computed');
+  const state = await import('../../../src/webview/scripts/core/state');
+  const computed = await import('../../../src/webview/scripts/core/computed');
 
   state.settings.toolTimeout = 30_000;
   expect(computed.toolTimeoutSeconds.value).toBe(30);
@@ -24,8 +24,8 @@ test('toolTimeoutSeconds getter/setter clamps to >=1s', async () => {
 });
 
 test('headerTitle switches by page', async () => {
-  const state = await import('../../scripts/core/state');
-  const computed = await import('../../scripts/core/computed');
+  const state = await import('../../../src/webview/scripts/core/state');
+  const computed = await import('../../../src/webview/scripts/core/computed');
 
   state.currentPage.value = 'chat';
   expect(computed.headerTitle.value).toBe('Copilot');
@@ -38,8 +38,8 @@ test('headerTitle switches by page', async () => {
 });
 
 test('searchHasMore reflects visible vs total', async () => {
-  const state = await import('../../scripts/core/state');
-  const computed = await import('../../scripts/core/computed');
+  const state = await import('../../../src/webview/scripts/core/state');
+  const computed = await import('../../../src/webview/scripts/core/computed');
 
   state.allSearchResults.value = [
     {

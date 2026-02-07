@@ -1,5 +1,5 @@
 import * as assert from 'assert';
-import { parseNDJSON } from '../../../utils/streamParser';
+import { parseNDJSON } from '../../../../src/utils/streamParser';
 
 function makeReaderFromChunks(chunks: string[]): ReadableStreamDefaultReader<Uint8Array> {
   const encoder = new TextEncoder();

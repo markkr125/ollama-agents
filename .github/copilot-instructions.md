@@ -7,7 +7,7 @@
 > | `.github/instructions/database-rules.instructions.md` | `src/services/databaseService.ts,src/services/sessionIndexService.ts,src/views/settingsHandler.ts` | Dual-DB design, schema mismatch, LanceDB corruption, message ordering, clearing data |
 > | `.github/instructions/ui-messages.instructions.md` | `src/views/**,src/webview/**` | Backend↔frontend message protocol (full type tables), chat view structure, streaming behavior |
 > | `.github/instructions/webview-ui.instructions.md` | `src/webview/**` | Assistant thread structure, CSS theming, diff2html, Vue patterns, session UX |
-> | `.github/instructions/testing.instructions.md` | `src/test/**,src/webview/tests/**` | Test harnesses, coverage catalogs, webview test rules |
+> | `.github/instructions/testing.instructions.md` | `tests/**` | Test harnesses, coverage catalogs, webview test rules |
 > | `.github/instructions/agent-tools.instructions.md` | `src/agent/**,src/services/agentChatExecutor.ts,src/utils/toolCallParser.ts` | Agent execution flow, tool registry, tool call parser, terminal execution, command safety, approval flow |
 > | `.github/instructions/extension-architecture.instructions.md` | `src/extension.ts,src/config/**,src/services/**,src/types/**` | Type system (3 message interfaces), service init order, config patterns, OllamaClient API, terminal manager, model compatibility |
 > | `.github/instructions/documentation.instructions.md` | `docs/**,README.md` | Doc index maintenance, cross-link rules, TOC requirement, content rules, when to update |
@@ -19,6 +19,7 @@
 > | `.github/skills/add-agent-tool/` | Step-by-step guide for adding a new agent tool |
 > | `.github/skills/add-new-setting/` | Step-by-step guide for adding a new VS Code configuration setting |
 > | `.github/skills/add-chat-message-type/` | Step-by-step guide for adding a new backend↔frontend message type |
+> | `.github/skills/add-test/` | Step-by-step guide for adding a new test (choose harness, file placement, imports, conventions) |
 
 ---
 
@@ -159,7 +160,6 @@ src/
 │   ├── main.ts            # Webview bootstrap
 │   ├── index.html         # Webview HTML entry
 │   ├── vite.config.ts     # Vite build config for webview
-│   ├── vitest.config.ts   # Vitest config for webview tests
 │   ├── components/        # Vue UI components (page-per-folder pattern)
 │   │   ├── HeaderBar.vue       # Top bar (back, new chat, settings, sessions)
 │   │   ├── SessionsPanel.vue   # Full-page sessions list + search
@@ -193,11 +193,22 @@ src/
 │   │       ├── state.ts    # Reactive state/refs
 │   │       └── types.ts    # Shared types
 │   ├── styles/            # SCSS entry + partials
-│   └── tests/             # Vitest webview tests
+│   └── tests/             # (moved to tests/webview/ — see below)
 ├── templates/            # Prompt templates
 ├── types/                # TypeScript type definitions
 │   └── session.ts         # Shared chat + agent session types
 └── utils/                # Utility functions
+
+tests/                    # All tests (separate from source)
+├── extension/            # @vscode/test-electron + Mocha
+│   ├── runTest.ts         # Entry point — launches VS Code + mock server
+│   ├── mocks/             # HTTP mock server for Ollama API
+│   └── suite/             # Test suites (agent/, services/, utils/)
+└── webview/              # Vitest + jsdom + Vue Test Utils
+    ├── vitest.config.ts   # Vitest config
+    ├── setup.ts           # Global setup (stubs acquireVsCodeApi)
+    ├── core/              # State/actions/computed/timeline tests
+    └── components/        # Vue component tests
 ```
 
 ---
@@ -303,8 +314,8 @@ Settings are defined in `package.json` under `contributes.configuration`:
 
 - Keep instructions up to date whenever behavior, message payloads, settings, storage, or UI contracts change. Update the **relevant scoped file** (`.github/instructions/*.instructions.md` or `.github/skills/*/SKILL.md`), not just this root file.
 - Build or update automated tests whenever features are added/updated.
-  - Use Vitest for webview core logic/components (`src/webview/tests`).
-  - Use `@vscode/test-electron` for VS Code/extension integration (`src/test`).
+  - Use Vitest for webview core logic/components (`tests/webview`).
+  - Use `@vscode/test-electron` for VS Code/extension integration (`tests/extension`).
 - Do not land changes unless the project is green:
   - Run `npm run test:all` locally when practical.
   - CI must pass (webview tests + extension-host tests).
@@ -383,3 +394,4 @@ vsce package
 | Terminal command execution | `src/services/terminalManager.ts` + `src/utils/commandSafety.ts` | `agent-tools` instructions |
 | File edit approval | `src/utils/fileSensitivity.ts` + `src/services/agentChatExecutor.ts` | `agent-tools` instructions |
 | Write/edit instructions | `.github/instructions/` + `.github/skills/` | `copilot-custom-instructions` skill |
+| Add a new test | `tests/extension/suite/` or `tests/webview/` | `add-test` skill |

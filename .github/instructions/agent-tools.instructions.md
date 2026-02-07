@@ -183,4 +183,4 @@ this.register({
 
 3. Add to Tools section in settings UI
 
-4. Write tests in `src/test/suite/agent/toolRegistry.test.ts`
+4. Write tests in `tests/extension/suite/agent/toolRegistry.test.ts`

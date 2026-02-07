@@ -1,16 +1,16 @@
 import { mount } from '@vue/test-utils';
 import { beforeEach, describe, expect, test, vi } from 'vitest';
 import { nextTick } from 'vue';
-import SettingsPage from '../../components/settings/SettingsPage.vue';
-import { useSettingsPage } from '../../scripts/core/settings';
-import { isFirstRun, sessionSensitiveFilePatterns } from '../../scripts/core/state';
+import SettingsPage from '../../../src/webview/components/settings/SettingsPage.vue';
+import { useSettingsPage } from '../../../src/webview/scripts/core/settings';
+import { isFirstRun, sessionSensitiveFilePatterns } from '../../../src/webview/scripts/core/state';
 
 // Mock the actions module so we don't pull in the full state/postMessage chain
-vi.mock('../../scripts/core/actions/index', () => ({
+vi.mock('../../../src/webview/scripts/core/actions/index', () => ({
   updateSessionSensitivePatterns: vi.fn()
 }));
 
-import { updateSessionSensitivePatterns } from '../../scripts/core/actions/index';
+import { updateSessionSensitivePatterns } from '../../../src/webview/scripts/core/actions/index';
 
 // --- Helper: minimal SettingsPage props ---
 function makeProps(overrides: Record<string, any> = {}) {

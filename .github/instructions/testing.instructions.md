@@ -1,5 +1,5 @@
 ---
-applyTo: "src/test/**,src/webview/tests/**"
+applyTo: "tests/**"
 description: "Testing guidelines, test harness setup, existing test coverage catalogs, and webview test rules"
 ---
 
@@ -18,16 +18,16 @@ This repo uses two complementary test harnesses:
 - Runner: `@vscode/test-electron` + Mocha
 - Command: `npm test`
 - Location:
-  - Test harness + mocks: `src/test/`
-  - Test suites: `src/test/suite/`
-    - `src/test/suite/utils/` for pure utilities
-    - `src/test/suite/services/` for service-level integration tests
+  - Test harness + mocks: `tests/extension/`
+  - Test suites: `tests/extension/suite/`
+    - `tests/extension/suite/utils/` for pure utilities
+    - `tests/extension/suite/services/` for service-level integration tests
 
 2) **Webview tests (fast unit/component)**
 - Runner: Vitest + jsdom + Vue Test Utils
 - Command: `npm run test:webview`
-- Location: `src/webview/tests/`
-- Config: `src/webview/vitest.config.ts`
+- Location: `tests/webview/`
+- Config: `tests/webview/vitest.config.ts`
 
 To run everything locally (recommended before pushing): `npm run test:all`.
 
@@ -35,7 +35,7 @@ To run everything locally (recommended before pushing): `npm run test:all`.
 
 Use the two harnesses for different risk profiles:
 
-**Prefer Vitest (src/webview/tests) when:**
+**Prefer Vitest (tests/webview) when:**
 - You're testing UI "business logic" that should be fast, deterministic, and not depend on VS Code.
 - The target lives in `src/webview/scripts/core/*` (state/actions/computed) or a Vue component with clear props/events.
 - You want tight coverage on edge cases that are painful to validate via a full VS Code host.
@@ -47,7 +47,7 @@ Good Vitest targets:
   - `src/webview/components/chat/components/CommandApproval.vue`: editable command only when `status === 'pending'`; approve sends edited command.
   - `src/webview/components/SessionsPanel.vue`: pagination (`loadMoreSessions`) + selection (`loadSession`) + loading flags.
 
-**Prefer `@vscode/test-electron` (src/test) when:**
+**Prefer `@vscode/test-electron` (tests/extension) when:**
 - You need real VS Code APIs (`vscode`), extension activation, commands, view registration, or storage URIs.
 - You're validating backend/service behavior (SQLite sessions, LanceDB messages, ordering/maintenance, tool execution).
 - You want to cover multi-module integration flows end-to-end (even if the UI is mocked).
@@ -66,7 +66,7 @@ Good `@vscode/test-electron` targets:
 
 ## Existing test coverage (Vitest)
 
-The following test suites exist in `src/webview/tests/`:
+The following test suites exist in `tests/webview/`:
 
 **`timelineBuilder.test.ts`** (23 tests) - Tests the `buildTimelineFromMessages` function:
 - Block-based structure: user messages, assistant threads, text block merging
@@ -102,7 +102,7 @@ The following test suites exist in `src/webview/tests/`:
 
 ## Existing test coverage (Extension Host)
 
-The following test suites exist in `src/test/suite/`:
+The following test suites exist in `tests/extension/suite/`:
 
 **`utils/toolCallParser.test.ts`** (24 tests) - Tests tool call parsing robustness:
 - Basic parsing: XML and bracket format tool calls
@@ -142,7 +142,7 @@ The following test suites exist in `src/test/suite/`:
 
 - The webview runtime provides `acquireVsCodeApi()`. Our webview state module calls it **at import-time** in `src/webview/scripts/core/state.ts`.
 - Therefore, tests MUST stub `acquireVsCodeApi` before importing any webview core modules.
-  - This is handled centrally in `src/webview/tests/setup.ts` via Vitest `setupFiles`.
+  - This is handled centrally in `tests/webview/setup.ts` via Vitest `setupFiles`.
 - Prefer testing logic in `src/webview/scripts/core/*` (state/actions/computed) over directly testing `src/webview/scripts/app/App.ts`.
   - `App.ts` wires `window.addEventListener('message', ...)` and is intentionally more integration-heavy.
 - When asserting message sends to the extension, assert calls to the stubbed `postMessage` function.

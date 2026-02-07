@@ -3,7 +3,7 @@ import {
     detectPartialToolCall,
     extractToolCalls,
     removeToolCalls
-} from '../../../utils/toolCallParser';
+} from '../../../../src/utils/toolCallParser';
 
 suite('toolCallParser', () => {
   test('detectPartialToolCall() returns tool name for partial XML tool call', () => {

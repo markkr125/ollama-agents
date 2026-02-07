@@ -12,4 +12,5 @@
 | [Configuration](configuration.md) | All settings, per-mode config, model recommendations |
 | [Authentication](authentication.md) | Bearer tokens for OpenWebUI, secure storage, troubleshooting |
 | [Chat & Modes](chat-and-modes.md) | Agent mode, chat mode, edit mode — how each works |
+| [Testing](testing.md) | Dual-harness architecture, running tests, adding tests, mock patterns |
 | [Troubleshooting](troubleshooting.md) | Common errors and how to fix them |

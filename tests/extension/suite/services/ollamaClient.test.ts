@@ -1,5 +1,5 @@
 import * as assert from 'assert';
-import { OllamaClient } from '../../../services/ollamaClient';
+import { OllamaClient } from '../../../../src/services/ollamaClient';
 import { startOllamaMockServer } from '../../mocks/ollamaMockServer';
 
 suite('OllamaClient (mocked API)', () => {

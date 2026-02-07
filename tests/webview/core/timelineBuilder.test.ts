@@ -12,7 +12,7 @@ afterEach(() => {
 
 describe('buildTimelineFromMessages - block-based structure', () => {
   test('creates user message as separate timeline item', async () => {
-    const builder = await import('../../scripts/core/timelineBuilder');
+    const builder = await import('../../../src/webview/scripts/core/timelineBuilder');
     const messages = [{ id: 'u1', role: 'user', content: 'hello' }];
     const timeline = builder.buildTimelineFromMessages(messages);
 
@@ -23,7 +23,7 @@ describe('buildTimelineFromMessages - block-based structure', () => {
   });
 
   test('creates assistant thread with text block', async () => {
-    const builder = await import('../../scripts/core/timelineBuilder');
+    const builder = await import('../../../src/webview/scripts/core/timelineBuilder');
     const messages = [
       { id: 'u1', role: 'user', content: 'hello' },
       { id: 'a1', role: 'assistant', content: 'Hi there!', model: 'test-model' }
@@ -41,7 +41,7 @@ describe('buildTimelineFromMessages - block-based structure', () => {
   });
 
   test('merges consecutive assistant messages into one thread', async () => {
-    const builder = await import('../../scripts/core/timelineBuilder');
+    const builder = await import('../../../src/webview/scripts/core/timelineBuilder');
     const messages = [
       { id: 'u1', role: 'user', content: 'hello' },
       { id: 'a1', role: 'assistant', content: 'Part 1' },
@@ -56,7 +56,7 @@ describe('buildTimelineFromMessages - block-based structure', () => {
   });
 
   test('user message resets thread - creates new thread for next assistant', async () => {
-    const builder = await import('../../scripts/core/timelineBuilder');
+    const builder = await import('../../../src/webview/scripts/core/timelineBuilder');
     const messages = [
       { id: 'u1', role: 'user', content: 'first' },
       { id: 'a1', role: 'assistant', content: 'response 1' },
@@ -82,7 +82,7 @@ describe('buildTimelineFromMessages - UI event replay', () => {
   });
 
   test('startProgressGroup creates progress item in tools block', async () => {
-    const builder = await import('../../scripts/core/timelineBuilder');
+    const builder = await import('../../../src/webview/scripts/core/timelineBuilder');
     const messages = [
       { id: 'u1', role: 'user', content: 'do something' },
       { id: 'a1', role: 'assistant', content: 'Working on it' },
@@ -103,7 +103,7 @@ describe('buildTimelineFromMessages - UI event replay', () => {
   });
 
   test('showToolAction adds action to current progress group', async () => {
-    const builder = await import('../../scripts/core/timelineBuilder');
+    const builder = await import('../../../src/webview/scripts/core/timelineBuilder');
     const messages = [
       { id: 'a1', role: 'assistant', content: 'Working' },
       makeUiEvent('ui1', 'startProgressGroup', { title: 'Analyzing code' }),
@@ -125,7 +125,7 @@ describe('buildTimelineFromMessages - UI event replay', () => {
   });
 
   test('finishProgressGroup marks group as done and collapsed', async () => {
-    const builder = await import('../../scripts/core/timelineBuilder');
+    const builder = await import('../../../src/webview/scripts/core/timelineBuilder');
     const messages = [
       { id: 'a1', role: 'assistant', content: 'Working' },
       makeUiEvent('ui1', 'startProgressGroup', { title: 'Analyzing code' }),
@@ -141,7 +141,7 @@ describe('buildTimelineFromMessages - UI event replay', () => {
   });
 
   test('finishProgressGroup marks group as error if any action has error', async () => {
-    const builder = await import('../../scripts/core/timelineBuilder');
+    const builder = await import('../../../src/webview/scripts/core/timelineBuilder');
     const messages = [
       { id: 'a1', role: 'assistant', content: 'Working' },
       makeUiEvent('ui1', 'startProgressGroup', { title: 'Running' }),
@@ -166,7 +166,7 @@ describe('buildTimelineFromMessages - command approval flow', () => {
   });
 
   test('requestToolApproval adds action to progress group AND approval card', async () => {
-    const builder = await import('../../scripts/core/timelineBuilder');
+    const builder = await import('../../../src/webview/scripts/core/timelineBuilder');
     const messages = [
       { id: 'a1', role: 'assistant', content: 'Running command' },
       makeUiEvent('ui1', 'startProgressGroup', { title: 'Running commands' }),
@@ -200,7 +200,7 @@ describe('buildTimelineFromMessages - command approval flow', () => {
   });
 
   test('toolApprovalResult updates action in progress group AND approval card', async () => {
-    const builder = await import('../../scripts/core/timelineBuilder');
+    const builder = await import('../../../src/webview/scripts/core/timelineBuilder');
     const messages = [
       { id: 'a1', role: 'assistant', content: 'Running command' },
       makeUiEvent('ui1', 'startProgressGroup', { title: 'Running commands' }),
@@ -236,7 +236,7 @@ describe('buildTimelineFromMessages - command approval flow', () => {
   });
 
   test('toolApprovalResult with skipped status marks action as error', async () => {
-    const builder = await import('../../scripts/core/timelineBuilder');
+    const builder = await import('../../../src/webview/scripts/core/timelineBuilder');
     const messages = [
       { id: 'a1', role: 'assistant', content: 'Running command' },
       makeUiEvent('ui1', 'startProgressGroup', { title: 'Running commands' }),
@@ -271,7 +271,7 @@ describe('buildTimelineFromMessages - full workflow matching live/history', () =
   });
 
   test('complete command execution flow produces identical structure', async () => {
-    const builder = await import('../../scripts/core/timelineBuilder');
+    const builder = await import('../../../src/webview/scripts/core/timelineBuilder');
 
     // Simulate the exact message sequence from a real session:
     // User asks to install package, agent runs npm install
@@ -360,7 +360,7 @@ describe('buildTimelineFromMessages - full workflow matching live/history', () =
   });
 
   test('text after tools creates new text block', async () => {
-    const builder = await import('../../scripts/core/timelineBuilder');
+    const builder = await import('../../../src/webview/scripts/core/timelineBuilder');
     const messages = [
       { id: 'a1', role: 'assistant', content: 'Before' },
       makeUiEvent('ui1', 'startProgressGroup', { title: 'Working' }),
@@ -388,7 +388,7 @@ describe('buildTimelineFromMessages - edge cases', () => {
   });
 
   test('showToolAction without prior startProgressGroup creates implicit group', async () => {
-    const builder = await import('../../scripts/core/timelineBuilder');
+    const builder = await import('../../../src/webview/scripts/core/timelineBuilder');
     const messages = [
       { id: 'a1', role: 'assistant', content: 'Working' },
       makeUiEvent('ui1', 'showToolAction', { status: 'success', text: 'Did something' })
@@ -403,7 +403,7 @@ describe('buildTimelineFromMessages - edge cases', () => {
   });
 
   test('toolApprovalResult for non-existent approval creates new approval card', async () => {
-    const builder = await import('../../scripts/core/timelineBuilder');
+    const builder = await import('../../../src/webview/scripts/core/timelineBuilder');
     const messages = [
       { id: 'a1', role: 'assistant', content: 'Working' },
       makeUiEvent('ui1', 'toolApprovalResult', {
@@ -424,7 +424,7 @@ describe('buildTimelineFromMessages - edge cases', () => {
   });
 
   test('invalid JSON in __ui__ event is skipped gracefully', async () => {
-    const builder = await import('../../scripts/core/timelineBuilder');
+    const builder = await import('../../../src/webview/scripts/core/timelineBuilder');
     const messages = [
       { id: 'a1', role: 'assistant', content: 'Working' },
       { id: 'ui1', role: 'tool', toolName: '__ui__', toolOutput: 'not valid json' },
@@ -439,7 +439,7 @@ describe('buildTimelineFromMessages - edge cases', () => {
   });
 
   test('empty messages returns empty timeline', async () => {
-    const builder = await import('../../scripts/core/timelineBuilder');
+    const builder = await import('../../../src/webview/scripts/core/timelineBuilder');
     const timeline = builder.buildTimelineFromMessages([]);
     expect(timeline.length).toBe(0);
   });
@@ -454,7 +454,7 @@ describe('buildTimelineFromMessages - file edit approval flow (CRITICAL: live/se
   });
 
   test('file edit with approval shows pending, running, then success actions', async () => {
-    const builder = await import('../../scripts/core/timelineBuilder');
+    const builder = await import('../../../src/webview/scripts/core/timelineBuilder');
 
     // This is the EXACT sequence that must be persisted for session to match live:
     // 1. startProgressGroup
@@ -528,7 +528,7 @@ describe('buildTimelineFromMessages - file edit approval flow (CRITICAL: live/se
   });
 
   test('file edit skipped shows error status', async () => {
-    const builder = await import('../../scripts/core/timelineBuilder');
+    const builder = await import('../../../src/webview/scripts/core/timelineBuilder');
 
     const messages = [
       { id: 'a1', role: 'assistant', content: 'I will update the file.' },
@@ -571,7 +571,7 @@ describe('buildTimelineFromMessages - file edit approval flow (CRITICAL: live/se
   });
 
   test('auto-approved file edit shows autoApproved flag', async () => {
-    const builder = await import('../../scripts/core/timelineBuilder');
+    const builder = await import('../../../src/webview/scripts/core/timelineBuilder');
 
     const messages = [
       { id: 'a1', role: 'assistant', content: 'Updating file.' },
@@ -626,7 +626,7 @@ describe('CRITICAL: Live handler vs timelineBuilder parity', () => {
   });
 
   test('showToolAction updates existing pending action with same text', async () => {
-    const builder = await import('../../scripts/core/timelineBuilder');
+    const builder = await import('../../../src/webview/scripts/core/timelineBuilder');
 
     // Simulate: pending "Write file" → success "Write file" (same text)
     const messages = [
@@ -659,7 +659,7 @@ describe('CRITICAL: Live handler vs timelineBuilder parity', () => {
   });
 
   test('showToolAction with different text updates last pending action', async () => {
-    const builder = await import('../../scripts/core/timelineBuilder');
+    const builder = await import('../../../src/webview/scripts/core/timelineBuilder');
 
     // Simulate: pending "Write package.json" → success "Wrote package.json" (different text)
     const messages = [
@@ -691,7 +691,7 @@ describe('CRITICAL: Live handler vs timelineBuilder parity', () => {
   });
 
   test('running action with same text updates pending, then success updates it', async () => {
-    const builder = await import('../../scripts/core/timelineBuilder');
+    const builder = await import('../../../src/webview/scripts/core/timelineBuilder');
 
     // Simulate full flow: pending → running (same text, updates) → success (updates)
     const messages = [

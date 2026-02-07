@@ -59,7 +59,7 @@ If the tool should be individually enable/disable-able, add it to the Tools sect
 
 ## Step 4: Write Tests
 
-Add tests in `src/test/suite/agent/toolRegistry.test.ts`:
+Add tests in `tests/extension/suite/agent/toolRegistry.test.ts`:
 
 ```typescript
 test('my_tool: basic functionality', async () => {

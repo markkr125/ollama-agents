@@ -1,5 +1,5 @@
 import * as assert from 'assert';
-import * as databaseServiceModule from '../../../services/databaseService';
+import * as databaseServiceModule from '../../../../src/services/databaseService';
 
 /**
  * Regression test for: "Ollama Copilot activation failed: (0, g.getDatabaseService) is not a function"

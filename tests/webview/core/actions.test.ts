@@ -13,8 +13,8 @@ afterEach(() => {
 });
 
 test('toggle/confirm auto-approve posts setAutoApprove', async () => {
-  const state = await import('../../scripts/core/state');
-  const actions = await import('../../scripts/core/actions/index');
+  const state = await import('../../../src/webview/scripts/core/state');
+  const actions = await import('../../../src/webview/scripts/core/actions/index');
 
   state.currentSessionId.value = 's1';
   state.autoApproveCommands.value = false;
@@ -44,8 +44,8 @@ test('toggle/confirm auto-approve posts setAutoApprove', async () => {
 });
 
 test('ensureProgressGroup creates one progress group', async () => {
-  const state = await import('../../scripts/core/state');
-  const actions = await import('../../scripts/core/actions/index');
+  const state = await import('../../../src/webview/scripts/core/state');
+  const actions = await import('../../../src/webview/scripts/core/actions/index');
 
   state.timeline.value = [];
   state.currentProgressIndex.value = null;
@@ -61,8 +61,8 @@ test('ensureProgressGroup creates one progress group', async () => {
 });
 
 test('startAssistantMessage creates assistant thread and sets stream index', async () => {
-  const state = await import('../../scripts/core/state');
-  const actions = await import('../../scripts/core/actions/index');
+  const state = await import('../../../src/webview/scripts/core/state');
+  const actions = await import('../../../src/webview/scripts/core/actions/index');
 
   state.timeline.value = [];
   state.currentStreamIndex.value = null;
@@ -75,8 +75,8 @@ test('startAssistantMessage creates assistant thread and sets stream index', asy
 });
 
 test('handleSend posts sendMessage with context and clears input/context', async () => {
-  const state = await import('../../scripts/core/state');
-  const actions = await import('../../scripts/core/actions/index');
+  const state = await import('../../../src/webview/scripts/core/state');
+  const actions = await import('../../../src/webview/scripts/core/actions/index');
 
   state.isGenerating.value = false;
   state.currentSessionId.value = 's1';
@@ -96,8 +96,8 @@ test('handleSend posts sendMessage with context and clears input/context', async
 });
 
 test('handleSend posts stopGeneration when already generating', async () => {
-  const state = await import('../../scripts/core/state');
-  const actions = await import('../../scripts/core/actions/index');
+  const state = await import('../../../src/webview/scripts/core/state');
+  const actions = await import('../../../src/webview/scripts/core/actions/index');
 
   state.isGenerating.value = true;
   state.currentSessionId.value = 's1';
@@ -111,8 +111,8 @@ test('handleSend posts stopGeneration when already generating', async () => {
 });
 
 test('handleSearchInput debounces searchSessions', async () => {
-  const state = await import('../../scripts/core/state');
-  const actions = await import('../../scripts/core/actions/index');
+  const state = await import('../../../src/webview/scripts/core/state');
+  const actions = await import('../../../src/webview/scripts/core/actions/index');
 
   actions.handleSearchInput('  hello world  ');
   expect(state.isSearching.value).toBe(true);
@@ -129,7 +129,7 @@ test('handleSearchInput debounces searchSessions', async () => {
 });
 
 test('highlightSnippet wraps query terms in <mark>', async () => {
-  const actions = await import('../../scripts/core/actions/index');
+  const actions = await import('../../../src/webview/scripts/core/actions/index');
 
   const out = actions.highlightSnippet('Hello world, hello!', 'hello');
   expect(out).toContain('<mark>Hello</mark>');
@@ -138,8 +138,8 @@ test('highlightSnippet wraps query terms in <mark>', async () => {
 // --- Regression: saveBearerToken includes baseUrl to avoid race condition ---
 
 test('saveBearerToken includes baseUrl in message to avoid race with saveSettings', async () => {
-  const state = await import('../../scripts/core/state');
-  const actions = await import('../../scripts/core/actions/index');
+  const state = await import('../../../src/webview/scripts/core/state');
+  const actions = await import('../../../src/webview/scripts/core/actions/index');
 
   state.bearerToken.value = 'test-token-123';
   state.settings.baseUrl = 'http://my-openwebui:3000';
@@ -163,8 +163,8 @@ test('saveBearerToken includes baseUrl in message to avoid race with saveSetting
 });
 
 test('saveBearerToken does nothing when token is empty', async () => {
-  const state = await import('../../scripts/core/state');
-  const actions = await import('../../scripts/core/actions/index');
+  const state = await import('../../../src/webview/scripts/core/state');
+  const actions = await import('../../../src/webview/scripts/core/actions/index');
 
   state.bearerToken.value = '';
   actions.saveBearerToken();
@@ -172,8 +172,8 @@ test('saveBearerToken does nothing when token is empty', async () => {
 });
 
 test('testConnection includes baseUrl in message to avoid race with saveSettings', async () => {
-  const state = await import('../../scripts/core/state');
-  const actions = await import('../../scripts/core/actions/index');
+  const state = await import('../../../src/webview/scripts/core/state');
+  const actions = await import('../../../src/webview/scripts/core/actions/index');
 
   state.settings.baseUrl = 'http://my-ollama:11434';
 

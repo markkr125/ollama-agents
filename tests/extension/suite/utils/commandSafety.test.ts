@@ -1,5 +1,5 @@
 import * as assert from 'assert';
-import { analyzeDangerousCommand } from '../../../utils/commandSafety';
+import { analyzeDangerousCommand } from '../../../../src/utils/commandSafety';
 
 suite('analyzeDangerousCommand', () => {
   test('returns none for safe command', () => {

@@ -1,7 +1,7 @@
 import * as assert from 'assert';
-import { OllamaClient } from '../../../services/ollamaClient';
-import { WebviewMessageEmitter } from '../../../views/chatTypes';
-import { SettingsHandler } from '../../../views/settingsHandler';
+import { OllamaClient } from '../../../../src/services/ollamaClient';
+import { WebviewMessageEmitter } from '../../../../src/views/chatTypes';
+import { SettingsHandler } from '../../../../src/views/settingsHandler';
 import { startOllamaMockServer } from '../../mocks/ollamaMockServer';
 
 /**

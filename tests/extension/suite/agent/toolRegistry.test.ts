@@ -3,7 +3,7 @@ import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
 import * as vscode from 'vscode';
-import { ToolContext, ToolRegistry } from '../../../agent/toolRegistry';
+import { ToolContext, ToolRegistry } from '../../../../src/agent/toolRegistry';
 
 suite('toolRegistry', () => {
   let toolRegistry: ToolRegistry;

@@ -3,7 +3,7 @@ import * as fs from 'fs/promises';
 import * as os from 'os';
 import * as path from 'path';
 import * as vscode from 'vscode';
-import { SessionIndexService } from '../../../services/sessionIndexService';
+import { SessionIndexService } from '../../../../src/services/sessionIndexService';
 
 function getExtensionUri(): vscode.Uri {
   const ext = vscode.extensions.getExtension('ollama-copilot.ollama-copilot');

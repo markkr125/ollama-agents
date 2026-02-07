@@ -7,7 +7,7 @@ async function main() {
   process.env.OLLAMA_COPILOT_TEST = '1';
   const server = await startOllamaMockServer({ type: 'chatEcho' });
   try {
-    const extensionDevelopmentPath = path.resolve(__dirname, '../../');
+    const extensionDevelopmentPath = path.resolve(__dirname, '../../../');
     const extensionTestsPath = path.resolve(__dirname, './suite/index');
 
     const userDataDir = path.resolve(extensionDevelopmentPath, '.vscode-test-user-data');

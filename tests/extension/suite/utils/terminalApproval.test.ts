@@ -1,5 +1,5 @@
 import * as assert from 'assert';
-import { computeTerminalApprovalDecision } from '../../../utils/terminalApproval';
+import { computeTerminalApprovalDecision } from '../../../../src/utils/terminalApproval';
 
 suite('computeTerminalApprovalDecision', () => {
   test('requires approval when severity is critical (even if auto-approve enabled)', () => {

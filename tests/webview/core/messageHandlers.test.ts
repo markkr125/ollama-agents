@@ -12,8 +12,8 @@ afterEach(() => {
 
 describe('streaming handlers', () => {
   test('handleStreamChunk creates assistant thread with text block', async () => {
-    const state = await import('../../scripts/core/state');
-    const handlers = await import('../../scripts/core/messageHandlers/streaming');
+    const state = await import('../../../src/webview/scripts/core/state');
+    const handlers = await import('../../../src/webview/scripts/core/messageHandlers/streaming');
 
     state.timeline.value = [];
     state.currentStreamIndex.value = null;
@@ -31,8 +31,8 @@ describe('streaming handlers', () => {
   });
 
   test('handleStreamChunk replaces content (backend sends accumulated content)', async () => {
-    const state = await import('../../scripts/core/state');
-    const handlers = await import('../../scripts/core/messageHandlers/streaming');
+    const state = await import('../../../src/webview/scripts/core/state');
+    const handlers = await import('../../../src/webview/scripts/core/messageHandlers/streaming');
 
     state.timeline.value = [];
     state.currentStreamIndex.value = null;
@@ -49,8 +49,8 @@ describe('streaming handlers', () => {
 
 describe('progress group handlers', () => {
   test('handleStartProgressGroup creates progress in tools block', async () => {
-    const state = await import('../../scripts/core/state');
-    const handlers = await import('../../scripts/core/messageHandlers/progress');
+    const state = await import('../../../src/webview/scripts/core/state');
+    const handlers = await import('../../../src/webview/scripts/core/messageHandlers/progress');
 
     state.timeline.value = [];
     state.currentProgressIndex.value = null;
@@ -74,8 +74,8 @@ describe('progress group handlers', () => {
   });
 
   test('handleShowToolAction adds action to current progress group', async () => {
-    const state = await import('../../scripts/core/state');
-    const handlers = await import('../../scripts/core/messageHandlers/progress');
+    const state = await import('../../../src/webview/scripts/core/state');
+    const handlers = await import('../../../src/webview/scripts/core/messageHandlers/progress');
 
     state.timeline.value = [];
     state.currentProgressIndex.value = null;
@@ -99,8 +99,8 @@ describe('progress group handlers', () => {
   });
 
   test('handleFinishProgressGroup marks group done and collapsed', async () => {
-    const state = await import('../../scripts/core/state');
-    const handlers = await import('../../scripts/core/messageHandlers/progress');
+    const state = await import('../../../src/webview/scripts/core/state');
+    const handlers = await import('../../../src/webview/scripts/core/messageHandlers/progress');
 
     state.timeline.value = [];
     state.currentProgressIndex.value = null;
@@ -119,8 +119,8 @@ describe('progress group handlers', () => {
   });
 
   test('error action marks group status as error', async () => {
-    const state = await import('../../scripts/core/state');
-    const handlers = await import('../../scripts/core/messageHandlers/progress');
+    const state = await import('../../../src/webview/scripts/core/state');
+    const handlers = await import('../../../src/webview/scripts/core/messageHandlers/progress');
 
     state.timeline.value = [];
     state.currentProgressIndex.value = null;
@@ -139,9 +139,9 @@ describe('progress group handlers', () => {
 
 describe('approval handlers - live/history parity', () => {
   test('handleRequestToolApproval adds action to progress group AND approval card', async () => {
-    const state = await import('../../scripts/core/state');
-    const progressHandlers = await import('../../scripts/core/messageHandlers/progress');
-    const approvalHandlers = await import('../../scripts/core/messageHandlers/approvals');
+    const state = await import('../../../src/webview/scripts/core/state');
+    const progressHandlers = await import('../../../src/webview/scripts/core/messageHandlers/progress');
+    const approvalHandlers = await import('../../../src/webview/scripts/core/messageHandlers/approvals');
 
     state.timeline.value = [];
     state.currentProgressIndex.value = null;
@@ -184,9 +184,9 @@ describe('approval handlers - live/history parity', () => {
   });
 
   test('handleToolApprovalResult updates action in progress group AND approval card', async () => {
-    const state = await import('../../scripts/core/state');
-    const progressHandlers = await import('../../scripts/core/messageHandlers/progress');
-    const approvalHandlers = await import('../../scripts/core/messageHandlers/approvals');
+    const state = await import('../../../src/webview/scripts/core/state');
+    const progressHandlers = await import('../../../src/webview/scripts/core/messageHandlers/progress');
+    const approvalHandlers = await import('../../../src/webview/scripts/core/messageHandlers/approvals');
 
     state.timeline.value = [];
     state.currentProgressIndex.value = null;
@@ -224,9 +224,9 @@ describe('approval handlers - live/history parity', () => {
   });
 
   test('skipped approval marks action as error', async () => {
-    const state = await import('../../scripts/core/state');
-    const progressHandlers = await import('../../scripts/core/messageHandlers/progress');
-    const approvalHandlers = await import('../../scripts/core/messageHandlers/approvals');
+    const state = await import('../../../src/webview/scripts/core/state');
+    const progressHandlers = await import('../../../src/webview/scripts/core/messageHandlers/progress');
+    const approvalHandlers = await import('../../../src/webview/scripts/core/messageHandlers/approvals');
 
     state.timeline.value = [];
     state.currentProgressIndex.value = null;
@@ -261,10 +261,10 @@ describe('live/history consistency contract', () => {
     // This test verifies that the live message handlers produce
     // the same structure as buildTimelineFromMessages
 
-    const state = await import('../../scripts/core/state');
-    const progressHandlers = await import('../../scripts/core/messageHandlers/progress');
-    const approvalHandlers = await import('../../scripts/core/messageHandlers/approvals');
-    const builder = await import('../../scripts/core/timelineBuilder');
+    const state = await import('../../../src/webview/scripts/core/state');
+    const progressHandlers = await import('../../../src/webview/scripts/core/messageHandlers/progress');
+    const approvalHandlers = await import('../../../src/webview/scripts/core/messageHandlers/approvals');
+    const builder = await import('../../../src/webview/scripts/core/timelineBuilder');
 
     // Reset state
     state.timeline.value = [];
@@ -376,10 +376,10 @@ describe('live/history consistency contract', () => {
   });
 
   test('file edit approval workflow produces same structure as timelineBuilder', async () => {
-    const state = await import('../../scripts/core/state');
-    const progressHandlers = await import('../../scripts/core/messageHandlers/progress');
-    const approvalHandlers = await import('../../scripts/core/messageHandlers/approvals');
-    const builder = await import('../../scripts/core/timelineBuilder');
+    const state = await import('../../../src/webview/scripts/core/state');
+    const progressHandlers = await import('../../../src/webview/scripts/core/messageHandlers/progress');
+    const approvalHandlers = await import('../../../src/webview/scripts/core/messageHandlers/approvals');
+    const builder = await import('../../../src/webview/scripts/core/timelineBuilder');
 
     // Reset state
     state.timeline.value = [];
@@ -528,8 +528,8 @@ describe('live/history consistency contract', () => {
 
 describe('connectionTestResult handler', () => {
   test('handleConnectionTestResult populates modelOptions from models array', async () => {
-    const state = await import('../../scripts/core/state');
-    const handlers = await import('../../scripts/core/messageHandlers/sessions');
+    const state = await import('../../../src/webview/scripts/core/state');
+    const handlers = await import('../../../src/webview/scripts/core/messageHandlers/sessions');
 
     state.modelOptions.value = [];
 
@@ -552,8 +552,8 @@ describe('connectionTestResult handler', () => {
   });
 
   test('handleConnectionTestResult sets currentModel via syncModelSelection', async () => {
-    const state = await import('../../scripts/core/state');
-    const handlers = await import('../../scripts/core/messageHandlers/sessions');
+    const state = await import('../../../src/webview/scripts/core/state');
+    const handlers = await import('../../../src/webview/scripts/core/messageHandlers/sessions');
 
     state.modelOptions.value = [];
     state.currentModel.value = '';
@@ -571,8 +571,8 @@ describe('connectionTestResult handler', () => {
   });
 
   test('handleConnectionTestResult does not clear models on error (no models field)', async () => {
-    const state = await import('../../scripts/core/state');
-    const handlers = await import('../../scripts/core/messageHandlers/sessions');
+    const state = await import('../../../src/webview/scripts/core/state');
+    const handlers = await import('../../../src/webview/scripts/core/messageHandlers/sessions');
 
     // Pre-populate models
     state.modelOptions.value = ['existing-model'];
@@ -588,8 +588,8 @@ describe('connectionTestResult handler', () => {
   });
 
   test('handleSettingsUpdate does not clear modelOptions', async () => {
-    const state = await import('../../scripts/core/state');
-    const handlers = await import('../../scripts/core/messageHandlers/sessions');
+    const state = await import('../../../src/webview/scripts/core/state');
+    const handlers = await import('../../../src/webview/scripts/core/messageHandlers/sessions');
 
     // Pre-populate models (from a previous connectionTestResult)
     state.modelOptions.value = ['model-a', 'model-b'];
