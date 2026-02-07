@@ -1,3 +1,10 @@
+/**
+ * THIN orchestrator — lifecycle + message routing only.
+ * Do NOT add business logic here. Delegate to:
+ *   - ChatSessionController (sessions, messages, list/search)
+ *   - SettingsHandler (settings, tokens, connection, DB maintenance)
+ *   - AgentChatExecutor (agent loop, tool calls, progress groups)
+ */
 import { readFile } from 'fs/promises';
 import * as vscode from 'vscode';
 import { ExecutorConfig } from '../agent/executor';

@@ -1,3 +1,9 @@
+/**
+ * Webview reactive state. ⚠️ acquireVsCodeApi() is called at import time below.
+ * - Never call acquireVsCodeApi() again (VS Code throws on second call).
+ * - In tests, stub it BEFORE importing this module (see tests/webview/setup.ts).
+ * - Never import 'vscode' here — this runs in a sandboxed iframe.
+ */
 import { reactive, ref, watch } from 'vue';
 import type { SearchResultGroup, SessionItem, StatusMessage, TimelineItem } from './types';
 

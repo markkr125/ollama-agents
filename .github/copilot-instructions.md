@@ -120,6 +120,7 @@ These are the mistakes most frequently made when editing this codebase. **Check 
 | 8 | Placing Vue lifecycle hooks in plain `.ts` files | `onMounted`, `onUnmounted`, etc. silently do nothing outside a Vue component's `<script setup>` block. | Keep lifecycle hooks inside `.vue` files only. |
 | 9 | Importing webview core modules in tests without stubbing `acquireVsCodeApi` | `state.ts` calls `acquireVsCodeApi()` at **import time**. Any test importing state (or modules that import state) crashes immediately. | This is handled by `tests/webview/setup.ts` — ensure Vitest config includes it in `setupFiles`. |
 | 10 | Using `out/` as extension runtime output | `out/` is only for **test compilation** (`tsc`). The extension runtime bundle is in `dist/` (webpack). | Never reference `out/` in `package.json` "main" or runtime code paths. |
+| 11 | Restructuring `.github/instructions/`, `.github/skills/`, or `docs/` | The preamble table in this file, `docs/README.md` index, and `npm run lint:docs` all validate structure. Renaming, moving, or deleting these files breaks cross-references. | Run `npm run lint:docs` after any docs/instructions/skills change. Keep the preamble table, docs index, and frontmatter in sync. |
 
 ---
 
@@ -350,6 +351,7 @@ After **any** code change, run through this checklist:
    - Changed both or unsure → `npm run test:all`
 4. **Check for regressions**: If you modified a message type, verify both the live handler (in `messageHandlers/`) and `timelineBuilder.ts` still agree
 5. **Verify no stale imports**: If you moved or renamed a file, search for old import paths across the codebase
+6. **Docs structure check**: If you touched `docs/`, `.github/instructions/`, or `.github/skills/`, run `npm run lint:docs`
 
 ### Adding a New Mode
 

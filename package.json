@@ -312,7 +312,9 @@
     "test:all": "npm run test:webview && npm test",
     "watch": "webpack --mode development --watch",
     "package": "vsce package",
-    "lint": "eslint src --ext ts"
+    "lint": "eslint src --ext ts",
+    "lint:docs": "node scripts/lint-docs.js",
+    "lint:all": "npm run lint && npm run lint:docs"
   },
   "devDependencies": {
     "@types/mocha": "^10.0.10",

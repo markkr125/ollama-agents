@@ -5,6 +5,8 @@ description: "Rules for creating and updating user-facing documentation. Keeps d
 
 # Documentation Maintenance Rules
 
+> **⚠️ Structural rules**: Do NOT rename, move, or delete files in `docs/`, `.github/instructions/`, or `.github/skills/` without updating all cross-references. Run `npm run lint:docs` to verify. See pitfall #11 in the root `copilot-instructions.md`.
+
 ## Keep the Index Updated
 
 [docs/README.md](../../docs/README.md) is the documentation index. **Every time a doc file is added, renamed, or removed inside `docs/`**, update the index table to reflect the change. Broken links in the index are a hard error.

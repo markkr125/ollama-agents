@@ -1,4 +1,5 @@
 ---
+name: add-test
 mode: agent
 description: Step-by-step guide for adding a new test to the project
 tools:

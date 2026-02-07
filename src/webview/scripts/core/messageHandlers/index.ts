@@ -1,38 +1,42 @@
+/**
+ * Message router — maps incoming message types to handlers.
+ * Do NOT add handler logic here. Create new handler files in this folder.
+ */
 import type {
-    InitMessage,
-    LoadSessionMessagesMessage,
-    ShowToolActionMessage,
-    StartProgressGroupMessage,
-    StreamChunkMessage,
-    ToolApprovalResultMessage
+  InitMessage,
+  LoadSessionMessagesMessage,
+  ShowToolActionMessage,
+  StartProgressGroupMessage,
+  StreamChunkMessage,
+  ToolApprovalResultMessage
 } from '../types';
 import { handleFileEditApprovalResult, handleRequestFileEditApproval, handleRequestToolApproval, handleToolApprovalResult } from './approvals';
 import { handleFinishProgressGroup, handleShowError, handleShowToolAction, handleStartProgressGroup } from './progress';
 import {
-    handleAddContextItem,
-    handleAddMessage,
-    handleAppendSessions,
-    handleBearerTokenSaved,
-    handleClearMessages,
-    handleConnectionError,
-    handleConnectionTestResult,
-    handleDbMaintenanceResult,
-    handleDeletionProgress,
-    handleGenerationStarted,
-    handleGenerationStopped,
-    handleHideThinking,
-    handleInit,
-    handleLoadSessionMessages,
-    handleLoadSessions,
-    handleNavigateToSettings,
-    handleRecreateMessagesResult,
-    handleSearchSessionsResult,
-    handleSessionApprovalSettings,
-    handleSessionDeleted,
-    handleSessionsDeleted,
-    handleSettingsUpdate,
-    handleShowThinking,
-    handleUpdateSessionStatus
+  handleAddContextItem,
+  handleAddMessage,
+  handleAppendSessions,
+  handleBearerTokenSaved,
+  handleClearMessages,
+  handleConnectionError,
+  handleConnectionTestResult,
+  handleDbMaintenanceResult,
+  handleDeletionProgress,
+  handleGenerationStarted,
+  handleGenerationStopped,
+  handleHideThinking,
+  handleInit,
+  handleLoadSessionMessages,
+  handleLoadSessions,
+  handleNavigateToSettings,
+  handleRecreateMessagesResult,
+  handleSearchSessionsResult,
+  handleSessionApprovalSettings,
+  handleSessionDeleted,
+  handleSessionsDeleted,
+  handleSettingsUpdate,
+  handleShowThinking,
+  handleUpdateSessionStatus
 } from './sessions';
 import { handleFinalMessage, handleStreamChunk } from './streaming';
 

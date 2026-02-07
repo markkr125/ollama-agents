@@ -3,7 +3,7 @@ name: copilot-custom-instructions
 description: "How to write and organize VS Code Copilot custom instructions (.instructions.md) and agent skills (SKILL.md). Use when creating, editing, reorganizing, or debugging custom instruction or skill files, or when asked about applyTo glob syntax."
 ---
 
-# Writing Custom Instructions & Agent Skills
+# Writing Custom Instructions & Agent Skills\n\n> **⚠️ Structural rules**: Do NOT rename, move, or delete instruction/skill files without updating the preamble table in `copilot-instructions.md`. Run `npm run lint:docs` to verify all cross-references. See pitfall #11.
 
 This skill documents the file formats and conventions for VS Code Copilot custom instructions and agent skills, so you don't need to look up external documentation.
 

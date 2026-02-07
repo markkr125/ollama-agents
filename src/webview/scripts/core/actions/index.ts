@@ -1,3 +1,7 @@
+/**
+ * Barrel re-export only. Do NOT add logic here.
+ * Create new action files in this folder and export from here.
+ */
 export {
     approveCommand,
     approveFileEdit,
