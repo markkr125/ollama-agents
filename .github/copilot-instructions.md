@@ -192,8 +192,7 @@ src/
 │   │       ├── computed.ts # Derived state
 │   │       ├── state.ts    # Reactive state/refs
 │   │       └── types.ts    # Shared types
-│   ├── styles/            # SCSS entry + partials
-│   └── tests/             # (moved to tests/webview/ — see below)
+│   └── styles/            # SCSS entry + partials
 ├── templates/            # Prompt templates
 ├── types/                # TypeScript type definitions
 │   └── session.ts         # Shared chat + agent session types
@@ -262,7 +261,7 @@ There are **three message interfaces**. Using the wrong one is a common mistake:
 | `ChatMessage` | `src/views/chatTypes.ts` | Webview postMessage (camelCase + UI metadata) |
 | Ollama wire format | `src/types/ollama.ts` | API requests (only `role`, `content`) |
 
-See `extension-architecture.instructions.md` for full details.
+See the **"Three Message Interfaces"** section in `extension-architecture.instructions.md` for field-level details and conversion rules.
 
 ### OllamaClient (`src/services/ollamaClient.ts`)
 
@@ -322,10 +321,11 @@ Settings are defined in `package.json` under `contributes.configuration`:
 
 ### Adding a New Mode
 
-1. Create file in `src/modes/myMode.ts`
-2. Export `registerMyMode(context, client, ...)` function
-3. Call from `extension.ts` activate function
-4. Add to mode selector in chatView.ts HTML
+1. Create handler in `src/modes/myMode.ts`
+2. Export a `registerMyMode(context, client, ...)` function that registers VS Code commands
+3. Call `registerMyMode(...)` from `extension.ts` `activate()` function
+4. Add mode dispatch in `chatView.ts` `handleMessage()` — handle the `selectMode` message for your new mode
+5. The webview sends `{ type: 'selectMode', mode: 'myMode' }` — mode options are in `src/webview/scripts/core/state.ts`
 
 ---
 

@@ -47,6 +47,7 @@ See [docs/getting-started.md](docs/getting-started.md) for the full setup guide.
 | [Configuration](docs/configuration.md) | All settings, per-mode config, model recommendations |
 | [Authentication](docs/authentication.md) | Bearer tokens for OpenWebUI |
 | [Chat & Modes](docs/chat-and-modes.md) | Agent mode, chat mode, edit mode — how each works |
+| [Testing](docs/testing.md) | Dual-harness architecture, running tests, adding tests |
 | [Troubleshooting](docs/troubleshooting.md) | Common errors and how to fix them |
 
 ## Commands

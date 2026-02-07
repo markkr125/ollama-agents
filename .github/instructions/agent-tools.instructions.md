@@ -13,7 +13,7 @@ When user sends a message in Agent mode:
 1. handleAgentMode()
    ├─ Create agent session
    ├─ Create git branch (if enabled)
-   └─ executeAgent()
+   └─ agentChatExecutor.execute()   ← AgentChatExecutor.execute() method
        └─ Loop (max iterations):
            ├─ Send messages to LLM
            ├─ Stream response
@@ -35,12 +35,11 @@ When user sends a message in Agent mode:
 
 Defines tools available to the agent for autonomous operations.
 
-**Built-in Tools:**
+**Built-in Tools (6 total — defined in `registerBuiltInTools()`):**
 | Tool | Description |
 |------|-------------|
 | `read_file` | Read file contents |
-| `write_file` | Write content to file |
-| `create_file` | Create new file |
+| `write_file` | Write/create file (handles both) |
 | `list_files` | List directory contents |
 | `search_workspace` | Search for text in files |
 | `run_terminal_command` | Execute shell commands |
@@ -140,23 +139,35 @@ File edits go through a separate sensitivity check:
 2. If file is sensitive and `auto_approve_sensitive_edits` is `false` → show approval card with diff
 3. Non-sensitive files are written directly without approval
 
-**Value semantics**: In `sensitiveFilePatterns`, `true` = auto-approve (NOT sensitive), `false` = require approval. The boolean is inverted from what "sensitive" suggests.
+> ⚠️ **INVERTED BOOLEAN — READ CAREFULLY**
+>
+> In `sensitiveFilePatterns`, `true` means **auto-approve** (file is NOT sensitive).
+> `false` means **require approval** (file IS sensitive).
+>
+> The boolean answers "is this file safe to auto-approve?" — NOT "is this file sensitive?".
+>
+> ```typescript
+> // ✅ CORRECT: .env requires approval → set to false
+> { pattern: '**/.env', value: false }
+>
+> // ❌ WRONG: Don't set .env to true thinking "yes it's sensitive"
+> { pattern: '**/.env', value: true }  // This DISABLES approval!
+> ```
 
 ### UI Flow for Approvals
-Both terminal and file edit approvals follow this persist+post sequence:
+
+Both terminal and file edit approvals follow the **persist+post sequence** defined in CRITICAL RULE #1 of `copilot-instructions.md`. The full event ordering table is there. Here is the approval-specific flow:
 
 ```
-1. persistUiEvent('showToolAction', { status: 'pending', ... })
-2. postMessage('showToolAction', { status: 'pending', ... })
-3. persistUiEvent('requestToolApproval' | 'requestFileEditApproval', { ... })
-4. postMessage('requestToolApproval' | 'requestFileEditApproval', { ... })
+1. persistUiEvent + postMessage → 'showToolAction' (status: 'pending')
+2. persistUiEvent + postMessage → 'requestToolApproval' | 'requestFileEditApproval'
    ── wait for user response ──
-5. persistUiEvent('toolApprovalResult' | 'fileEditApprovalResult', { ... })
-6. postMessage('toolApprovalResult' | 'fileEditApprovalResult', { ... })
-7. [execute command / apply edit]
-8. persistUiEvent('showToolAction', { status: 'success'|'error', ... })
-9. postMessage('showToolAction', { status: 'success'|'error', ... })
+3. persistUiEvent + postMessage → 'toolApprovalResult' | 'fileEditApprovalResult'
+4. [execute command / apply edit]
+5. persistUiEvent + postMessage → 'showToolAction' (status: 'success' | 'error')
 ```
+
+**Key rule**: Every `postMessage` MUST have a matching `persistUiEvent` in the same order. See CRITICAL RULE #1 for the full event table and debugging guide.
 
 ## Adding a New Tool
 

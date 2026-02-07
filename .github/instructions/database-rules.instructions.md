@@ -46,11 +46,11 @@ LanceDB stores data in `.lance` directories with metadata files referencing data
 
 **Error signature**: `Not found: .../ollama-copilot.lance/messages.lance/data/<uuid>.lance`
 
-**Handling**: The `handleCorruptedMessagesTable()` function detects missing file errors and can recreate the table, but this is only called during initialization, not automatically on every query.
+**Handling**: LanceDB corruption is detected during `initLanceDb()` in `src/services/databaseService.ts`. If initialization fails, search is disabled but the extension continues to function. Users can manually trigger "Recreate Messages Table" from Advanced Settings (`src/views/settingsHandler.ts` → `recreateMessagesTable()`) to clear and rebuild the table.
 
 ## Message Ordering
 
-Messages must have strictly increasing timestamps to ensure correct display order. The `getNextTimestamp(sessionId)` function guarantees this by:
+Messages must have strictly increasing timestamps to ensure correct display order. The `getNextTimestamp(sessionId)` function in `src/services/sessionIndexService.ts` guarantees this by:
 1. On first call for a session (or when switching sessions), querying the database for the max timestamp in that session
 2. Caching the `lastTimestamp` and `lastTimestampSessionId` to avoid repeated DB queries
 3. Returning `max(Date.now(), lastTimestamp + 1)` for each subsequent message

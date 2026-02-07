@@ -41,7 +41,7 @@ Use the two harnesses for different risk profiles:
 - You want tight coverage on edge cases that are painful to validate via a full VS Code host.
 
 Good Vitest targets:
-- `src/webview/scripts/core/actions.ts`: debounced search, context packaging for send, tool/approval UI updates, message/thread merging behavior.
+- `src/webview/scripts/core/actions/` (barrel: `index.ts`): debounced search, context packaging for send, tool/approval UI updates, message/thread merging behavior.
 - `src/webview/scripts/core/computed.ts`: header/title selection, derived counts, tool timeout conversions.
 - Vue components with important contracts:
   - `src/webview/components/chat/components/CommandApproval.vue`: editable command only when `status === 'pending'`; approve sends edited command.
@@ -133,6 +133,14 @@ The following test suites exist in `tests/extension/suite/`:
 - Message timestamps are strictly increasing and persist across restart
 - Maintenance returns zero orphans (FK prevents them)
 - deleteSession removes session and cascades to messages
+
+**`services/databaseServiceDeletion.test.ts`** - Tests session deletion edge cases:
+- Session deletion cascades to messages via FK constraint
+- Re-deletion of already-deleted session is safe
+
+**`services/databaseServiceExports.test.ts`** - Regression test for module exports:
+- `getDatabaseService` is exported as a function (guards against stale webpack builds)
+- `DatabaseService` class is exported
 
 **`utils/commandSafety.test.ts`** - Tests terminal command safety analysis:
 - Dangerous command detection (rm -rf, sudo, etc.)
