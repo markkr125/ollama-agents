@@ -132,5 +132,8 @@ function stubTokenManager(): any {
 }
 
 function stubDatabaseService(): any {
-  return {};
+  return {
+    upsertModels: async () => {},
+    getCachedModels: async () => [],
+  };
 }
