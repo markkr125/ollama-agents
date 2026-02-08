@@ -53,6 +53,8 @@ this.emitter.postMessage({ type: 'showToolAction', status: 'pending', ..., sessi
 | `fileEditApprovalResult` | After file edit approval resolved | `{ approvalId, status, autoApproved?, filePath }` |
 | `showToolAction` (success/error) | After tool execution completes | `{ status: 'success'/'error', icon, text, detail }` |
 | `finishProgressGroup` | After all tools in group complete | `{}` |
+| `thinkingBlock` | After model finishes a thinking round | `{ content }` |
+| `showError` | On fatal loop error before break | `{ message }` |
 
 ### Debugging Live vs History Mismatch
 
@@ -121,6 +123,7 @@ These are the mistakes most frequently made when editing this codebase. **Check 
 | 9 | Importing webview core modules in tests without stubbing `acquireVsCodeApi` | `state.ts` calls `acquireVsCodeApi()` at **import time**. Any test importing state (or modules that import state) crashes immediately. | This is handled by `tests/webview/setup.ts` — ensure Vitest config includes it in `setupFiles`. |
 | 10 | Using `out/` as extension runtime output | `out/` is only for **test compilation** (`tsc`). The extension runtime bundle is in `dist/` (webpack). | Never reference `out/` in `package.json` "main" or runtime code paths. |
 | 11 | Restructuring `.github/instructions/`, `.github/skills/`, or `docs/` | The preamble table in this file, `docs/README.md` index, and `npm run lint:docs` all validate structure. Renaming, moving, or deleting these files breaks cross-references. | Run `npm run lint:docs` after any docs/instructions/skills change. Keep the preamble table, docs index, and frontmatter in sync. |
+| 12 | Omitting `tool_name` or `thinking` from conversation history messages | The Ollama API requires `tool_name` on `role:'tool'` messages so the model knows which tool produced which result. Omitting `thinking` causes the model to lose chain-of-thought context across iterations. | Always include `tool_name` on tool result messages and `thinking` on assistant messages when thinking content exists. See `agent-tools.instructions.md` → Native Tool Calling. |
 
 ---
 
@@ -200,7 +203,7 @@ src/
 │   │           ├── AutocompleteSection.vue
 │   │           ├── ChatSection.vue
 │   │           ├── ConnectionSection.vue
-│   │           ├── ModelsSection.vue
+│   │           ├── ModelCapabilitiesSection.vue
 │   │           └── ToolsSection.vue
 │   ├── scripts/           # Webview app logic split by concern
 │   │   ├── app/
@@ -245,10 +248,18 @@ User types message in webview
       └─ handleAgentMode()
           ├─ Create agent session + git branch (if git available)
           └─ agentChatExecutor.execute()
+              ├─ Detect: useNativeTools (model has 'tools' cap) / useThinking
               └─ LOOP (max iterations):
+                  ├─ Build chatRequest {model, messages, tools?, think?}
                   ├─ Stream LLM response via OllamaClient.chat()
-                  ├─ Post 'streamChunk' (accumulated text) to webview
-                  ├─ Parse tool calls via toolCallParser
+                  │   ├─ Accumulate thinking (chunk.message.thinking)
+                  │   ├─ Accumulate tool_calls (chunk.message.tool_calls)
+                  │   └─ Throttled 'streamChunk' to webview (first-chunk gate: ≥8 word chars)
+                  ├─ Persist thinking block (thinkingBlock UI event)
+                  ├─ Extract tool calls:
+                  │   ├─ Native: nativeToolCalls from API
+                  │   └─ XML fallback: extractToolCalls(response)
+                  ├─ Push assistant message to history (with thinking + tool_calls)
                   ├─ If tools found:
                   │   ├─ Persist + post 'startProgressGroup'
                   │   ├─ For each tool:
@@ -256,9 +267,11 @@ User types message in webview
                   │   │   ├─ [File edit] → fileSensitivity → approval flow
                   │   │   ├─ [Other tool] → direct execution via ToolRegistry
                   │   │   ├─ Persist tool result to DB
-                  │   │   └─ Persist + post 'showToolAction' (success/error)
+                  │   │   ├─ Persist + post 'showToolAction' (success/error)
+                  │   │   └─ Feed result: {role:'tool', content, tool_name} (native)
+                  │   │               or accumulated user msg (XML fallback)
                   │   └─ Persist + post 'finishProgressGroup'
-                  ├─ If [TASK_COMPLETE] → break loop
+                  ├─ If [TASK_COMPLETE] → validate writes → break loop
                   └─ Continue to next iteration
               → Persist final assistant message to DB
               → Post 'finalMessage' to webview
@@ -279,7 +292,7 @@ There are **three message interfaces**. Using the wrong one is a common mistake:
 |-----------|------|---------|
 | `MessageRecord` | `src/types/session.ts` | Database persistence (snake_case fields) |
 | `ChatMessage` | `src/views/chatTypes.ts` | Webview postMessage (camelCase + UI metadata) |
-| Ollama wire format | `src/types/ollama.ts` | API requests (only `role`, `content`) |
+| Ollama `ChatMessage` | `src/types/ollama.ts` | API wire format (`role`, `content`, `tool_calls?`, `tool_name?`, `thinking?`) |
 
 See the **"Three Message Interfaces"** section in `extension-architecture.instructions.md` for field-level details and conversion rules.
 
@@ -291,6 +304,8 @@ The HTTP client for communicating with Ollama/OpenWebUI APIs.
 - `chat(request)` - Streaming chat completion (returns async generator)
 - `generate(request)` - Non-chat text generation
 - `listModels()` - Get available models
+- `showModel(name)` - Fetch model details + capabilities via `/api/show`
+- `fetchModelsWithCapabilities()` - `listModels()` + parallel `showModel()` for all models
 - `testConnection()` - Verify server connectivity
 
 **Configuration:**
@@ -324,6 +339,16 @@ Settings are defined in `package.json` under `contributes.configuration`:
 | `ollamaCopilot.agent.maxIterations` | `25` | Max tool execution cycles |
 | `ollamaCopilot.agent.toolTimeout` | `30000` | Tool timeout in ms |
 | `ollamaCopilot.agent.maxActiveSessions` | `1` | Max concurrent active sessions |
+
+### Model Management
+
+Models are managed in the **Models** settings tab (`ModelCapabilitiesSection.vue`). Key behaviors:
+
+- **SQLite cache**: The model list (name, size, capabilities, `enabled` flag) is persisted in the `models` table. Falls back to the cache when Ollama is unreachable.
+- **Enable/disable**: Each model has an `enabled` flag. Disabled models are hidden from all model selection dropdowns. Bulk "Enable All" / "Disable All" buttons are provided.
+- **Capability detection**: On startup (and on manual refresh), the extension calls `/api/show` for each model to detect capabilities (chat, vision, FIM, tools, embedding). Results are cached in SQLite.
+- **Auto-save**: Model selection dropdowns save automatically on change — no explicit save button.
+- **Stale model cleanup**: `upsertModels()` in `sessionIndexService.ts` does `DELETE FROM models` before re-inserting, so models removed from Ollama are automatically dropped from the cache.
 
 ---
 
@@ -419,6 +444,7 @@ vsce package
 | Add a new message type | `src/views/chatView.ts` + `src/webview/scripts/core/messageHandlers/` | `add-chat-message-type` skill |
 | Add a new agent tool | `src/agent/toolRegistry.ts` + `src/views/toolUIFormatter.ts` | `add-agent-tool` skill |
 | Modify chat UI | `src/webview/components/chat/` + `src/webview/scripts/core/` | `webview-ui` instructions |
+| Modify model management UI | `src/webview/components/settings/components/ModelCapabilitiesSection.vue` + `src/services/sessionIndexService.ts` | `database-rules` + `extension-architecture` instructions |
 | Change API behavior | `src/services/ollamaClient.ts` | `extension-architecture` instructions |
 | Change inline completions | `src/providers/completionProvider.ts` | — |
 | Modify agent prompts | `buildAgentSystemPrompt()` in `src/services/agentChatExecutor.ts` | `agent-tools` instructions |

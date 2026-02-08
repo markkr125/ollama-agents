@@ -13,12 +13,12 @@ The codebase has **three different interfaces** for messages. Using the wrong on
 |-----------|------|------|--------|
 | `MessageRecord` | `src/types/session.ts` | **Database persistence** — the source of truth | `snake_case`: `session_id`, `tool_name`, `tool_input`, `tool_output`, `progress_title` |
 | `ChatMessage` | `src/views/chatTypes.ts` | **View layer transfer** — enriched with UI metadata | `camelCase`: `toolName`, `actionText`, `actionIcon`, `actionStatus` |
-| Ollama wire format | `src/types/ollama.ts` | **API requests** — minimal | Only `role`, `content` |
+| Ollama `ChatMessage` | `src/types/ollama.ts` | **API requests/responses** — wire format | `role`, `content`, `tool_calls?`, `tool_name?`, `thinking?` |
 
 **When to use which:**
 - Storing to or reading from the database → `MessageRecord`
 - Sending to the webview via `postMessage` → `ChatMessage` (constructed by `chatSessionController.ts`)
-- Sending to the Ollama API → plain `{ role, content }` objects
+- Sending to the Ollama API → `ChatMessage` from `src/types/ollama.ts` — includes `role`, `content`, and optionally `tool_calls` (assistant), `tool_name` (tool results), `thinking` (chain-of-thought)
 
 **Gotcha**: `ChatSession` in `chatTypes.ts` is a **legacy type** — the real session record is `SessionRecord` in `types/session.ts`. Do not add new session fields to `ChatSession`.
 
@@ -143,11 +143,26 @@ Output is hard-truncated to **100 lines** (15 head + 85 tail) with a `[N lines t
 
 ## Model Compatibility (`src/services/modelCompatibility.ts`)
 
-Uses **hard-coded regex arrays** to detect model capabilities by name:
-- `TOOL_USE_CAPABLE_PATTERNS` — models that support function calling
-- `FIM_CAPABLE_PATTERNS` — models that support fill-in-the-middle
+Reads **model capabilities from the Ollama `/api/show` endpoint** which returns a `capabilities` string array (e.g. `["completion", "vision", "tools", "insert"]`). The module maps those API strings to the UI-facing `ModelCapabilities` type:
 
-**Known limitation**: Lists are manually maintained and lag behind new model releases. They include `llama3.[123]` but don't cover `llama4`, `deepseek-v3`, `phi-4`, etc. If you add support for a new model, add its pattern to the appropriate array.
+| API value | `ModelCapabilities` field |
+|-----------|--------------------------|
+| `completion` | `chat` |
+| `insert` | `fim` |
+| `tools` | `tools` |
+| `vision` | `vision` |
+| `embedding` | `embedding` |
+
+No regex arrays or name-based heuristics are used. Capabilities are populated by `OllamaClient.fetchModelsWithCapabilities()`, which calls `listModels()` then `showModel()` in parallel for all models, merging the `capabilities` array into each `Model` object.
+
+### SQLite Model Cache
+
+The model list (name, size, family, quantization, capabilities, `enabled` flag) is persisted in the SQLite `models` table. Key behaviors:
+
+- **Offline fallback**: When Ollama is unreachable, the extension reads the last cached model list so dropdowns and the capabilities table remain populated.
+- **Stale cleanup**: `upsertModels()` does `DELETE FROM models` then re-inserts all models from the latest Ollama response. Models removed from Ollama are automatically dropped.
+- **Enable/disable**: Each model has an `enabled INTEGER NOT NULL DEFAULT 1` column. Disabled models are filtered out of `modelOptions` in the webview. Bulk "Enable All" / "Disable All" toggles loop through `modelInfo` and call `toggleModelEnabled()` for each.
+- **Auto-save**: The Model Selection dropdowns (`ModelCapabilitiesSection.vue`) auto-save on change via `@change="autoSave"` — no explicit Save button.
 
 ## File Sensitivity (`src/utils/fileSensitivity.ts`)
 

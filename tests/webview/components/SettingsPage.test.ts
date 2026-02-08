@@ -29,6 +29,7 @@ function makeProps(overrides: Record<string, any> = {}) {
       maxIterations: 25,
       toolTimeout: 30000,
       maxActiveSessions: 1,
+      enableThinking: true,
       temperature: 0.7,
       sensitiveFilePatterns: ''
     },
@@ -44,7 +45,6 @@ function makeProps(overrides: Record<string, any> = {}) {
     connectionStatus: { ...status },
     modelOptions: ['model-a', 'model-b'],
     saveModelSettings: vi.fn(),
-    modelsStatus: { ...status },
     chatSettings: { streamResponses: true, showToolActions: true },
     temperatureSlider: 70,
     setTemperatureSlider: vi.fn(),
@@ -59,6 +59,10 @@ function makeProps(overrides: Record<string, any> = {}) {
     tools: [
       { name: 'read_file', icon: '📄', desc: 'Read file contents' }
     ],
+    modelInfo: [],
+    capabilityCheckProgress: { running: false, completed: 0, total: 0 },
+    refreshCapabilities: vi.fn(),
+    toggleModelEnabled: vi.fn(),
     runDbMaintenance: vi.fn(),
     dbMaintenanceStatus: { ...status },
     recreateMessagesTable: vi.fn(),
@@ -272,7 +276,14 @@ describe('SettingsPage component', () => {
 
   test('model options render in select dropdowns', () => {
     const wrapper = mount(SettingsPage, {
-      props: makeProps({ activeSection: 'models', modelOptions: ['llama3', 'codellama'] })
+      props: makeProps({
+        activeSection: 'models',
+        modelOptions: ['llama3', 'codellama'],
+        modelInfo: [
+          { name: 'llama3', size: 0, capabilities: { chat: true, fim: true, tools: false, vision: false, embedding: false }, enabled: true },
+          { name: 'codellama', size: 0, capabilities: { chat: true, fim: true, tools: false, vision: false, embedding: false }, enabled: true }
+        ]
+      })
     });
 
     const options = wrapper.findAll('option');

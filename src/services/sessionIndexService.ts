@@ -1,4 +1,5 @@
 import * as vscode from 'vscode';
+import { Model } from '../types/ollama';
 import { ChatSessionStatus, MessageRecord, SessionRecord, SessionsPage } from '../types/session';
 
 // ---------------------------------------------------------------------------
@@ -136,11 +137,29 @@ export class SessionIndexService {
       ON messages(session_id, timestamp);
     `);
 
+    // ---- Models cache table ----
+    await dbExec(this.db, `
+      CREATE TABLE IF NOT EXISTS models (
+        name TEXT PRIMARY KEY,
+        size INTEGER NOT NULL DEFAULT 0,
+        modified_at TEXT NOT NULL DEFAULT '',
+        digest TEXT NOT NULL DEFAULT '',
+        family TEXT,
+        families TEXT,
+        parameter_size TEXT,
+        quantization_level TEXT,
+        capabilities TEXT,
+        fetched_at INTEGER NOT NULL
+      );
+    `);
+
     // Schema migrations (idempotent column additions)
     await this.ensureColumn('sessions', 'status', "TEXT DEFAULT 'completed'");
     await this.ensureColumn('sessions', 'auto_approve_commands', 'INTEGER NOT NULL DEFAULT 0');
     await this.ensureColumn('sessions', 'auto_approve_sensitive_edits', 'INTEGER NOT NULL DEFAULT 0');
     await this.ensureColumn('sessions', 'sensitive_file_patterns', 'TEXT DEFAULT NULL');
+    await this.ensureColumn('models', 'capabilities', 'TEXT DEFAULT NULL');
+    await this.ensureColumn('models', 'enabled', 'INTEGER NOT NULL DEFAULT 1');
 
     this.initialized = true;
   }
@@ -345,6 +364,83 @@ export class SessionIndexService {
     // CASCADE deletes messages too
     await dbRun(this.db!, 'DELETE FROM sessions;');
     console.log('[SessionIndexService] All sessions and messages cleared');
+  }
+
+  // ---------------------------------------------------------------------------
+  // Model cache CRUD
+  // ---------------------------------------------------------------------------
+
+  /**
+   * Upsert a batch of models from an Ollama API response.
+   * Replaces the entire cache (deletes models no longer present).
+   */
+  async upsertModels(models: Model[]): Promise<void> {
+    this.ensureReady();
+    const now = Date.now();
+    // Read existing enabled flags before replacing rows
+    const existingRows = await dbAll(this.db!, 'SELECT name, enabled FROM models;');
+    const enabledMap = new Map(existingRows.map(r => [String(r.name), Number(r.enabled ?? 1)]));
+    await dbRun(this.db!, 'DELETE FROM models;');
+    for (const m of models) {
+      const enabled = m.enabled !== undefined ? (m.enabled ? 1 : 0) : (enabledMap.get(m.name) ?? 1);
+      await dbRun(this.db!,
+        `INSERT OR REPLACE INTO models (name, size, modified_at, digest, family, families, parameter_size, quantization_level, capabilities, enabled, fetched_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);`,
+        [
+          m.name,
+          m.size ?? 0,
+          m.modified_at ?? '',
+          m.digest ?? '',
+          m.details?.family ?? null,
+          m.details?.families ? JSON.stringify(m.details.families) : null,
+          m.details?.parameter_size ?? null,
+          m.details?.quantization_level ?? null,
+          m.capabilities ? JSON.stringify(m.capabilities) : null,
+          enabled,
+          now
+        ]
+      );
+    }
+  }
+
+  /**
+   * Retrieve cached models from SQLite.
+   * Returns Model[] matching the Ollama API shape so callers can use them interchangeably.
+   */
+  async getCachedModels(): Promise<Model[]> {
+    this.ensureReady();
+    const rows = await dbAll(this.db!, 'SELECT * FROM models ORDER BY name ASC;');
+    return rows.map(r => this.mapModelRow(r));
+  }
+
+  async setModelEnabled(name: string, enabled: boolean): Promise<void> {
+    this.ensureReady();
+    await dbRun(this.db!, 'UPDATE models SET enabled = ? WHERE name = ?;', [enabled ? 1 : 0, name]);
+  }
+
+  private mapModelRow(row: Record<string, any>): Model {
+    let families: string[] | undefined;
+    if (row.families) {
+      try { families = JSON.parse(row.families); } catch { families = undefined; }
+    }
+    let capabilities: string[] | undefined;
+    if (row.capabilities) {
+      try { capabilities = JSON.parse(row.capabilities); } catch { capabilities = undefined; }
+    }
+    return {
+      name: String(row.name),
+      size: Number(row.size ?? 0),
+      modified_at: String(row.modified_at ?? ''),
+      digest: String(row.digest ?? ''),
+      details: {
+        family: row.family ?? undefined,
+        families,
+        parameter_size: row.parameter_size ?? undefined,
+        quantization_level: row.quantization_level ?? undefined
+      },
+      capabilities,
+      enabled: row.enabled === undefined ? true : !!row.enabled
+    };
   }
 
   // ---------------------------------------------------------------------------

@@ -14,22 +14,60 @@ When user sends a message in Agent mode:
    ├─ Create agent session
    ├─ Create git branch (if enabled)
    └─ agentChatExecutor.execute()   ← AgentChatExecutor.execute() method
-       └─ Loop (max iterations):
-           ├─ Send messages to LLM
-           ├─ Stream response
-           ├─ Parse for <tool_call> blocks
-           ├─ If tool calls found:
-           │   ├─ Send 'startProgressGroup' to UI
+       ├─ Detect tool calling mode:
+       │   ├─ Native: model has 'tools' capability → uses Ollama tools API
+       │   └─ XML fallback: no capability → parses <tool_call> from text
+       └─ LOOP (max iterations):
+           ├─ Build chat request (with tools[] + think:true if native)
+           ├─ Stream LLM response via OllamaClient.chat()
+           │   ├─ Accumulate thinking tokens (chunk.message.thinking)
+           │   ├─ Accumulate native tool_calls (chunk.message.tool_calls)
+           │   ├─ Accumulate text content (chunk.message.content)
+           │   └─ Throttled streamChunk to UI (32ms, first-chunk gate ≥8 word chars)
+           ├─ Persist thinking block (if any)
+           ├─ Extract tool calls (native tool_calls[] OR XML <tool_call> parsing)
+           ├─ If tools found:
+           │   ├─ Push assistant message to history (with thinking + tool_calls)
+           │   ├─ Persist + post 'startProgressGroup'
            │   ├─ For each tool:
-           │   │   ├─ Send 'showToolAction' (running)
-           │   │   ├─ Execute tool via ToolRegistry
-           │   │   ├─ Send 'showToolAction' (success/error)
-           │   │   └─ Add result to messages
-           │   └─ Continue loop
-           ├─ If [TASK_COMPLETE]:
-           │   └─ Break loop
-           └─ Send 'finalMessage' to UI
+           │   │   ├─ [Terminal cmd] → commandSafety → approval flow
+           │   │   ├─ [File edit] → fileSensitivity → approval flow
+           │   │   ├─ [Other tool] → direct execution via ToolRegistry
+           │   │   ├─ Persist tool result to DB
+           │   │   ├─ Persist + post 'showToolAction' (success/error)
+           │   │   └─ Feed result back: {role:'tool', content, tool_name} (native)
+           │   │                     or accumulated user message (XML)
+           │   └─ Persist + post 'finishProgressGroup'
+           ├─ If [TASK_COMPLETE] → validate writes → break loop
+           └─ Continue to next iteration
+       → Persist final assistant message to DB
+       → Post 'finalMessage' to webview
+       → Post 'generationStopped'
 ```
+
+## Native Tool Calling vs XML Fallback
+
+The executor supports two tool calling paths, selected based on model capabilities:
+
+| Path | When Used | Request | Response | History Format |
+|------|-----------|---------|----------|----------------|
+| **Native** | Model has `tools` capability | `chatRequest.tools = [ToolDefinition...]` | `chunk.message.tool_calls: [{function:{name, arguments}}]` | `{role:'tool', content, tool_name}` per tool |
+| **XML fallback** | Model lacks `tools` capability | Tool descriptions in system prompt | `<tool_call>{"name":"...", "arguments":{...}}</tool_call>` in text | Accumulated `{role:'user', content}` message |
+
+**Native tool calling conversation structure** (matches [Ollama docs](https://docs.ollama.com/capabilities/tool-calling)):
+```
+[system] You are a coding agent...
+[user] Create a hello world file
+[assistant, thinking: "...", tool_calls: [{function:{name:"write_file", arguments:{...}}}]]
+[tool, tool_name: "write_file"] File written successfully
+[assistant, thinking: "..."] Done! [TASK_COMPLETE]
+```
+
+**Key rules:**
+- Assistant messages MUST include `thinking`, `content`, AND `tool_calls` — omitting `thinking` causes the model to lose chain-of-thought context across iterations
+- Tool result messages MUST include `tool_name` — without it, the model can't match results to calls in multi-tool responses
+- Do NOT deduplicate tool calls — Ollama sends each as a complete object in its own chunk; dedup would drop legitimate repeated calls
+- `ToolCall` type has optional `id`, `type`, and `function.index` fields — Ollama returns `type: 'function'` and `function.index` but NOT `id`
 
 ## ToolRegistry (`src/agent/toolRegistry.ts`)
 
@@ -97,6 +135,20 @@ The parser handles various LLM quirks that smaller models (like devstral-small) 
 
 Tools in `toolRegistry.ts` also accept multiple argument names for the file path:
 - `path`, `file`, or `filePath` are all valid for `read_file`, `write_file`, `get_diagnostics`
+
+## Streaming Behavior
+
+### First-Chunk Gate
+The executor uses a 32ms throttle for streaming text to the UI. The **first chunk** requires ≥8 word characters before the spinner is replaced with text. This prevents partial markdown fragments like `**What` from flashing on screen. After the first chunk, any content with ≥1 word character is shown.
+
+### `[TASK_COMPLETE]` Stripping
+The control signal `[TASK_COMPLETE]` is stripped from all displayed content:
+- Full match: regex `/\[TASK_COMPLETE\]/gi`
+- Partial prefix: a reverse scan strips any trailing prefix of `[TASK_COMPLETE]` (e.g. `[TASK`, `[TAS`) since tokens arrive incrementally
+- Applied to: streamed text, thinking content, and persisted thinking blocks
+
+### Terminal Command CWD Resolution
+`executeTerminalCommand()` resolves the `cwd` argument relative to the workspace root. Absolute paths that fall outside the workspace are clamped to the workspace root. If no `cwd` is provided, commands run in the workspace root.
 
 ### Write Validation
 

@@ -730,3 +730,122 @@ describe('CRITICAL: Live handler vs timelineBuilder parity', () => {
     expect(progress.status).toBe('done');
   });
 });
+
+describe('buildTimelineFromMessages - thinking blocks', () => {
+  const makeUiEvent = (id: string, eventType: string, payload: any) => ({
+    id,
+    role: 'tool',
+    toolName: '__ui__',
+    toolOutput: JSON.stringify({ eventType, payload })
+  });
+
+  test('thinkingBlock event creates thinking block in thread', async () => {
+    const builder = await import('../../../src/webview/scripts/core/timelineBuilder');
+    const messages = [
+      { id: 'u1', role: 'user', content: 'explain this' },
+      { id: 'a1', role: 'assistant', content: '' },
+      makeUiEvent('ui1', 'thinkingBlock', { content: 'Let me reason about this...' })
+    ];
+
+    const timeline = builder.buildTimelineFromMessages(messages);
+    expect(timeline.length).toBe(2);
+
+    const thread = timeline[1] as any;
+    // Should have: empty text block + thinking block
+    expect(thread.blocks.length).toBe(2);
+    expect(thread.blocks[1].type).toBe('thinking');
+    expect(thread.blocks[1].content).toBe('Let me reason about this...');
+    expect(thread.blocks[1].collapsed).toBe(true);
+  });
+
+  test('multiple thinkingBlock events create separate blocks', async () => {
+    const builder = await import('../../../src/webview/scripts/core/timelineBuilder');
+    const messages = [
+      { id: 'u1', role: 'user', content: 'complex task' },
+      { id: 'a1', role: 'assistant', content: 'Starting...' },
+      makeUiEvent('ui1', 'thinkingBlock', { content: 'First reasoning step' }),
+      { id: 'a2', role: 'assistant', content: 'Intermediate result' },
+      makeUiEvent('ui2', 'thinkingBlock', { content: 'Second reasoning step' })
+    ];
+
+    const timeline = builder.buildTimelineFromMessages(messages);
+    const thread = timeline[1] as any;
+
+    // text → thinking → text → thinking
+    const thinkingBlocks = thread.blocks.filter((b: any) => b.type === 'thinking');
+    expect(thinkingBlocks.length).toBe(2);
+    expect(thinkingBlocks[0].content).toBe('First reasoning step');
+    expect(thinkingBlocks[1].content).toBe('Second reasoning step');
+    // All thinking blocks are collapsed in history
+    expect(thinkingBlocks[0].collapsed).toBe(true);
+    expect(thinkingBlocks[1].collapsed).toBe(true);
+  });
+
+  test('thinkingBlock with empty content still creates block', async () => {
+    const builder = await import('../../../src/webview/scripts/core/timelineBuilder');
+    const messages = [
+      { id: 'a1', role: 'assistant', content: 'hi' },
+      makeUiEvent('ui1', 'thinkingBlock', { content: '' })
+    ];
+
+    const timeline = builder.buildTimelineFromMessages(messages);
+    const thread = timeline[0] as any;
+    const thinkingBlocks = thread.blocks.filter((b: any) => b.type === 'thinking');
+    expect(thinkingBlocks.length).toBe(1);
+    expect(thinkingBlocks[0].content).toBe('');
+    expect(thinkingBlocks[0].collapsed).toBe(true);
+  });
+});
+
+describe('buildTimelineFromMessages - showError event', () => {
+  const makeUiEvent = (id: string, eventType: string, payload: any) => ({
+    id,
+    role: 'tool',
+    toolName: '__ui__',
+    toolOutput: JSON.stringify({ eventType, payload })
+  });
+
+  test('showError creates error action in progress group', async () => {
+    const builder = await import('../../../src/webview/scripts/core/timelineBuilder');
+    const messages = [
+      { id: 'a1', role: 'assistant', content: '' },
+      makeUiEvent('ui1', 'showError', { message: 'Connection timed out' })
+    ];
+
+    const timeline = builder.buildTimelineFromMessages(messages);
+    const thread = timeline[0] as any;
+
+    // Should create implicit progress group with error action
+    expect(thread.blocks.length).toBe(2); // empty text + tools
+    const toolsBlock = thread.blocks[1];
+    expect(toolsBlock.type).toBe('tools');
+    expect(toolsBlock.tools.length).toBe(1);
+
+    const group = toolsBlock.tools[0];
+    expect(group.type).toBe('progress');
+    expect(group.status).toBe('error');
+    expect(group.collapsed).toBe(true);
+    expect(group.actions.length).toBe(1);
+    expect(group.actions[0].status).toBe('error');
+    expect(group.actions[0].text).toBe('Connection timed out');
+  });
+
+  test('showError within existing group adds to that group', async () => {
+    const builder = await import('../../../src/webview/scripts/core/timelineBuilder');
+    const messages = [
+      { id: 'a1', role: 'assistant', content: '' },
+      makeUiEvent('ui1', 'startProgressGroup', { title: 'Running' }),
+      makeUiEvent('ui2', 'showToolAction', { status: 'running', text: 'Executing', icon: '⚡' }),
+      makeUiEvent('ui3', 'showError', { message: 'Tool failed' })
+    ];
+
+    const timeline = builder.buildTimelineFromMessages(messages);
+    const thread = timeline[0] as any;
+    const group = thread.blocks[1].tools[0];
+
+    expect(group.status).toBe('error');
+    expect(group.actions.length).toBe(2);
+    expect(group.actions[1].status).toBe('error');
+    expect(group.actions[1].text).toBe('Tool failed');
+  });
+});

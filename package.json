@@ -226,6 +226,11 @@
           "maximum": 5,
           "description": "Maximum number of active chat sessions that can run concurrently"
         },
+        "ollamaCopilot.agent.enableThinking": {
+          "type": "boolean",
+          "default": true,
+          "description": "Enable chain-of-thought reasoning (think=true) for models that support it. Shows collapsible 'Thought' blocks in agent mode."
+        },
         "ollamaCopilot.agent.sensitiveFilePatterns": {
           "type": "object",
           "default": {

@@ -37,6 +37,9 @@ export async function activate(context: vscode.ExtensionContext) {
     // Initialize database service
     databaseService = getDatabaseService(context);
     await databaseService.initialize(client);
+
+    // Wire database service into model manager for SQLite-backed cache fallback
+    modelManager.setDatabaseService(databaseService);
     
     taskTracker = new TaskTracker(context);
     sessionManager = new SessionManager(context);

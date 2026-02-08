@@ -5,7 +5,7 @@
  * - Never import 'vscode' here — this runs in a sandboxed iframe.
  */
 import { reactive, ref, watch } from 'vue';
-import type { SearchResultGroup, SessionItem, StatusMessage, TimelineItem } from './types';
+import type { ModelInfo, SearchResultGroup, SessionItem, StatusMessage, TimelineItem } from './types';
 
 declare const acquireVsCodeApi: () => {
   postMessage: (message: any) => void;
@@ -25,6 +25,7 @@ export const sessionsLoading = ref(false);
 export const sessionsInitialLoaded = ref(false);
 export const sessionsCursor = ref<number | null>(null);
 export const modelOptions = ref<string[]>([]);
+export const modelInfo = ref<ModelInfo[]>([]);
 export const currentMode = ref('agent');
 export const currentModel = ref('');
 export const currentSessionId = ref<string | null>(null);
@@ -47,6 +48,11 @@ export const thinking = reactive({
   text: 'Thinking...'
 });
 
+export const warningBanner = reactive({
+  visible: false,
+  message: ''
+});
+
 export const settings = reactive({
   baseUrl: 'http://localhost:11434',
   enableAutoComplete: true,
@@ -57,6 +63,7 @@ export const settings = reactive({
   maxIterations: 25,
   toolTimeout: 30000,
   maxActiveSessions: 1,
+  enableThinking: true,
   temperature: 0.7,
   sensitiveFilePatterns: ''
 });
@@ -84,6 +91,13 @@ export const modelsStatus = reactive<StatusMessage>({ visible: false, success: t
 export const agentStatus = reactive<StatusMessage>({ visible: false, success: true, message: '' });
 export const dbMaintenanceStatus = reactive<StatusMessage>({ visible: false, success: true, message: '' });
 export const recreateMessagesStatus = reactive<StatusMessage>({ visible: false, success: true, message: '' });
+
+// Capability check progress (Model Capabilities tab)
+export const capabilityCheckProgress = reactive<{ running: boolean; completed: number; total: number }>({
+  running: false,
+  completed: 0,
+  total: 0
+});
 
 export const tools = ref([
   { name: 'read_file', icon: '📄', desc: 'Read file contents' },

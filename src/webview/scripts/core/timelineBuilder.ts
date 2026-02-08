@@ -93,6 +93,17 @@ export const buildTimelineFromMessages = (messages: any[]): TimelineItem[] => {
         }
         if (!uiEvent?.eventType) continue;
 
+        // thinkingBlock is a thread-level block, not a tool item — handle before ensureToolsBlock
+        if (uiEvent.eventType === 'thinkingBlock') {
+          const thread = ensureThread();
+          thread.blocks.push({
+            type: 'thinking',
+            content: uiEvent.payload?.content || '',
+            collapsed: true
+          });
+          continue;
+        }
+
         const toolsBlock = ensureToolsBlock();
 
         switch (uiEvent.eventType) {
@@ -303,6 +314,32 @@ export const buildTimelineFromMessages = (messages: any[]): TimelineItem[] => {
                 autoApproved: !!uiEvent.payload?.autoApproved
               } as FileEditApprovalItem);
             }
+            break;
+          }
+          case 'showError': {
+            // Reconstruct error action in progress group (matches live handleShowError)
+            if (!currentGroup) {
+              currentGroup = {
+                id: `progress_${m.id}`,
+                type: 'progress',
+                title: 'Working on task',
+                status: 'running',
+                collapsed: false,
+                actions: []
+              };
+              const tb = ensureToolsBlock();
+              tb.tools.push(currentGroup);
+            }
+            currentGroup.actions.push({
+              id: `action_${m.id}`,
+              status: 'error',
+              icon: '✗',
+              text: uiEvent.payload?.message || 'Error',
+              detail: null
+            });
+            currentGroup.status = 'error';
+            currentGroup.collapsed = true;
+            currentGroup = null;
             break;
           }
           default:

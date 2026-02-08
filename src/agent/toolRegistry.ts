@@ -1,5 +1,6 @@
 import * as vscode from 'vscode';
 import type { TerminalManager } from '../services/terminalManager';
+import type { ToolDefinition } from '../types/ollama';
 import { ToolExecution } from '../types/session';
 
 export interface Tool {
@@ -160,7 +161,7 @@ export class ToolRegistry {
         type: 'object',
         properties: {
           command: { type: 'string', description: 'Command to execute' },
-          cwd: { type: 'string', description: 'Working directory' }
+          cwd: { type: 'string', description: 'Working directory relative to workspace root (leave empty for workspace root)' }
         },
         required: ['command']
       },
@@ -241,6 +242,25 @@ export class ToolRegistry {
     return this.getAll()
       .map(tool => `- ${tool.name}: ${tool.description}`)
       .join('\n');
+  }
+
+  /**
+   * Get tool definitions in Ollama native format for the `tools` API parameter.
+   * Reshapes existing per-tool JSON schemas into ToolDefinition[].
+   */
+  getOllamaToolDefinitions(): ToolDefinition[] {
+    return this.getAll().map(tool => ({
+      type: 'function' as const,
+      function: {
+        name: tool.name,
+        description: tool.description,
+        parameters: {
+          type: 'object' as const,
+          properties: tool.schema.properties,
+          required: tool.schema.required
+        }
+      }
+    }));
   }
 
   /**

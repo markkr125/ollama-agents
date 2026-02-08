@@ -49,6 +49,15 @@
 
 The model may not support function calling. Use a tool-capable model like `qwen2.5-coder:7b` or larger. Smaller or older models may not reliably produce tool calls.
 
+If the model supports tools but the agent still struggles, check:
+- The model's "Tools" capability is shown as ✅ in Settings → Models
+- The model actually responds with `tool_calls` (check the Output panel logs)
+- For XML fallback models, a warning banner should appear — native tool calling is more reliable
+
+### Brief flash of garbled text before response
+
+During streaming, you might see incomplete markdown (e.g., `**What`) flash briefly before the response renders properly. This is mitigated by a first-chunk gate that waits for at least 8 word characters before displaying content. If you still see it, the model may be sending very short initial tokens. This is cosmetic and resolves once more content streams in.
+
 ## Inline Completions
 
 ### No completions appearing

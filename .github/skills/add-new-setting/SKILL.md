@@ -111,7 +111,7 @@ Add the setting to the appropriate section component in `src/webview/components/
 | Agent behavior | `AgentSection.vue` |
 | Autocomplete | `AutocompleteSection.vue` |
 | Chat modes | `ChatSection.vue` |
-| Model selection | `ModelsSection.vue` |
+| Model selection | `ModelCapabilitiesSection.vue` |
 | Tool toggles | `ToolsSection.vue` |
 
 The settings component reads from `settings` reactive ref (in `src/webview/scripts/core/state.ts`) and sends `saveSettings` messages back:

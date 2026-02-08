@@ -50,7 +50,7 @@ interface AssistantThreadItem {
   id: string;
   type: 'assistantThread';
   role: 'assistant';
-  blocks: Array<TextBlock | ToolsBlock>;
+  blocks: Array<TextBlock | ToolsBlock | ThinkingBlock>;
   model?: string;
 }
 
@@ -63,14 +63,38 @@ interface ToolsBlock {
   type: 'tools';
   tools: Array<ProgressItem | CommandApprovalItem>;
 }
+
+interface ThinkingBlock {
+  type: 'thinking';
+  content: string;
+  collapsed: boolean;
+}
 ```
 
 **Block ordering**: Blocks are added sequentially as events occur:
 1. Thread starts with empty text block: `[{ type: 'text', content: '' }]`
-2. When tools start: `[text, { type: 'tools', tools: [...] }]`
-3. After tools, more text: `[text, tools, { type: 'text', content: '...' }]`
-4. More tools: `[text, tools, text, tools]`
-5. Final summary: `[text, tools, text, tools, text]`
+2. Thinking (if model supports `think`): `[text, { type: 'thinking', content: '...', collapsed: false }]`
+3. After thinking collapses: `collapsed` flips to `true`, then text block follows
+4. When tools start: `[text, thinking, text, { type: 'tools', tools: [...] }]`
+5. More thinking + tools: blocks continue alternating as the model iterates
+6. Final summary: `[text, thinking, text, tools, text, thinking, text]`
+
+### Thinking Block UI
+
+When a model supports `think=true`, its internal reasoning is streamed via `streamThinking` messages and rendered as a collapsible `<details>` element:
+
+- **Live streaming**: Content streams in real-time, `<details>` is **open** (not collapsed).
+- **Collapse**: When thinking finishes, the backend sends `collapseThinking` → `collapsed` flips to `true`, `<details>` closes.
+- **Visual style**: Rendered as a 💭 "Thought" pill. No chevron indicator — just a simple toggle.
+- **History rebuild**: `timelineBuilder.ts` handles `thinkingBlock` UI events by creating `ThinkingBlock` with `collapsed: true` (thinking is always finished in history).
+
+### First-Chunk Streaming Gate
+
+To prevent incomplete markdown (e.g., `**What` rendering as literal text instead of the spinner), the backend applies a **first-chunk gate**:
+
+- **First chunk**: Requires ≥8 word characters (`[a-zA-Z0-9_]`) before sending `streamChunk`. This ensures enough content for meaningful markdown rendering.
+- **Subsequent chunks**: Any content with ≥1 word character is sent immediately, since the markdown renderer has prior context to handle partial syntax.
+- **While gated**: The webview continues showing the spinner/loading animation.
 
 **Rules**:
 - The assistant thread is the only container for tool UI blocks during an assistant response.
@@ -100,10 +124,12 @@ UI events (progress groups, tool actions, approvals) are persisted as `__ui__` t
 - `toolApprovalResult` - Updates terminal command approval status and action status
 - `requestFileEditApproval` - Creates pending file edit approval card with diff + "Awaiting approval" action
 - `fileEditApprovalResult` - Updates file edit approval status and action status
+- `thinkingBlock` - Stores collapsed thinking content for history rebuild
 
 **Not persisted** (transient UI states):
 - "Running" status updates that will be replaced by final status
 - Intermediate streaming content (only final content is saved as assistant message)
+- `streamThinking` / `collapseThinking` — live streaming events (final content persisted as `thinkingBlock`)
 
 ## Editable Command Approvals
 

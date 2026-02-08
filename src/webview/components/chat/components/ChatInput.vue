@@ -26,7 +26,7 @@
             <option value="edit">Edit</option>
           </select>
           <select :value="currentModel" @change="onModelChange">
-            <option v-if="modelOptions.length === 0" value="">Loading...</option>
+            <option v-if="modelOptions.length === 0" value="" disabled>No enabled models</option>
             <option v-for="m in modelOptions" :key="m" :value="m">{{ m }}</option>
           </select>
         </div>

@@ -608,3 +608,120 @@ describe('connectionTestResult handler', () => {
     expect(state.modelOptions.value).toEqual(['model-a', 'model-b']);
   });
 });
+
+describe('thinking block handlers', () => {
+  test('handleStreamThinking creates thinking block in assistant thread', async () => {
+    const state = await import('../../../src/webview/scripts/core/state');
+    const handlers = await import('../../../src/webview/scripts/core/messageHandlers/streaming');
+
+    state.timeline.value = [];
+    state.currentStreamIndex.value = null;
+    state.currentAssistantThreadId.value = null;
+
+    handlers.handleStreamThinking({ type: 'streamThinking', content: 'Let me think...' });
+
+    expect(state.timeline.value.length).toBe(1);
+    const thread = state.timeline.value[0] as any;
+    // Should have: empty text block + thinking block
+    const thinkingBlocks = thread.blocks.filter((b: any) => b.type === 'thinking');
+    expect(thinkingBlocks.length).toBe(1);
+    expect(thinkingBlocks[0].content).toBe('Let me think...');
+    expect(thinkingBlocks[0].collapsed).toBe(false);
+  });
+
+  test('handleStreamThinking updates existing uncollapsed thinking block', async () => {
+    const state = await import('../../../src/webview/scripts/core/state');
+    const handlers = await import('../../../src/webview/scripts/core/messageHandlers/streaming');
+
+    state.timeline.value = [];
+    state.currentStreamIndex.value = null;
+    state.currentAssistantThreadId.value = null;
+
+    handlers.handleStreamThinking({ type: 'streamThinking', content: 'Step 1' });
+    handlers.handleStreamThinking({ type: 'streamThinking', content: 'Step 1\nStep 2' });
+
+    const thread = state.timeline.value[0] as any;
+    const thinkingBlocks = thread.blocks.filter((b: any) => b.type === 'thinking');
+    // Should still be one block, updated
+    expect(thinkingBlocks.length).toBe(1);
+    expect(thinkingBlocks[0].content).toBe('Step 1\nStep 2');
+  });
+
+  test('handleCollapseThinking collapses uncollapsed thinking blocks', async () => {
+    const state = await import('../../../src/webview/scripts/core/state');
+    const handlers = await import('../../../src/webview/scripts/core/messageHandlers/streaming');
+
+    state.timeline.value = [];
+    state.currentStreamIndex.value = null;
+    state.currentAssistantThreadId.value = null;
+
+    handlers.handleStreamThinking({ type: 'streamThinking', content: 'My reasoning' });
+
+    const thread = state.timeline.value[0] as any;
+    const thinkingBlock = thread.blocks.find((b: any) => b.type === 'thinking');
+    expect(thinkingBlock.collapsed).toBe(false);
+
+    handlers.handleCollapseThinking({ type: 'collapseThinking' });
+    expect(thinkingBlock.collapsed).toBe(true);
+  });
+
+  test('new streamThinking after collapse creates a new block', async () => {
+    const state = await import('../../../src/webview/scripts/core/state');
+    const handlers = await import('../../../src/webview/scripts/core/messageHandlers/streaming');
+
+    state.timeline.value = [];
+    state.currentStreamIndex.value = null;
+    state.currentAssistantThreadId.value = null;
+
+    // First thinking round
+    handlers.handleStreamThinking({ type: 'streamThinking', content: 'First thought' });
+    handlers.handleCollapseThinking({ type: 'collapseThinking' });
+
+    // Second thinking round
+    handlers.handleStreamThinking({ type: 'streamThinking', content: 'Second thought' });
+
+    const thread = state.timeline.value[0] as any;
+    const thinkingBlocks = thread.blocks.filter((b: any) => b.type === 'thinking');
+    expect(thinkingBlocks.length).toBe(2);
+    expect(thinkingBlocks[0].content).toBe('First thought');
+    expect(thinkingBlocks[0].collapsed).toBe(true);
+    expect(thinkingBlocks[1].content).toBe('Second thought');
+    expect(thinkingBlocks[1].collapsed).toBe(false);
+  });
+});
+
+describe('warning banner handler', () => {
+  test('handleShowWarningBanner sets banner state', async () => {
+    const state = await import('../../../src/webview/scripts/core/state');
+    const handlers = await import('../../../src/webview/scripts/core/messageHandlers/sessions');
+
+    state.warningBanner.visible = false;
+    state.warningBanner.message = '';
+
+    handlers.handleShowWarningBanner({
+      type: 'showWarningBanner',
+      message: 'This model may not support tool calling'
+    });
+
+    expect(state.warningBanner.visible).toBe(true);
+    expect(state.warningBanner.message).toBe('This model may not support tool calling');
+  });
+
+  test('handleShowWarningBanner ignores different session', async () => {
+    const state = await import('../../../src/webview/scripts/core/state');
+    const handlers = await import('../../../src/webview/scripts/core/messageHandlers/sessions');
+
+    state.currentSessionId.value = 'session-1';
+    state.warningBanner.visible = false;
+    state.warningBanner.message = '';
+
+    handlers.handleShowWarningBanner({
+      type: 'showWarningBanner',
+      sessionId: 'session-2',
+      message: 'Should not appear'
+    });
+
+    expect(state.warningBanner.visible).toBe(false);
+    expect(state.warningBanner.message).toBe('');
+  });
+});

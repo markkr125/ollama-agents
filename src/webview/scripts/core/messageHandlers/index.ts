@@ -3,42 +3,48 @@
  * Do NOT add handler logic here. Create new handler files in this folder.
  */
 import type {
-  InitMessage,
-  LoadSessionMessagesMessage,
-  ShowToolActionMessage,
-  StartProgressGroupMessage,
-  StreamChunkMessage,
-  ToolApprovalResultMessage
+    CollapseThinkingMessage,
+    InitMessage,
+    LoadSessionMessagesMessage,
+    ShowToolActionMessage,
+    StartProgressGroupMessage,
+    StreamChunkMessage,
+    StreamThinkingMessage,
+    ToolApprovalResultMessage
 } from '../types';
 import { handleFileEditApprovalResult, handleRequestFileEditApproval, handleRequestToolApproval, handleToolApprovalResult } from './approvals';
 import { handleFinishProgressGroup, handleShowError, handleShowToolAction, handleStartProgressGroup } from './progress';
 import {
-  handleAddContextItem,
-  handleAddMessage,
-  handleAppendSessions,
-  handleBearerTokenSaved,
-  handleClearMessages,
-  handleConnectionError,
-  handleConnectionTestResult,
-  handleDbMaintenanceResult,
-  handleDeletionProgress,
-  handleGenerationStarted,
-  handleGenerationStopped,
-  handleHideThinking,
-  handleInit,
-  handleLoadSessionMessages,
-  handleLoadSessions,
-  handleNavigateToSettings,
-  handleRecreateMessagesResult,
-  handleSearchSessionsResult,
-  handleSessionApprovalSettings,
-  handleSessionDeleted,
-  handleSessionsDeleted,
-  handleSettingsUpdate,
-  handleShowThinking,
-  handleUpdateSessionStatus
+    handleAddContextItem,
+    handleAddMessage,
+    handleAppendSessions,
+    handleBearerTokenSaved,
+    handleCapabilityCheckComplete,
+    handleCapabilityCheckProgress,
+    handleClearMessages,
+    handleConnectionError,
+    handleConnectionTestResult,
+    handleDbMaintenanceResult,
+    handleDeletionProgress,
+    handleGenerationStarted,
+    handleGenerationStopped,
+    handleHideThinking,
+    handleInit,
+    handleLoadSessionMessages,
+    handleLoadSessions,
+    handleModelEnabledChanged,
+    handleNavigateToSettings,
+    handleRecreateMessagesResult,
+    handleSearchSessionsResult,
+    handleSessionApprovalSettings,
+    handleSessionDeleted,
+    handleSessionsDeleted,
+    handleSettingsUpdate,
+    handleShowThinking,
+    handleShowWarningBanner,
+    handleUpdateSessionStatus
 } from './sessions';
-import { handleFinalMessage, handleStreamChunk } from './streaming';
+import { handleCollapseThinking, handleFinalMessage, handleStreamChunk, handleStreamThinking } from './streaming';
 
 export const handleMessage = (msg: any) => {
   switch (msg.type) {
@@ -96,6 +102,15 @@ export const handleMessage = (msg: any) => {
     case 'finalMessage':
       handleFinalMessage(msg as StreamChunkMessage);
       break;
+    case 'streamThinking':
+      handleStreamThinking(msg as StreamThinkingMessage);
+      break;
+    case 'collapseThinking':
+      handleCollapseThinking(msg as CollapseThinkingMessage);
+      break;
+    case 'showWarningBanner':
+      handleShowWarningBanner(msg);
+      break;
     case 'generationStarted':
       handleGenerationStarted(msg);
       break;
@@ -143,6 +158,15 @@ export const handleMessage = (msg: any) => {
       break;
     case 'navigateToSettings':
       handleNavigateToSettings(msg);
+      break;
+    case 'capabilityCheckProgress':
+      handleCapabilityCheckProgress(msg);
+      break;
+    case 'capabilityCheckComplete':
+      handleCapabilityCheckComplete();
+      break;
+    case 'modelEnabledChanged':
+      handleModelEnabledChanged(msg);
       break;
   }
 };

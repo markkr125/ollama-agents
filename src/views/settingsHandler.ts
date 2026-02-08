@@ -1,9 +1,28 @@
 import * as vscode from 'vscode';
 import { getConfig } from '../config/settings';
 import { DatabaseService } from '../services/databaseService';
+import { getModelCapabilities } from '../services/modelCompatibility';
 import { OllamaClient } from '../services/ollamaClient';
 import { TokenManager } from '../services/tokenManager';
+import { Model } from '../types/ollama';
 import { WebviewMessageEmitter } from './chatTypes';
+
+/**
+ * Build enriched model info array with capabilities for the webview.
+ */
+function enrichModels(models: Model[]) {
+  return models.map(m => {
+    const caps = getModelCapabilities(m);
+    return {
+      name: m.name,
+      size: m.size,
+      parameterSize: m.details?.parameter_size ?? undefined,
+      quantizationLevel: m.details?.quantization_level ?? undefined,
+      capabilities: caps,
+      enabled: m.enabled !== false
+    };
+  });
+}
 
 export class SettingsHandler {
   constructor(
@@ -25,6 +44,7 @@ export class SettingsHandler {
       maxIterations: config.agent.maxIterations,
       toolTimeout: config.agent.toolTimeout,
       maxActiveSessions: config.agent.maxActiveSessions,
+      enableThinking: config.agent.enableThinking,
       temperature: config.agentMode.temperature,
       sensitiveFilePatterns: JSON.stringify(config.agent.sensitiveFilePatterns, null, 2)
     };
@@ -80,6 +100,9 @@ export class SettingsHandler {
     if (settings.maxActiveSessions !== undefined) {
       await config.update('agent.maxActiveSessions', settings.maxActiveSessions, vscode.ConfigurationTarget.Global);
     }
+    if (settings.enableThinking !== undefined) {
+      await config.update('agent.enableThinking', settings.enableThinking, vscode.ConfigurationTarget.Global);
+    }
     if (settings.sensitiveFilePatterns !== undefined) {
       try {
         const parsed = typeof settings.sensitiveFilePatterns === 'string'
@@ -107,19 +130,46 @@ export class SettingsHandler {
     }
     try {
       const models = await this.client.listModels();
+      // Merge capabilities from SQLite cache so the table isn't blank
+      await this.mergeCachedCapabilities(models);
+      // Persist basic model info (fire-and-forget)
+      this.databaseService.upsertModels(models).catch(err =>
+        console.warn('[SettingsHandler] Failed to cache models:', err)
+      );
       this.emitter.postMessage({
         type: 'connectionTestResult',
         success: true,
         message: 'Connected successfully!',
-        models
+        models: enrichModels(models)
       });
     } catch (error: any) {
+      // Fall back to cached models so the UI isn't empty
+      let cachedModels: Model[] = [];
+      try { cachedModels = await this.databaseService.getCachedModels(); } catch { /* ignore */ }
       this.emitter.postMessage({
         type: 'connectionTestResult',
         success: false,
-        message: error.message
+        message: error.message,
+        models: enrichModels(cachedModels)
       });
     }
+  }
+
+  /**
+   * Merge capabilities from SQLite cache into freshly-listed models.
+   * This avoids showing blank capabilities before /api/show runs.
+   */
+  private async mergeCachedCapabilities(models: Model[]): Promise<void> {
+    try {
+      const cached = await this.databaseService.getCachedModels();
+      const capMap = new Map(cached.filter(m => m.capabilities).map(m => [m.name, m.capabilities!]));
+      for (const model of models) {
+        if (!model.capabilities) {
+          const caps = capMap.get(model.name);
+          if (caps) model.capabilities = caps;
+        }
+      }
+    } catch { /* ignore cache errors */ }
   }
 
   async saveBearerToken(token: string, testAfterSave?: boolean, baseUrl?: string) {

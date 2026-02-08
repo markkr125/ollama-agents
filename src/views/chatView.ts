@@ -14,10 +14,12 @@ import { ToolRegistry } from '../agent/toolRegistry';
 import { getConfig, getModeConfig } from '../config/settings';
 import { AgentChatExecutor } from '../services/agentChatExecutor';
 import { DatabaseService } from '../services/databaseService';
+import { getModelCapabilities } from '../services/modelCompatibility';
 import { ModelManager } from '../services/modelManager';
 import { OllamaClient } from '../services/ollamaClient';
 import { TerminalManager } from '../services/terminalManager';
 import { TokenManager } from '../services/tokenManager';
+import { Model } from '../types/ollama';
 import { ChatSessionStatus, MessageRecord } from '../types/session';
 import { ChatSessionController } from './chatSessionController';
 import { ChatMessage, ContextItem, WebviewMessageEmitter } from './chatTypes';
@@ -234,6 +236,12 @@ export class ChatViewProvider implements vscode.WebviewViewProvider, WebviewMess
         case 'openFileDiff':
           await this.agentExecutor.openFileDiff(data.approvalId);
           break;
+        case 'refreshCapabilities':
+          this.handleRefreshCapabilities(/* onlyMissing */ false);
+          break;
+        case 'toggleModelEnabled':
+          await this.handleToggleModelEnabled(data.modelName, !!data.enabled);
+          break;
       }
     });
   }
@@ -271,6 +279,131 @@ export class ChatViewProvider implements vscode.WebviewViewProvider, WebviewMess
     });
   }
 
+  /**
+   * Merge capabilities and enabled state from SQLite cache into freshly-listed models.
+   * This avoids showing blank capabilities before /api/show runs.
+   */
+  private async mergeCachedCapabilities(models: Model[]): Promise<void> {
+    try {
+      const cached = await this.databaseService.getCachedModels();
+      const cacheMap = new Map(cached.map(m => [m.name, m]));
+      for (const model of models) {
+        const c = cacheMap.get(model.name);
+        if (c) {
+          if (!model.capabilities && c.capabilities) model.capabilities = c.capabilities;
+          if (model.enabled === undefined && c.enabled !== undefined) model.enabled = c.enabled;
+        }
+      }
+    } catch { /* ignore cache errors */ }
+  }
+
+  /**
+   * Toggle a model's enabled state and notify the webview.
+   */
+  private async handleToggleModelEnabled(modelName: string, enabled: boolean) {
+    if (!modelName) return;
+    await this.databaseService.setModelEnabled(modelName, enabled);
+    // Send updated modelInfo to the webview
+    let models: Model[];
+    try {
+      models = await this.databaseService.getCachedModels();
+    } catch {
+      return;
+    }
+    const enriched = models.map(m => {
+      const caps = getModelCapabilities(m);
+      return {
+        name: m.name,
+        size: m.size,
+        parameterSize: m.details?.parameter_size ?? undefined,
+        quantizationLevel: m.details?.quantization_level ?? undefined,
+        capabilities: caps,
+        enabled: m.enabled !== false
+      };
+    });
+    this.postMessage({ type: 'modelEnabledChanged', models: enriched });
+  }
+
+  private capabilityRefreshInProgress = false;
+
+  /**
+   * Background capability refresh: calls /api/show for models sequentially.
+   * @param onlyMissing If true, skip models that already have cached capabilities.
+   */
+  private async handleRefreshCapabilities(onlyMissing = false) {
+    if (this.capabilityRefreshInProgress) return;
+    this.capabilityRefreshInProgress = true;
+
+    try {
+      let models: Model[];
+      try {
+        models = await this.client.listModels();
+        // Merge cached capabilities so we know which ones already have data
+        await this.mergeCachedCapabilities(models);
+      } catch {
+        // Fall back to cached models
+        try { models = await this.databaseService.getCachedModels(); } catch { models = []; }
+      }
+
+      // Determine which models need /api/show
+      const indicesToFetch = models
+        .map((m, i) => ({ m, i }))
+        .filter(({ m }) => !onlyMissing || !m.capabilities)
+        .map(({ i }) => i);
+
+      if (indicesToFetch.length === 0) {
+        // Nothing to fetch — send current state and finish
+        this.postMessage({ type: 'capabilityCheckComplete' });
+        return;
+      }
+
+      const total = indicesToFetch.length;
+      this.postMessage({ type: 'capabilityCheckProgress', completed: 0, total });
+
+      for (let step = 0; step < indicesToFetch.length; step++) {
+        const i = indicesToFetch[step];
+        try {
+          const showResult = await this.client.showModel(models[i].name);
+          if (showResult.capabilities) {
+            models[i].capabilities = showResult.capabilities;
+          }
+        } catch {
+          // On error (401, network, etc.), keep existing cached capabilities
+        }
+
+        // Send progress update with enriched models so far
+        this.postMessage({
+          type: 'capabilityCheckProgress',
+          completed: step + 1,
+          total,
+          models: models.map(m => {
+            const caps = getModelCapabilities(m);
+            return {
+              name: m.name,
+              size: m.size,
+              parameterSize: m.details?.parameter_size ?? undefined,
+              quantizationLevel: m.details?.quantization_level ?? undefined,
+              capabilities: caps,
+              enabled: m.enabled !== false
+            };
+          })
+        });
+      }
+
+      // Persist fully enriched models to SQLite
+      this.databaseService.upsertModels(models).catch(err =>
+        console.warn('[ChatView] Failed to cache models after capability refresh:', err)
+      );
+
+      this.postMessage({ type: 'capabilityCheckComplete' });
+    } catch (error: any) {
+      console.warn('[ChatView] Capability refresh failed:', error);
+      this.postMessage({ type: 'capabilityCheckComplete' });
+    } finally {
+      this.capabilityRefreshInProgress = false;
+    }
+  }
+
   private async initialize(requestedSessionId?: string) {
     const settings = this.settingsHandler.getSettingsPayload();
     const hasToken = await this.tokenManager.hasToken();
@@ -295,10 +428,23 @@ export class ChatViewProvider implements vscode.WebviewViewProvider, WebviewMess
       }
     })();
 
-    const modelListPromise = this.client.listModels().catch((err: any) => {
-      console.warn('Failed to list models during init:', err);
-      return [] as { name: string }[];
-    });
+    const modelListPromise = (async () => {
+      try {
+        const fetched = await this.client.listModels();
+        // Merge capabilities from SQLite cache so the UI isn't blank
+        await this.mergeCachedCapabilities(fetched);
+        // Persist basic model info (fire-and-forget)
+        this.databaseService.upsertModels(fetched).catch(err =>
+          console.warn('[ChatView] Failed to cache models:', err)
+        );
+        return fetched;
+      } catch (err: any) {
+        console.warn('Failed to list models during init:', err);
+        // Fall back to cached models from SQLite
+        try { return await this.databaseService.getCachedModels(); } catch { /* ignore */ }
+        return [] as Model[];
+      }
+    })();
 
     const [, models] = await Promise.all([sessionLoadPromise, modelListPromise]);
 
@@ -307,7 +453,18 @@ export class ChatViewProvider implements vscode.WebviewViewProvider, WebviewMess
 
     this.postMessage({
       type: 'init',
-      models: models.map((m: any) => ({ name: m.name, selected: m.name === this.currentModel })),
+      models: models.map((m: any) => {
+        const caps = getModelCapabilities(m);
+        return {
+          name: m.name,
+          selected: m.name === this.currentModel,
+          size: m.size ?? 0,
+          parameterSize: m.details?.parameter_size ?? undefined,
+          quantizationLevel: m.details?.quantization_level ?? undefined,
+          capabilities: caps,
+          enabled: m.enabled !== false
+        };
+      }),
       currentMode: this.currentMode,
       settings,
       hasToken
@@ -315,6 +472,11 @@ export class ChatViewProvider implements vscode.WebviewViewProvider, WebviewMess
 
     // Populate the sessions list for the sidebar
     await this.sessionController.sendSessionsList();
+
+    // Auto-pull capabilities in background for models that don't have them yet
+    if (models.length > 0) {
+      this.handleRefreshCapabilities(/* onlyMissing */ true);
+    }
 
     if (models.length === 0) {
       this.postMessage({
@@ -459,20 +621,27 @@ export class ChatViewProvider implements vscode.WebviewViewProvider, WebviewMess
         const currentBranch = await this.gitOps.getCurrentBranch(workspace);
         const newBranch = await this.gitOps.createBranch(currentBranch, prompt, workspace);
         agentSession.branch = newBranch;
-        this.postMessage({
-          type: 'showToolAction',
-          status: 'success',
-          icon: '📌',
-          text: `Created branch: ${newBranch}`,
-          sessionId
-        });
+
+        // Persist git branch action so history matches live chat
+        await this.agentExecutor.persistGitBranchAction(sessionId, newBranch);
       } catch {
         // Continue without branch
       }
     }
 
-    const config: ExecutorConfig = { maxIterations: 20, toolTimeout: 30000, temperature: 0.7 };
-    const result = await this.agentExecutor.execute(agentSession, config, token, sessionId, this.currentModel);
+    const config: ExecutorConfig = { maxIterations: getConfig().agent.maxIterations, toolTimeout: getConfig().agent.toolTimeout, temperature: 0.7 };
+
+    // Fetch model capabilities to decide native vs XML tool calling
+    let capabilities: import('../services/modelCompatibility').ModelCapabilities | undefined;
+    try {
+      const cached = await this.databaseService.getCachedModels();
+      const modelRecord = cached.find(m => m.name === this.currentModel);
+      if (modelRecord) {
+        capabilities = getModelCapabilities(modelRecord);
+      }
+    } catch { /* proceed without — executor will default to XML fallback */ }
+
+    const result = await this.agentExecutor.execute(agentSession, config, token, sessionId, this.currentModel, capabilities);
     if (this.sessionController.getCurrentSessionId() === sessionId) {
       this.sessionController.pushMessage(result.assistantMessage);
     }
@@ -503,6 +672,10 @@ export class ChatViewProvider implements vscode.WebviewViewProvider, WebviewMess
       ]
     });
 
+    // Show thinking spinner until first token arrives
+    this.postMessage({ type: 'showThinking', message: 'Thinking...', sessionId });
+    let firstChunk = true;
+
     let streamTimer: ReturnType<typeof setTimeout> | null = null;
     const STREAM_THROTTLE_MS = 32; // ~30fps — balances responsiveness with CPU usage
 
@@ -510,6 +683,10 @@ export class ChatViewProvider implements vscode.WebviewViewProvider, WebviewMess
       if (token.isCancellationRequested) break;
       if (chunk.message?.content) {
         fullResponse += chunk.message.content;
+        if (firstChunk) {
+          firstChunk = false;
+          this.postMessage({ type: 'hideThinking', sessionId });
+        }
         // Throttle: schedule a trailing-edge post instead of posting every token
         if (!streamTimer) {
           streamTimer = setTimeout(() => {
