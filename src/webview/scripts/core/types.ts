@@ -28,6 +28,12 @@ export type AssistantThreadTextBlock = {
   content: string;
 };
 
+export type AssistantThreadThinkingBlock = {
+  type: 'thinking';
+  content: string;
+  collapsed: boolean;
+};
+
 export type AssistantThreadToolsBlock = {
   type: 'tools';
   tools: Array<ProgressItem | CommandApprovalItem | FileEditApprovalItem>;
@@ -37,7 +43,7 @@ export type AssistantThreadItem = {
   id: string;
   type: 'assistantThread';
   role: 'assistant';
-  blocks: Array<AssistantThreadTextBlock | AssistantThreadToolsBlock>;
+  blocks: Array<AssistantThreadTextBlock | AssistantThreadThinkingBlock | AssistantThreadToolsBlock>;
   model?: string;
 };
 
@@ -194,4 +200,21 @@ export type FileEditApprovalResultMessage = {
   severity?: FileEditApprovalItem['severity'];
   reason?: string;
   diffHtml?: string;
+};
+
+export type StreamThinkingMessage = {
+  type: 'streamThinking';
+  sessionId?: string;
+  content?: string;
+};
+
+export type CollapseThinkingMessage = {
+  type: 'collapseThinking';
+  sessionId?: string;
+};
+
+export type ShowWarningBannerMessage = {
+  type: 'showWarningBanner';
+  sessionId?: string;
+  message?: string;
 };

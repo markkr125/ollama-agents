@@ -11,6 +11,7 @@ export interface AgentConfig {
   toolTimeout: number;
   maxActiveSessions: number;
   sensitiveFilePatterns: Record<string, boolean>;
+  enableThinking: boolean;
 }
 
 export interface ExtensionConfig {

@@ -466,3 +466,101 @@
     box-shadow: none;
   }
 }
+
+/* Thinking Block — minimal collapsible pill */
+.thinking-block {
+  margin: 6px 0;
+
+  /* Hide the native disclosure marker everywhere */
+  &, & > summary {
+    list-style: none;
+  }
+  &::-webkit-details-marker,
+  & > summary::-webkit-details-marker {
+    display: none;
+  }
+
+  summary {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    padding: 3px 10px;
+    font-size: 12px;
+    color: var(--muted);
+    cursor: pointer;
+    user-select: none;
+    border-radius: 10px;
+    border: 1px solid var(--surface-border);
+    background: transparent;
+    transition: background 0.15s ease, color 0.15s ease, border-color 0.15s ease;
+    line-height: 1.4;
+
+    &:hover {
+      background: var(--vscode-list-hoverBackground);
+      color: var(--fg);
+      border-color: var(--muted);
+    }
+
+    .thinking-icon {
+      font-size: 13px;
+      flex-shrink: 0;
+    }
+  }
+
+  /* Subtle open state — slightly different background */
+  &[open] summary {
+    background: var(--surface-bg);
+    border-color: var(--muted);
+  }
+
+  .thinking-block-content {
+    margin: 4px 0 2px 6px;
+    padding: 6px 12px;
+    font-size: 12px;
+    color: var(--muted);
+    border-left: 2px solid var(--surface-border);
+    max-height: 300px;
+    overflow-y: auto;
+    line-height: 1.5;
+  }
+}
+
+/* Warning Banner */
+.warning-banner {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px;
+  margin: 0 0 8px;
+  background: var(--vscode-inputValidation-warningBackground, rgba(205, 145, 0, 0.1));
+  border: 1px solid var(--vscode-inputValidation-warningBorder, #cda100);
+  border-radius: 4px;
+  font-size: 12px;
+  color: var(--fg);
+
+  .warning-banner-icon {
+    flex-shrink: 0;
+  }
+
+  .warning-banner-text {
+    flex: 1;
+    line-height: 1.4;
+  }
+
+  .warning-banner-dismiss {
+    flex-shrink: 0;
+    background: none;
+    border: none;
+    color: var(--muted);
+    cursor: pointer;
+    padding: 2px 4px;
+    font-size: 14px;
+    line-height: 1;
+    border-radius: 3px;
+
+    &:hover {
+      color: var(--fg);
+      background: var(--hover-bg);
+    }
+  }
+}

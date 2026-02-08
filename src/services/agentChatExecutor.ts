@@ -3,9 +3,12 @@ import * as vscode from 'vscode';
 import { ExecutorConfig } from '../agent/executor';
 import { SessionManager } from '../agent/sessionManager';
 import { ToolRegistry } from '../agent/toolRegistry';
+import { getConfig } from '../config/settings';
 import { DatabaseService } from '../services/databaseService';
+import { ModelCapabilities } from '../services/modelCompatibility';
 import { OllamaClient } from '../services/ollamaClient';
 import { TerminalManager } from '../services/terminalManager';
+import { ToolCall as OllamaToolCall } from '../types/ollama';
 import { MessageRecord, ToolExecution } from '../types/session';
 import { analyzeDangerousCommand } from '../utils/commandSafety';
 import { renderDiffHtml } from '../utils/diffRenderer';
@@ -57,12 +60,30 @@ export class AgentChatExecutor {
     this.pendingApprovals.delete(approvalId);
   }
 
+  /**
+   * Persist + post a git branch creation as a full progress group.
+   * Called from chatView.ts so session history matches live chat.
+   */
+  async persistGitBranchAction(sessionId: string, branchName: string): Promise<void> {
+    const title = 'Git setup';
+    await this.persistUiEvent(sessionId, 'startProgressGroup', { title });
+    this.emitter.postMessage({ type: 'startProgressGroup', title, sessionId });
+
+    const action = { status: 'success' as const, icon: '📌', text: `Created branch: ${branchName}`, detail: branchName };
+    await this.persistUiEvent(sessionId, 'showToolAction', action);
+    this.emitter.postMessage({ type: 'showToolAction', ...action, sessionId });
+
+    await this.persistUiEvent(sessionId, 'finishProgressGroup', {});
+    this.emitter.postMessage({ type: 'finishProgressGroup', sessionId });
+  }
+
   async execute(
     agentSession: any,
     config: ExecutorConfig,
     token: vscode.CancellationToken,
     sessionId: string,
-    model: string
+    model: string,
+    capabilities?: ModelCapabilities
   ): Promise<{ summary: string; assistantMessage: MessageRecord }> {
     const context = {
       workspace: agentSession.workspace,
@@ -72,25 +93,60 @@ export class AgentChatExecutor {
       terminalManager: this.terminalManager
     };
 
+    const useNativeTools = !!capabilities?.tools;
+    const { agent: agentConfig } = getConfig();
+    const useThinking = agentConfig.enableThinking && useNativeTools;
+
+    // Build system prompt — for native tool calling, a simpler prompt suffices
+    const workspacePath = agentSession.workspace?.uri?.fsPath || '';
+    const systemContent = useNativeTools
+      ? `You are a coding agent. Use the provided tools to complete tasks. The workspace root is: ${workspacePath}. All file paths are relative to this workspace. Terminal commands run in this directory by default. When done, respond with [TASK_COMPLETE].`
+      : this.buildAgentSystemPrompt();
+
     const messages: any[] = [
-      { role: 'system', content: this.buildAgentSystemPrompt() },
+      { role: 'system', content: systemContent },
       { role: 'user', content: agentSession.task }
     ];
+
+    // Warn if model doesn't support native tool calling
+    if (!useNativeTools) {
+      this.emitter.postMessage({
+        type: 'showWarningBanner',
+        message: 'This model doesn\'t natively support tool calling. Agent mode will use text-based tool parsing, which may be less reliable. Consider using a model like llama3.1+, qwen2.5+, or mistral.',
+        sessionId
+      });
+    }
 
     let iteration = 0;
     let accumulatedExplanation = '';
     let hasWrittenFiles = false;
+    let hasPersistedIterationText = false;
 
     // Check if task likely requires file modifications
     const taskLower = agentSession.task.toLowerCase();
     const taskRequiresWrite = /\b(rename|change|modify|edit|update|add|create|write|fix|refactor|remove|delete)\b/.test(taskLower);
+
+    // Streaming throttle (same as chatView.ts handleChatMode — 32ms ~30fps)
+    const STREAM_THROTTLE_MS = 32;
 
     while (iteration < config.maxIterations && !token.isCancellationRequested) {
       iteration++;
 
       try {
         let response = '';
-        const stream = this.client.chat({ model, messages });
+        let thinkingContent = '';
+        let nativeToolCalls: OllamaToolCall[] = [];
+
+        // Build the chat request
+        const chatRequest: any = { model, messages };
+        if (useNativeTools) {
+          chatRequest.tools = this.toolRegistry.getOllamaToolDefinitions();
+        }
+        if (useThinking) {
+          chatRequest.think = true;
+        }
+
+        const stream = this.client.chat(chatRequest);
 
         this.emitter.postMessage({
           type: 'showThinking',
@@ -98,20 +154,103 @@ export class AgentChatExecutor {
           sessionId
         });
 
+        // Stream tokens in real time
+        let streamTimer: ReturnType<typeof setTimeout> | null = null;
+        let textFrozen = false; // For XML fallback: freeze text display once tool_call tag detected
+        let firstChunkReceived = false;
+
         for await (const chunk of stream) {
           if (token.isCancellationRequested) break;
+
+          // Handle thinking tokens (from think=true)
+          if (chunk.message?.thinking) {
+            thinkingContent += chunk.message.thinking;
+            // Stream thinking tokens live (transient — final content persisted after)
+            // Strip [TASK_COMPLETE] control signal from displayed thinking content
+            this.emitter.postMessage({
+              type: 'streamThinking',
+              content: thinkingContent.replace(/\[TASK_COMPLETE\]/gi, ''),
+              sessionId
+            });
+          }
+
+          // Handle native tool_calls from the API
+          if (chunk.message?.tool_calls && chunk.message.tool_calls.length > 0) {
+            // Ollama sends each tool call as a complete object in its own chunk.
+            // Just accumulate them — no dedup needed (dedup would silently drop
+            // legitimate duplicate calls with identical name+args).
+            nativeToolCalls.push(...chunk.message.tool_calls);
+          }
+
+          // Handle text content
           if (chunk.message?.content) {
             response += chunk.message.content;
 
-            const partialTool = detectPartialToolCall(response);
-            if (partialTool) {
-              this.emitter.postMessage({
-                type: 'showThinking',
-                message: `Preparing to use ${partialTool}...`,
-                sessionId
-              });
+            if (!useNativeTools) {
+              // XML fallback: check for partial tool call tag
+              const partialTool = detectPartialToolCall(response);
+              if (partialTool && !textFrozen) {
+                textFrozen = true;
+                this.emitter.postMessage({
+                  type: 'showThinking',
+                  message: `Preparing to use ${partialTool}...`,
+                  sessionId
+                });
+              }
+            }
+
+            // Stream text to UI in real time (throttled), unless frozen for XML tool detection.
+            // The timer callback reads `response` at FIRE time (not set time) so it always
+            // sends the latest accumulated text — avoids showing stale partial markdown like "**".
+            if (!textFrozen && !streamTimer) {
+              streamTimer = setTimeout(() => {
+                streamTimer = null;
+                const latestCleaned = useNativeTools ? response : removeToolCalls(response);
+                // Strip full [TASK_COMPLETE] AND any trailing partial prefix of it
+                // (tokens arrive incrementally, so timer may fire when text ends with "[TASK" etc.)
+                let latestText = latestCleaned.replace(/\[TASK_COMPLETE\]/gi, '');
+                const TASK_MARKER = '[TASK_COMPLETE]';
+                for (let len = TASK_MARKER.length - 1; len >= 1; len--) {
+                  if (latestText.toUpperCase().endsWith(TASK_MARKER.substring(0, len))) {
+                    latestText = latestText.slice(0, -len);
+                    break;
+                  }
+                }
+                latestText = latestText.trim();
+                // Gate the FIRST chunk more strictly to avoid showing partial markdown
+                // like "**What" (bold not yet closed). Once we've started streaming,
+                // show everything — the renderer handles partial content with prior context.
+                // First-chunk gate: require ≥ 8 word characters (e.g. "**What i" has 5 → wait).
+                const wordCharCount = (latestText.match(/\w/g) || []).length;
+                const isReady = firstChunkReceived
+                  ? (latestText.length > 0 && wordCharCount > 0) // after first: any word content
+                  : (wordCharCount >= 8);                        // first chunk: need a real phrase
+                if (latestText && isReady) {
+                  if (!firstChunkReceived) {
+                    firstChunkReceived = true;
+                    this.emitter.postMessage({ type: 'hideThinking', sessionId });
+                  }
+                  this.emitter.postMessage({
+                    type: 'streamChunk',
+                    content: latestText,
+                    model,
+                    sessionId
+                  });
+                }
+              }, STREAM_THROTTLE_MS);
             }
           }
+        }
+
+        // Flush any pending throttled update
+        if (streamTimer) {
+          clearTimeout(streamTimer);
+          streamTimer = null;
+        }
+
+        // Hide thinking spinner if still visible (e.g. model produced no text content)
+        if (!firstChunkReceived) {
+          this.emitter.postMessage({ type: 'hideThinking', sessionId });
         }
 
         if (token.isCancellationRequested) {
@@ -122,22 +261,65 @@ export class AgentChatExecutor {
         // Debug: Log the full LLM response for troubleshooting
         this.outputChannel.appendLine(`\n[Iteration ${iteration}] Full LLM response:`);
         this.outputChannel.appendLine(response);
+        if (thinkingContent) {
+          this.outputChannel.appendLine(`[Thinking] ${thinkingContent.substring(0, 500)}`);
+        }
+        if (nativeToolCalls.length > 0) {
+          this.outputChannel.appendLine(`[Native tool_calls] ${JSON.stringify(nativeToolCalls)}`);
+        }
         this.outputChannel.appendLine('---');
 
-        const cleanedText = removeToolCalls(response);
+        // De-duplicate: some models echo thinking content in response too
+        if (thinkingContent.trim() && response.trim()) {
+          const thinkTrimmed = thinkingContent.trim();
+          const respTrimmed = response.trim();
+          if (respTrimmed === thinkTrimmed ||
+              respTrimmed.startsWith(thinkTrimmed) ||
+              thinkTrimmed.startsWith(respTrimmed)) {
+            response = '';
+          }
+        }
 
-        if (cleanedText.trim() && !cleanedText.includes('[TASK_COMPLETE]')) {
+        // Persist thinking block if present (BEFORE text and tools — order matters for history)
+        // Strip [TASK_COMPLETE] control signal — it's an internal marker, not user-facing content
+        const displayThinking = thinkingContent.replace(/\[TASK_COMPLETE\]/gi, '').trim();
+        if (displayThinking) {
+          await this.persistUiEvent(sessionId, 'thinkingBlock', { content: displayThinking });
+          // Collapse it now that streaming is done
+          this.emitter.postMessage({
+            type: 'collapseThinking',
+            sessionId
+          });
+        }
+
+        // Process explanation text — per-iteration delta (NOT accumulated)
+        const cleanedText = useNativeTools ? response.trim() : removeToolCalls(response);
+        const iterationDelta = cleanedText.trim();
+
+        if (iterationDelta && !iterationDelta.includes('[TASK_COMPLETE]')) {
           if (accumulatedExplanation) {
             accumulatedExplanation += '\n\n';
           }
-          accumulatedExplanation += cleanedText.trim();
+          accumulatedExplanation += iterationDelta;
 
+          // Send per-iteration delta text (NOT accumulated — each iteration is its own text block)
           this.emitter.postMessage({
             type: 'streamChunk',
-            content: accumulatedExplanation,
+            content: iterationDelta,
             model,
             sessionId
           });
+
+          // Persist this iteration's delta text (for ALL iterations, not just tool iterations)
+          if (sessionId) {
+            await this.databaseService.addMessage(
+              sessionId,
+              'assistant',
+              iterationDelta,
+              { model }
+            );
+            hasPersistedIterationText = true;
+          }
         }
 
         if (response.includes('[TASK_COMPLETE]') || response.toLowerCase().includes('task is complete')) {
@@ -154,15 +336,30 @@ export class AgentChatExecutor {
           break;
         }
 
-        const toolCalls = extractToolCalls(response);
+        // Extract tool calls — dual path: native API vs XML text parsing
+        let toolCalls: Array<{ name: string; args: any }> = [];
+
+        if (useNativeTools && nativeToolCalls.length > 0) {
+          // Native path: structured tool_calls from the Ollama API
+          toolCalls = nativeToolCalls.map(tc => ({
+            name: tc.function?.name || '',
+            args: tc.function?.arguments || {}
+          }));
+        } else {
+          // XML fallback path: parse <tool_call> blocks from text
+          toolCalls = extractToolCalls(response);
+        }
 
         // Debug: Log parsed tool calls
-        this.outputChannel.appendLine(`[Iteration ${iteration}] Parsed ${toolCalls.length} tool calls:`);
+        this.outputChannel.appendLine(`[Iteration ${iteration}] Parsed ${toolCalls.length} tool calls (${useNativeTools ? 'native' : 'XML'}):`);
         toolCalls.forEach((tc, i) => this.outputChannel.appendLine(`  [${i}] ${tc.name}: ${JSON.stringify(tc.args)}`));
         this.outputChannel.appendLine('---');
 
         if (toolCalls.length === 0) {
-          messages.push({ role: 'assistant', content: response });
+          // Include thinking so the model retains its chain-of-thought context
+          const noToolMsg: any = { role: 'assistant', content: response };
+          if (thinkingContent) noToolMsg.thinking = thinkingContent;
+          messages.push(noToolMsg);
           if (iteration < config.maxIterations - 1) {
             messages.push({
               role: 'user',
@@ -172,18 +369,8 @@ export class AgentChatExecutor {
           continue;
         }
 
-        // Save the assistant's explanation BEFORE executing tools
-        // This ensures proper message ordering when loading from history
-        if (accumulatedExplanation.trim() && sessionId) {
-          await this.databaseService.addMessage(
-            sessionId,
-            'assistant',
-            accumulatedExplanation.trim(),
-            { model }
-          );
-          // Don't clear accumulatedExplanation - we'll append to it after tools
-          // Don't send finalMessage here - that would split the message in UI
-        }
+        // NOTE: Per-iteration text is already persisted above (for ALL iterations).
+        // No duplicate assistant message persist needed here.
 
         const groupTitle = getProgressGroupTitle(toolCalls);
         this.emitter.postMessage({
@@ -192,6 +379,25 @@ export class AgentChatExecutor {
           sessionId
         });
         await this.persistUiEvent(sessionId, 'startProgressGroup', { title: groupTitle });
+
+        // Sequential tool execution — parallel deferred (approval flow requires sequential).
+        // See docs/chat-and-modes.md for rationale.
+        //
+        // IMPORTANT: Push the assistant message ONCE before the loop, not per-tool.
+        // Pushing it inside the loop would duplicate the assistant message for every tool call,
+        // destroying the model's context and causing "forgetful" behavior.
+        if (useNativeTools) {
+          // Per Ollama streaming docs: include thinking + content + tool_calls
+          const assistantMsg: any = { role: 'assistant', content: response, tool_calls: nativeToolCalls };
+          if (thinkingContent) assistantMsg.thinking = thinkingContent;
+          messages.push(assistantMsg);
+        } else {
+          const assistantMsg: any = { role: 'assistant', content: response };
+          if (thinkingContent) assistantMsg.thinking = thinkingContent;
+          messages.push(assistantMsg);
+        }
+
+        const xmlToolResults: string[] = []; // XML fallback: accumulate results, push once after loop
 
         for (const toolCall of toolCalls) {
           if (token.isCancellationRequested) break;
@@ -291,11 +497,15 @@ export class AgentChatExecutor {
               });
             }
 
-            messages.push({ role: 'assistant', content: response });
-            messages.push({
-              role: 'user',
-              content: `Tool result for ${toolCall.name}:\n${result.output}\n\nContinue with the task.`
-            });
+            // Feed tool result back to LLM
+            if (useNativeTools) {
+              // Native: one tool message per result (assistant message already pushed before loop)
+              // Include tool_name so the model knows which tool produced which result
+              messages.push({ role: 'tool', content: result.output || '', tool_name: toolCall.name });
+            } else {
+              // XML fallback: accumulate results, push one user message after loop
+              xmlToolResults.push(`Tool result for ${toolCall.name}:\n${result.output}`);
+            }
           } catch (error: any) {
             this.emitter.postMessage({
               type: 'showToolAction',
@@ -328,18 +538,29 @@ export class AgentChatExecutor {
               );
             }
 
-            messages.push({ role: 'assistant', content: response });
-            messages.push({
-              role: 'user',
-              content: `Tool ${toolCall.name} failed: ${error.message}\n\nTry a different approach.`
-            });
+            // Feed error back to LLM
+            if (useNativeTools) {
+              messages.push({ role: 'tool', content: `Error: ${error.message}`, tool_name: toolCall.name });
+            } else {
+              xmlToolResults.push(`Tool ${toolCall.name} failed: ${error.message}`);
+            }
           }
         }
 
         // Finish the progress group after processing all tool calls in this iteration
         this.emitter.postMessage({ type: 'finishProgressGroup', sessionId });
         await this.persistUiEvent(sessionId, 'finishProgressGroup', {});
+
+        // XML fallback: push all accumulated tool results as one user message
+        if (!useNativeTools && xmlToolResults.length > 0) {
+          messages.push({
+            role: 'user',
+            content: xmlToolResults.join('\n\n') + '\n\nContinue with the task.'
+          });
+        }
       } catch (error: any) {
+        // Persist error so session history matches live chat
+        await this.persistUiEvent(sessionId, 'showError', { message: error.message });
         this.emitter.postMessage({ type: 'showError', message: error.message, sessionId });
         break;
       }
@@ -402,14 +623,44 @@ export class AgentChatExecutor {
 
     summary += accumulatedExplanation || 'Task completed successfully.';
 
-    const assistantMessage = await this.databaseService.addMessage(
-      sessionId,
-      'assistant',
-      summary,
-      { model }
-    );
+    // Only persist the final message if there's NEW content not already saved per-iteration.
+    // The summary prefix ("N files modified") and fallback text are new; the per-iteration
+    // deltas were already persisted inside the loop. This prevents duplicate text blocks
+    // in session history (CRITICAL RULE #1: live must match restored).
+    const summaryPrefix = filesChanged > 0 ? `**${filesChanged} file${filesChanged > 1 ? 's' : ''} modified**\n\n` : '';
+    const hasNewFinalContent = summaryPrefix || !hasPersistedIterationText;
 
-    this.emitter.postMessage({ type: 'finalMessage', content: summary, model, sessionId });
+    let assistantMessage: MessageRecord;
+    if (hasNewFinalContent) {
+      // Persist only what hasn't been saved yet
+      const finalContent = hasPersistedIterationText
+        ? (summaryPrefix || 'Task completed successfully.')  // Only the prefix/fallback
+        : summary;                                            // Full text if nothing was saved
+      assistantMessage = await this.databaseService.addMessage(
+        sessionId,
+        'assistant',
+        finalContent.trim(),
+        { model }
+      );
+    } else {
+      // Everything was already persisted — just build the return value
+      assistantMessage = {
+        id: `msg_${Date.now()}`,
+        session_id: sessionId,
+        role: 'assistant',
+        content: summary,
+        model,
+        created_at: new Date().toISOString(),
+        timestamp: Date.now()
+      } as MessageRecord;
+    }
+
+    // finalMessage: send ONLY new content (summary prefix or fallback).
+    // Per-iteration text blocks already exist in the webview — don't overwrite them.
+    const finalMessageContent = hasPersistedIterationText ? (summaryPrefix.trim() || '') : summary;
+    if (finalMessageContent) {
+      this.emitter.postMessage({ type: 'finalMessage', content: finalMessageContent, model, sessionId });
+    }
     this.emitter.postMessage({ type: 'hideThinking', sessionId });
 
     return { summary, assistantMessage };
@@ -429,7 +680,21 @@ export class AgentChatExecutor {
       throw new Error('No command provided for terminal execution.');
     }
 
-    const cwd = String(args?.cwd || context.workspace.uri.fsPath);
+    // Resolve cwd: always relative to workspace root.
+    // If the model sends an absolute path outside the workspace or "/", clamp to workspace root.
+    const workspaceRoot = context.workspace.uri.fsPath;
+    let cwd = workspaceRoot;
+    if (args?.cwd && typeof args.cwd === 'string' && args.cwd.trim()) {
+      const rawCwd = args.cwd.trim();
+      const resolved = path.isAbsolute(rawCwd)
+        ? rawCwd
+        : path.resolve(workspaceRoot, rawCwd);
+      // Only allow if resolved path is inside the workspace
+      if (resolved.startsWith(workspaceRoot)) {
+        cwd = resolved;
+      }
+      // Otherwise stays clamped to workspaceRoot
+    }
     const resolvedToolName = toolName === 'run_command' ? 'run_terminal_command' : toolName;
     const analysis = analyzeDangerousCommand(command);
     const sessionRecord = sessionId ? await this.databaseService.getSession(sessionId) : null;

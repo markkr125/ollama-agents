@@ -40,7 +40,8 @@ export function getConfig(): ExtensionConfig {
       sensitiveFilePatterns: config.get(
         'agent.sensitiveFilePatterns',
         DEFAULT_SENSITIVE_FILE_PATTERNS
-      )
+      ),
+      enableThinking: config.get('agent.enableThinking', true)
     }
   };
 }

@@ -4,6 +4,7 @@
 
 - [Opening the Chat](#opening-the-chat)
 - [Agent Mode](#agent-mode)
+- [Thinking Blocks](#thinking-blocks)
 - [Chat Mode (Ask)](#chat-mode-ask)
 - [Edit Mode](#edit-mode)
 - [Inline Completions](#inline-completions)
@@ -34,6 +35,12 @@ The autonomous coding agent. It can read/write files, search your workspace, and
 5. Terminal commands and sensitive file edits require your approval
 6. The agent completes when it signals `[TASK_COMPLETE]`
 
+**Tool calling modes:**
+- **Native** — If the model supports function calling (shown in the Tools column of Model Capabilities), the extension uses Ollama's native `tools` API with structured `tool_calls` responses. This is the most reliable path. The conversation history uses `{role: 'tool', content, tool_name}` so the model can match results to the originating call.
+- **XML fallback** — If the model does not support native tool calling, the agent falls back to XML-based tool parsing (`<tool_call>` tags). Tool results are bundled into a single user message instead of individual tool messages. A warning banner is shown at the top of the chat to indicate degraded functionality.
+
+**Thinking support:** When `ollamaCopilot.agent.enableThinking` is enabled, the extension passes `think: true` to the API. The model's internal reasoning (`thinking` field) is preserved in conversation history across iterations so the model maintains its chain-of-thought context.
+
 **Available tools:**
 | Tool | Description |
 |------|-------------|
@@ -46,6 +53,22 @@ The autonomous coding agent. It can read/write files, search your workspace, and
 | `get_diagnostics` | Get TypeScript/ESLint errors for a file |
 
 **Auto-approve:** You can toggle auto-approve per session for terminal commands and sensitive file edits. Critical commands (`rm -rf`, `sudo`, etc.) always require manual approval regardless of the toggle.
+
+## Thinking Blocks
+
+When `ollamaCopilot.agent.enableThinking` is enabled (default: `true`), the extension passes `think: true` to the Ollama API. Models that support chain-of-thought reasoning will return their internal reasoning alongside the normal response.
+
+**During live chat:**
+- Thinking tokens stream in real time inside a collapsible `<details>` element labeled "Thought"
+- The block starts open so you can watch the reasoning unfold
+- Once thinking is complete, the block collapses automatically
+
+**In session history:**
+- Thinking blocks are persisted as `thinkingBlock` UI events
+- When a session is reloaded, thinking blocks appear collapsed (since the reasoning is already complete)
+- Multiple thinking rounds within one response create separate collapsible blocks
+
+Thinking blocks appear in both Agent mode (between tool execution rounds) and Ask/Edit modes (before the response).
 
 ## Chat Mode (Ask)
 

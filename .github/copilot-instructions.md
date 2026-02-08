@@ -53,6 +53,8 @@ this.emitter.postMessage({ type: 'showToolAction', status: 'pending', ..., sessi
 | `fileEditApprovalResult` | After file edit approval resolved | `{ approvalId, status, autoApproved?, filePath }` |
 | `showToolAction` (success/error) | After tool execution completes | `{ status: 'success'/'error', icon, text, detail }` |
 | `finishProgressGroup` | After all tools in group complete | `{}` |
+| `thinkingBlock` | After model finishes a thinking round | `{ content }` |
+| `showError` | On fatal loop error before break | `{ message }` |
 
 ### Debugging Live vs History Mismatch
 
@@ -121,6 +123,7 @@ These are the mistakes most frequently made when editing this codebase. **Check 
 | 9 | Importing webview core modules in tests without stubbing `acquireVsCodeApi` | `state.ts` calls `acquireVsCodeApi()` at **import time**. Any test importing state (or modules that import state) crashes immediately. | This is handled by `tests/webview/setup.ts` — ensure Vitest config includes it in `setupFiles`. |
 | 10 | Using `out/` as extension runtime output | `out/` is only for **test compilation** (`tsc`). The extension runtime bundle is in `dist/` (webpack). | Never reference `out/` in `package.json` "main" or runtime code paths. |
 | 11 | Restructuring `.github/instructions/`, `.github/skills/`, or `docs/` | The preamble table in this file, `docs/README.md` index, and `npm run lint:docs` all validate structure. Renaming, moving, or deleting these files breaks cross-references. | Run `npm run lint:docs` after any docs/instructions/skills change. Keep the preamble table, docs index, and frontmatter in sync. |
+| 12 | Omitting `tool_name` or `thinking` from conversation history messages | The Ollama API requires `tool_name` on `role:'tool'` messages so the model knows which tool produced which result. Omitting `thinking` causes the model to lose chain-of-thought context across iterations. | Always include `tool_name` on tool result messages and `thinking` on assistant messages when thinking content exists. See `agent-tools.instructions.md` → Native Tool Calling. |
 
 ---
 
@@ -245,10 +248,18 @@ User types message in webview
       └─ handleAgentMode()
           ├─ Create agent session + git branch (if git available)
           └─ agentChatExecutor.execute()
+              ├─ Detect: useNativeTools (model has 'tools' cap) / useThinking
               └─ LOOP (max iterations):
+                  ├─ Build chatRequest {model, messages, tools?, think?}
                   ├─ Stream LLM response via OllamaClient.chat()
-                  ├─ Post 'streamChunk' (accumulated text) to webview
-                  ├─ Parse tool calls via toolCallParser
+                  │   ├─ Accumulate thinking (chunk.message.thinking)
+                  │   ├─ Accumulate tool_calls (chunk.message.tool_calls)
+                  │   └─ Throttled 'streamChunk' to webview (first-chunk gate: ≥8 word chars)
+                  ├─ Persist thinking block (thinkingBlock UI event)
+                  ├─ Extract tool calls:
+                  │   ├─ Native: nativeToolCalls from API
+                  │   └─ XML fallback: extractToolCalls(response)
+                  ├─ Push assistant message to history (with thinking + tool_calls)
                   ├─ If tools found:
                   │   ├─ Persist + post 'startProgressGroup'
                   │   ├─ For each tool:
@@ -256,9 +267,11 @@ User types message in webview
                   │   │   ├─ [File edit] → fileSensitivity → approval flow
                   │   │   ├─ [Other tool] → direct execution via ToolRegistry
                   │   │   ├─ Persist tool result to DB
-                  │   │   └─ Persist + post 'showToolAction' (success/error)
+                  │   │   ├─ Persist + post 'showToolAction' (success/error)
+                  │   │   └─ Feed result: {role:'tool', content, tool_name} (native)
+                  │   │               or accumulated user msg (XML fallback)
                   │   └─ Persist + post 'finishProgressGroup'
-                  ├─ If [TASK_COMPLETE] → break loop
+                  ├─ If [TASK_COMPLETE] → validate writes → break loop
                   └─ Continue to next iteration
               → Persist final assistant message to DB
               → Post 'finalMessage' to webview
@@ -279,7 +292,7 @@ There are **three message interfaces**. Using the wrong one is a common mistake:
 |-----------|------|---------|
 | `MessageRecord` | `src/types/session.ts` | Database persistence (snake_case fields) |
 | `ChatMessage` | `src/views/chatTypes.ts` | Webview postMessage (camelCase + UI metadata) |
-| Ollama wire format | `src/types/ollama.ts` | API requests (only `role`, `content`) |
+| Ollama `ChatMessage` | `src/types/ollama.ts` | API wire format (`role`, `content`, `tool_calls?`, `tool_name?`, `thinking?`) |
 
 See the **"Three Message Interfaces"** section in `extension-architecture.instructions.md` for field-level details and conversion rules.
 

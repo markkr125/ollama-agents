@@ -621,20 +621,27 @@ export class ChatViewProvider implements vscode.WebviewViewProvider, WebviewMess
         const currentBranch = await this.gitOps.getCurrentBranch(workspace);
         const newBranch = await this.gitOps.createBranch(currentBranch, prompt, workspace);
         agentSession.branch = newBranch;
-        this.postMessage({
-          type: 'showToolAction',
-          status: 'success',
-          icon: '📌',
-          text: `Created branch: ${newBranch}`,
-          sessionId
-        });
+
+        // Persist git branch action so history matches live chat
+        await this.agentExecutor.persistGitBranchAction(sessionId, newBranch);
       } catch {
         // Continue without branch
       }
     }
 
-    const config: ExecutorConfig = { maxIterations: 20, toolTimeout: 30000, temperature: 0.7 };
-    const result = await this.agentExecutor.execute(agentSession, config, token, sessionId, this.currentModel);
+    const config: ExecutorConfig = { maxIterations: getConfig().agent.maxIterations, toolTimeout: getConfig().agent.toolTimeout, temperature: 0.7 };
+
+    // Fetch model capabilities to decide native vs XML tool calling
+    let capabilities: import('../services/modelCompatibility').ModelCapabilities | undefined;
+    try {
+      const cached = await this.databaseService.getCachedModels();
+      const modelRecord = cached.find(m => m.name === this.currentModel);
+      if (modelRecord) {
+        capabilities = getModelCapabilities(modelRecord);
+      }
+    } catch { /* proceed without — executor will default to XML fallback */ }
+
+    const result = await this.agentExecutor.execute(agentSession, config, token, sessionId, this.currentModel, capabilities);
     if (this.sessionController.getCurrentSessionId() === sessionId) {
       this.sessionController.pushMessage(result.assistantMessage);
     }
@@ -665,6 +672,10 @@ export class ChatViewProvider implements vscode.WebviewViewProvider, WebviewMess
       ]
     });
 
+    // Show thinking spinner until first token arrives
+    this.postMessage({ type: 'showThinking', message: 'Thinking...', sessionId });
+    let firstChunk = true;
+
     let streamTimer: ReturnType<typeof setTimeout> | null = null;
     const STREAM_THROTTLE_MS = 32; // ~30fps — balances responsiveness with CPU usage
 
@@ -672,6 +683,10 @@ export class ChatViewProvider implements vscode.WebviewViewProvider, WebviewMess
       if (token.isCancellationRequested) break;
       if (chunk.message?.content) {
         fullResponse += chunk.message.content;
+        if (firstChunk) {
+          firstChunk = false;
+          this.postMessage({ type: 'hideThinking', sessionId });
+        }
         // Throttle: schedule a trailing-edge post instead of posting every token
         if (!streamTimer) {
           streamTimer = setTimeout(() => {

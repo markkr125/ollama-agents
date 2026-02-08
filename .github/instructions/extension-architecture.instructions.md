@@ -13,12 +13,12 @@ The codebase has **three different interfaces** for messages. Using the wrong on
 |-----------|------|------|--------|
 | `MessageRecord` | `src/types/session.ts` | **Database persistence** — the source of truth | `snake_case`: `session_id`, `tool_name`, `tool_input`, `tool_output`, `progress_title` |
 | `ChatMessage` | `src/views/chatTypes.ts` | **View layer transfer** — enriched with UI metadata | `camelCase`: `toolName`, `actionText`, `actionIcon`, `actionStatus` |
-| Ollama wire format | `src/types/ollama.ts` | **API requests** — minimal | Only `role`, `content` |
+| Ollama `ChatMessage` | `src/types/ollama.ts` | **API requests/responses** — wire format | `role`, `content`, `tool_calls?`, `tool_name?`, `thinking?` |
 
 **When to use which:**
 - Storing to or reading from the database → `MessageRecord`
 - Sending to the webview via `postMessage` → `ChatMessage` (constructed by `chatSessionController.ts`)
-- Sending to the Ollama API → plain `{ role, content }` objects
+- Sending to the Ollama API → `ChatMessage` from `src/types/ollama.ts` — includes `role`, `content`, and optionally `tool_calls` (assistant), `tool_name` (tool results), `thinking` (chain-of-thought)
 
 **Gotcha**: `ChatSession` in `chatTypes.ts` is a **legacy type** — the real session record is `SessionRecord` in `types/session.ts`. Do not add new session fields to `ChatSession`.
 

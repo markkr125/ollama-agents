@@ -29,6 +29,7 @@ function makeProps(overrides: Record<string, any> = {}) {
       maxIterations: 25,
       toolTimeout: 30000,
       maxActiveSessions: 1,
+      enableThinking: true,
       temperature: 0.7,
       sensitiveFilePatterns: ''
     },
@@ -275,7 +276,14 @@ describe('SettingsPage component', () => {
 
   test('model options render in select dropdowns', () => {
     const wrapper = mount(SettingsPage, {
-      props: makeProps({ activeSection: 'models', modelOptions: ['llama3', 'codellama'] })
+      props: makeProps({
+        activeSection: 'models',
+        modelOptions: ['llama3', 'codellama'],
+        modelInfo: [
+          { name: 'llama3', size: 0, capabilities: { chat: true, fim: true, tools: false, vision: false, embedding: false }, enabled: true },
+          { name: 'codellama', size: 0, capabilities: { chat: true, fim: true, tools: false, vision: false, embedding: false }, enabled: true }
+        ]
+      })
     });
 
     const options = wrapper.findAll('option');

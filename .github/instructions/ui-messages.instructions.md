@@ -22,6 +22,10 @@ description: "Backend-to-frontend and frontend-to-backend message protocol for t
 | `fileEditApprovalResult` | `{approvalId, status, autoApproved?, filePath, sessionId}` | Update file edit approval status |
 | `sessionApprovalSettings` | `{sessionId, autoApproveCommands?, autoApproveSensitiveEdits?, sessionSensitiveFilePatterns?}` | Push per-session approval toggles |
 | `streamChunk` | `{content, model?, sessionId}` | Stream assistant response (accumulated, not delta) |
+| `streamThinking` | `{content, sessionId}` | Stream thinking content (accumulated, not delta) |
+| `collapseThinking` | `{sessionId}` | Collapse the currently open thinking block |
+| `thinkingBlock` | `{content, sessionId}` | Persisted thinking block (used in history rebuild) |
+| `showWarningBanner` | `{message, sessionId}` | Show a warning banner in the chat (e.g., model lacks tool support) |
 | `finalMessage` | `{content, model?, sessionId}` | Finalize response scoped to a session |
 | `generationStarted` | `{sessionId}` | Mark session as generating |
 | `generationStopped` | `{sessionId}` | Mark session as stopped |
@@ -127,3 +131,11 @@ handleStreamChunk({ content: 'Hello World!' }); // replaces, not appends
 ```
 
 The `handleStreamChunk` handler **replaces** the text block content, it does not append.
+
+### First-Chunk Gate
+
+The backend applies a content gate before sending the first `streamChunk` to prevent incomplete markdown (like `**What`) from flashing in the UI:
+
+- **First chunk**: Requires ≥8 word characters before sending. While gated, the spinner remains visible.
+- **Subsequent chunks**: Sent with ≥1 word character (markdown renderer has enough prior context).
+- **Thinking content** (`streamThinking`): No gate — sent immediately since it renders in a collapsible block, not inline markdown.

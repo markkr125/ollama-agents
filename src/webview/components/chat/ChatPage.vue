@@ -16,6 +16,12 @@
     />
 
     <div class="messages" ref="localMessagesEl">
+      <div v-if="warningBanner.visible" class="warning-banner">
+        <span class="warning-banner-icon">⚠️</span>
+        <span class="warning-banner-text">{{ warningBanner.message }}</span>
+        <button class="warning-banner-dismiss" @click="warningBanner.visible = false" title="Dismiss">✕</button>
+      </div>
+
       <div v-if="timeline.length === 0" class="empty-state">
         <h3>How can I help you today?</h3>
         <p>Ask me to write code, explain concepts, or help with your project.</p>
@@ -30,7 +36,21 @@
             :data-message-id="item.id"
           >
             <template v-for="(block, bIndex) in item.blocks" :key="`${item.id}-${bIndex}`">
-              <MarkdownBlock v-if="block.type === 'text'" :content="block.content" />
+              <MarkdownBlock v-if="block.type === 'text' && block.content" :content="block.content" />
+
+              <details
+                v-else-if="block.type === 'thinking'"
+                class="thinking-block"
+                :open="!block.collapsed"
+              >
+                <summary>
+                  <span class="thinking-icon">💭</span>
+                  Thought
+                </summary>
+                <div class="thinking-block-content">
+                  <MarkdownBlock :content="block.content" />
+                </div>
+              </details>
 
               <div v-else class="assistant-tools">
                 <template v-for="toolItem in block.tools" :key="toolItem.id">
@@ -150,6 +170,7 @@
 <script setup lang="ts">
 import type { ChatPageProps } from '../../scripts/core/chat';
 import { useChatPage } from '../../scripts/core/chat';
+import { warningBanner } from '../../scripts/core/state';
 import ChatInput from './components/ChatInput.vue';
 import CommandApproval from './components/CommandApproval.vue';
 import FileEditApproval from './components/FileEditApproval.vue';

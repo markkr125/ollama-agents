@@ -3,11 +3,13 @@
  * Do NOT add handler logic here. Create new handler files in this folder.
  */
 import type {
+    CollapseThinkingMessage,
     InitMessage,
     LoadSessionMessagesMessage,
     ShowToolActionMessage,
     StartProgressGroupMessage,
     StreamChunkMessage,
+    StreamThinkingMessage,
     ToolApprovalResultMessage
 } from '../types';
 import { handleFileEditApprovalResult, handleRequestFileEditApproval, handleRequestToolApproval, handleToolApprovalResult } from './approvals';
@@ -39,9 +41,10 @@ import {
     handleSessionsDeleted,
     handleSettingsUpdate,
     handleShowThinking,
+    handleShowWarningBanner,
     handleUpdateSessionStatus
 } from './sessions';
-import { handleFinalMessage, handleStreamChunk } from './streaming';
+import { handleCollapseThinking, handleFinalMessage, handleStreamChunk, handleStreamThinking } from './streaming';
 
 export const handleMessage = (msg: any) => {
   switch (msg.type) {
@@ -98,6 +101,15 @@ export const handleMessage = (msg: any) => {
       break;
     case 'finalMessage':
       handleFinalMessage(msg as StreamChunkMessage);
+      break;
+    case 'streamThinking':
+      handleStreamThinking(msg as StreamThinkingMessage);
+      break;
+    case 'collapseThinking':
+      handleCollapseThinking(msg as CollapseThinkingMessage);
+      break;
+    case 'showWarningBanner':
+      handleShowWarningBanner(msg);
       break;
     case 'generationStarted':
       handleGenerationStarted(msg);

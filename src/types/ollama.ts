@@ -1,8 +1,14 @@
 // Ollama API types
 
 export interface ChatMessage {
-  role: 'system' | 'user' | 'assistant';
+  role: 'system' | 'user' | 'assistant' | 'tool';
   content: string;
+  /** Tool calls returned by the model when using native tool calling. */
+  tool_calls?: ToolCall[];
+  /** Name of the tool that produced this result (for role:'tool' messages). */
+  tool_name?: string;
+  /** Chain-of-thought reasoning returned when think=true. */
+  thinking?: string;
 }
 
 export interface GenerateRequest {
@@ -28,6 +34,8 @@ export interface ChatRequest {
     top_k?: number;
   };
   tools?: ToolDefinition[];
+  /** Enable chain-of-thought reasoning (Ollama 0.6+). */
+  think?: boolean;
 }
 
 export interface StreamChunk {
@@ -93,9 +101,13 @@ export interface ToolDefinition {
 }
 
 export interface ToolCall {
-  id: string;
-  type: string;
+  /** Not returned by Ollama — present only in OpenAI-compatible APIs. */
+  id?: string;
+  /** Always "function" in Ollama responses. */
+  type?: string;
   function: {
+    /** Position index for parallel tool calls (Ollama includes this in responses). */
+    index?: number;
     name: string;
     arguments: Record<string, any>;
   };

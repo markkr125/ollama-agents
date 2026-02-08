@@ -68,7 +68,7 @@ Good `@vscode/test-electron` targets:
 
 The following test suites exist in `tests/webview/`:
 
-**`timelineBuilder.test.ts`** (23 tests) - Tests the `buildTimelineFromMessages` function:
+**`timelineBuilder.test.ts`** (28 tests) - Tests the `buildTimelineFromMessages` function:
 - Block-based structure: user messages, assistant threads, text block merging
 - UI event replay: `startProgressGroup`, `showToolAction`, `finishProgressGroup`
 - Command approval flow: `requestToolApproval`, `toolApprovalResult`, skipped status
@@ -76,18 +76,30 @@ The following test suites exist in `tests/webview/`:
 - Full workflow matching live/history parity
 - Edge cases: implicit groups, orphan approvals, invalid JSON handling
 - **Critical**: finishProgressGroup converts pending/running actions to success
+- **Live/history parity tests**: `showToolAction` update-in-place behavior (same text, different text, pending→running→success)
+- **Thinking blocks**: `thinkingBlock` event creates collapsed thinking blocks in thread, multiple blocks, empty content
+- **showError event**: Creates error action in progress group, works within existing groups
 
-**`messageHandlers.test.ts`** (11 tests) - Tests live message handlers:
+**`messageHandlers.test.ts`** (21 tests) - Tests live message handlers:
 - Streaming handlers: `handleStreamChunk` creates/updates text blocks
 - Progress group handlers: start/show/finish progress groups
 - Approval handlers with live/history parity: both progress group action AND approval card
 - **Critical contract test**: `complete workflow produces same structure as timelineBuilder`
 - **Critical contract test**: `file edit approval workflow produces same structure as timelineBuilder`
+- **Connection test result**: `handleConnectionTestResult` populates model options, syncs model selection, preserves models on error
+- **Settings update**: `handleSettingsUpdate` does not clear model options
+- **Thinking block handlers**: `handleStreamThinking` creates/updates thinking blocks, `handleCollapseThinking` collapses them, new thinking after collapse creates new block
+- **Warning banner handler**: `handleShowWarningBanner` sets banner state, ignores wrong session
 
-**`actions.test.ts`** (7 tests) - Tests UI actions:
+**`actions.test.ts`** (10 tests) - Tests UI actions:
 - Debounced search behavior
 - Auto-approve toggle/confirm
-- Context packaging for send
+- Context packaging for send (posts sendMessage, clears input/context)
+- Stop generation when already generating
+- Progress group creation
+- Assistant message/thread creation
+- Highlight snippet wraps query terms in `<mark>`
+- Settings actions: `saveBearerToken` includes baseUrl (race avoidance), empty token no-op, `testConnection` includes baseUrl
 
 **`computed.test.ts`** (4 tests) - Tests derived state:
 - Temperature display formatting
@@ -99,6 +111,10 @@ The following test suites exist in `tests/webview/`:
 - Renders markdown content via computed property
 - Updates when content prop changes
 - Caching behavior prevents unnecessary re-renders
+
+**`SettingsPage.test.ts`** (19 tests) - Tests settings page composable + component:
+- **Composable (`useSettingsPage`)**: bearer input, temperature input, tool timeout input, recreate messages table delegation, dismiss welcome, session patterns sync (immediate, reactive, defaults)
+- **Component**: welcome banner visibility + dismiss, navigation sections rendering + click + active class, page visibility based on `currentPage`, recreate messages button, test connection button, model options in select dropdowns
 
 ## Existing test coverage (Extension Host)
 

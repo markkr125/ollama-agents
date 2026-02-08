@@ -44,6 +44,7 @@ export class SettingsHandler {
       maxIterations: config.agent.maxIterations,
       toolTimeout: config.agent.toolTimeout,
       maxActiveSessions: config.agent.maxActiveSessions,
+      enableThinking: config.agent.enableThinking,
       temperature: config.agentMode.temperature,
       sensitiveFilePatterns: JSON.stringify(config.agent.sensitiveFilePatterns, null, 2)
     };
@@ -98,6 +99,9 @@ export class SettingsHandler {
     }
     if (settings.maxActiveSessions !== undefined) {
       await config.update('agent.maxActiveSessions', settings.maxActiveSessions, vscode.ConfigurationTarget.Global);
+    }
+    if (settings.enableThinking !== undefined) {
+      await config.update('agent.enableThinking', settings.enableThinking, vscode.ConfigurationTarget.Global);
     }
     if (settings.sensitiveFilePatterns !== undefined) {
       try {

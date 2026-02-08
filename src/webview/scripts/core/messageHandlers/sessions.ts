@@ -42,10 +42,12 @@ import {
   sessionsLoading,
   settings,
   temperatureSlider,
-  timeline
+  timeline,
+  warningBanner
 } from '../state';
 import { buildTimelineFromMessages } from '../timelineBuilder';
 import type { InitMessage, LoadSessionMessagesMessage, SearchResultGroup } from '../types';
+import { resetActiveStreamBlock } from './streaming';
 import { ensureAssistantThread, getLastTextBlock, syncModelSelection } from './threadUtils';
 
 export const handleInit = (msg: InitMessage) => {
@@ -182,6 +184,17 @@ export const handleHideThinking = (msg: any) => {
   }
 };
 
+/**
+ * Show a transient warning banner at the top of the chat.
+ * Not persisted — only shown during live session.
+ */
+export const handleShowWarningBanner = (msg: any) => {
+  if (!msg.sessionId || msg.sessionId === currentSessionId.value) {
+    warningBanner.visible = true;
+    warningBanner.message = msg.message || '';
+  }
+};
+
 export const handleGenerationStarted = (msg: any) => {
   if (!msg.sessionId || msg.sessionId === currentSessionId.value) {
     setGenerating(true);
@@ -195,6 +208,8 @@ export const handleGenerationStopped = (msg: any) => {
   if (!msg.sessionId || msg.sessionId === currentSessionId.value) {
     setGenerating(false);
     currentAssistantThreadId.value = null;
+    // Reset the per-iteration stream target so the next generation starts fresh
+    resetActiveStreamBlock();
   }
 };
 
@@ -209,6 +224,7 @@ export const handleClearMessages = (msg: any) => {
   currentStreamIndex.value = null;
   currentProgressIndex.value = null;
   currentAssistantThreadId.value = null;
+  resetActiveStreamBlock();
   if (msg.sessionId) {
     currentSessionId.value = msg.sessionId;
   }

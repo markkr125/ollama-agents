@@ -24,6 +24,7 @@ export type Settings = {
   maxIterations: number;
   toolTimeout: number;
   maxActiveSessions: number;
+  enableThinking: boolean;
   temperature: number;
   sensitiveFilePatterns: string;
 };

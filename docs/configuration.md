@@ -56,6 +56,7 @@ Each mode also has `temperature` and `maxTokens` settings:
 | `ollamaCopilot.agent.maxIterations` | `25` | 5–100 | Max tool execution cycles per request |
 | `ollamaCopilot.agent.toolTimeout` | `30000` | 5000–300000 | Tool timeout in milliseconds |
 | `ollamaCopilot.agent.maxActiveSessions` | `1` | 1–5 | Max concurrent generating sessions |
+| `ollamaCopilot.agent.enableThinking` | `true` | — | Enable chain-of-thought reasoning (`think: true` in Ollama API) |
 | `ollamaCopilot.agent.sensitiveFilePatterns` | *(see below)* | — | Glob→boolean map for file edit approval |
 
 ### Sensitive File Patterns

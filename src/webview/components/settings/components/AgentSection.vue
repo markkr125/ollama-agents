@@ -43,6 +43,13 @@
       </div>
       <div class="toggle-row">
         <div class="toggle-info">
+          <span class="toggle-label">Enable Thinking</span>
+          <span class="toggle-desc">Show model's chain-of-thought reasoning (requires model support)</span>
+        </div>
+        <div class="toggle" :class="{ on: settings.enableThinking }" @click="settings.enableThinking = !settings.enableThinking"></div>
+      </div>
+      <div class="toggle-row">
+        <div class="toggle-info">
           <span class="toggle-label">Auto Create Git Branch</span>
           <span class="toggle-desc">Create a new branch for agent tasks</span>
         </div>

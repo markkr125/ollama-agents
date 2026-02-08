@@ -48,6 +48,11 @@ export const thinking = reactive({
   text: 'Thinking...'
 });
 
+export const warningBanner = reactive({
+  visible: false,
+  message: ''
+});
+
 export const settings = reactive({
   baseUrl: 'http://localhost:11434',
   enableAutoComplete: true,
@@ -58,6 +63,7 @@ export const settings = reactive({
   maxIterations: 25,
   toolTimeout: 30000,
   maxActiveSessions: 1,
+  enableThinking: true,
   temperature: 0.7,
   sensitiveFilePatterns: ''
 });
