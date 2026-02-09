@@ -5,7 +5,7 @@
  * - Never import 'vscode' here — this runs in a sandboxed iframe.
  */
 import { reactive, ref, watch } from 'vue';
-import type { ModelInfo, SearchResultGroup, SessionItem, StatusMessage, TimelineItem } from './types';
+import type { AssistantThreadFilesChangedBlock, ModelInfo, SearchResultGroup, SessionItem, StatusMessage, TimelineItem } from './types';
 
 declare const acquireVsCodeApi: () => {
   postMessage: (message: any) => void;
@@ -132,6 +132,10 @@ export const deletingSessionIds = ref(new Set<string>());
 export const selectionMode = ref(false);
 export const selectedSessionIds = ref(new Set<string>());
 export const deletionProgress = ref<{ completed: number; total: number } | null>(null);
+
+// Standalone files-changed blocks — NOT part of timeline/thread blocks.
+// Keyed by checkpointId. Shown as a persistent bottom panel in the chat view.
+export const filesChangedBlocks = ref<AssistantThreadFilesChangedBlock[]>([]);
 
 // State persistence for webview collapse/restore
 let _persistTimer: ReturnType<typeof setTimeout> | null = null;

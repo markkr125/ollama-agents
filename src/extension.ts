@@ -9,6 +9,8 @@ import { CompletionProvider } from './providers/completionProvider';
 import { DatabaseService, disposeDatabaseService, getDatabaseService } from './services/databaseService';
 import { ModelManager } from './services/modelManager';
 import { OllamaClient } from './services/ollamaClient';
+import { PendingEditDecorationProvider } from './services/pendingEditDecorationProvider';
+import { PendingEditReviewService } from './services/pendingEditReviewService';
 import { TokenManager } from './services/tokenManager';
 import { ChatViewProvider } from './views/chatView';
 
@@ -19,6 +21,8 @@ let databaseService: DatabaseService;
 let taskTracker: TaskTracker;
 let sessionManager: SessionManager;
 let completionProvider: CompletionProvider | undefined;
+let pendingEditDecorationProvider: PendingEditDecorationProvider;
+let pendingEditReviewService: PendingEditReviewService;
 let statusBarItem: vscode.StatusBarItem;
 let outputChannel: vscode.OutputChannel;
 
@@ -44,6 +48,41 @@ export async function activate(context: vscode.ExtensionContext) {
     taskTracker = new TaskTracker(context);
     sessionManager = new SessionManager(context);
     outputChannel = vscode.window.createOutputChannel('Ollama Copilot');
+
+    // Register file decoration provider for pending AI edits
+    pendingEditDecorationProvider = new PendingEditDecorationProvider();
+    context.subscriptions.push(
+      vscode.window.registerFileDecorationProvider(pendingEditDecorationProvider)
+    );
+
+    // Restore pending edit decorations from DB (fire-and-forget)
+    databaseService.getPendingCheckpoints().then(checkpoints => {
+      for (const ckpt of checkpoints) {
+        for (const snap of ckpt.files) {
+          try {
+            const fileUri = vscode.Uri.file(snap.file_path);
+            pendingEditDecorationProvider.markPending(fileUri);
+          } catch { /* skip invalid paths */ }
+        }
+      }
+    }).catch(() => { /* ignore — non-critical */ });
+
+    // Create review service for inline change decorations
+    pendingEditReviewService = new PendingEditReviewService(databaseService);
+    context.subscriptions.push(pendingEditReviewService);
+
+    // Register review navigation commands
+    context.subscriptions.push(
+      vscode.commands.registerCommand('ollamaCopilot.reviewNextFile', () => pendingEditReviewService.navigateFile('next')),
+      vscode.commands.registerCommand('ollamaCopilot.reviewPrevFile', () => pendingEditReviewService.navigateFile('prev')),
+      vscode.commands.registerCommand('ollamaCopilot.reviewNextHunk', () => pendingEditReviewService.navigateHunk('next')),
+      vscode.commands.registerCommand('ollamaCopilot.reviewPrevHunk', () => pendingEditReviewService.navigateHunk('prev')),
+      vscode.commands.registerCommand('ollamaCopilot.reviewKeepHunk', (filePath: string, hunkIndex: number) => pendingEditReviewService.keepHunk(filePath, hunkIndex)),
+      vscode.commands.registerCommand('ollamaCopilot.reviewUndoHunk', (filePath: string, hunkIndex: number) => pendingEditReviewService.undoHunk(filePath, hunkIndex)),
+      vscode.commands.registerCommand('ollamaCopilot.reviewKeepCurrentHunk', () => pendingEditReviewService.keepCurrentHunk()),
+      vscode.commands.registerCommand('ollamaCopilot.reviewUndoCurrentHunk', () => pendingEditReviewService.undoCurrentHunk()),
+      vscode.commands.registerCommand('ollamaCopilot.reviewCloseReview', () => pendingEditReviewService.closeReview())
+    );
 
     // Test connection (fire-and-forget — don't block activation)
     client.testConnection().then(connected => {
@@ -121,7 +160,9 @@ export async function activate(context: vscode.ExtensionContext) {
       modelManager,
       tokenManager,
       sessionManager,
-      databaseService
+      databaseService,
+      pendingEditDecorationProvider,
+      pendingEditReviewService
     );
     
     context.subscriptions.push(

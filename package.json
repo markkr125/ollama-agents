@@ -93,6 +93,137 @@
         "command": "ollamaCopilot.showSetup",
         "title": "Setup Wizard",
         "category": "Ollama Copilot"
+      },
+      {
+        "command": "ollamaCopilot.reviewKeepHunk",
+        "title": "Keep Change",
+        "category": "Ollama Copilot",
+        "icon": "$(check)"
+      },
+      {
+        "command": "ollamaCopilot.reviewUndoHunk",
+        "title": "Undo Change",
+        "category": "Ollama Copilot",
+        "icon": "$(discard)"
+      },
+      {
+        "command": "ollamaCopilot.reviewKeepCurrentHunk",
+        "title": "Keep Current Change",
+        "category": "Ollama Copilot",
+        "icon": "$(check)"
+      },
+      {
+        "command": "ollamaCopilot.reviewUndoCurrentHunk",
+        "title": "Undo Current Change",
+        "category": "Ollama Copilot",
+        "icon": "$(discard)"
+      },
+      {
+        "command": "ollamaCopilot.reviewNextFile",
+        "title": "Next Changed File",
+        "category": "Ollama Copilot",
+        "icon": "$(arrow-right)"
+      },
+      {
+        "command": "ollamaCopilot.reviewPrevFile",
+        "title": "Previous Changed File",
+        "category": "Ollama Copilot",
+        "icon": "$(arrow-left)"
+      },
+      {
+        "command": "ollamaCopilot.reviewNextHunk",
+        "title": "Next Change",
+        "category": "Ollama Copilot",
+        "icon": "$(arrow-down)"
+      },
+      {
+        "command": "ollamaCopilot.reviewPrevHunk",
+        "title": "Previous Change",
+        "category": "Ollama Copilot",
+        "icon": "$(arrow-up)"
+      },
+      {
+        "command": "ollamaCopilot.reviewCloseReview",
+        "title": "Close Review",
+        "category": "Ollama Copilot",
+        "icon": "$(close)"
+      }
+    ],
+    "menus": {
+      "editor/title": [
+        {
+          "command": "ollamaCopilot.reviewKeepCurrentHunk",
+          "when": "ollamaCopilot.reviewActive",
+          "group": "navigation@1"
+        },
+        {
+          "command": "ollamaCopilot.reviewUndoCurrentHunk",
+          "when": "ollamaCopilot.reviewActive",
+          "group": "navigation@2"
+        },
+        {
+          "command": "ollamaCopilot.reviewPrevHunk",
+          "when": "ollamaCopilot.reviewActive",
+          "group": "navigation@3"
+        },
+        {
+          "command": "ollamaCopilot.reviewNextHunk",
+          "when": "ollamaCopilot.reviewActive",
+          "group": "navigation@4"
+        },
+        {
+          "command": "ollamaCopilot.reviewCloseReview",
+          "when": "ollamaCopilot.reviewActive",
+          "group": "navigation@5"
+        }
+      ],
+      "commandPalette": [
+        { "command": "ollamaCopilot.reviewKeepHunk", "when": "false" },
+        { "command": "ollamaCopilot.reviewUndoHunk", "when": "false" },
+        { "command": "ollamaCopilot.reviewKeepCurrentHunk", "when": "ollamaCopilot.reviewActive" },
+        { "command": "ollamaCopilot.reviewUndoCurrentHunk", "when": "ollamaCopilot.reviewActive" },
+        { "command": "ollamaCopilot.reviewNextFile", "when": "ollamaCopilot.reviewActive" },
+        { "command": "ollamaCopilot.reviewPrevFile", "when": "ollamaCopilot.reviewActive" },
+        { "command": "ollamaCopilot.reviewNextHunk", "when": "ollamaCopilot.reviewActive" },
+        { "command": "ollamaCopilot.reviewPrevHunk", "when": "ollamaCopilot.reviewActive" },
+        { "command": "ollamaCopilot.reviewCloseReview", "when": "ollamaCopilot.reviewActive" }
+      ]
+    },
+    "keybindings": [
+      {
+        "command": "ollamaCopilot.reviewNextHunk",
+        "key": "alt+]",
+        "when": "ollamaCopilot.reviewActive && editorTextFocus"
+      },
+      {
+        "command": "ollamaCopilot.reviewPrevHunk",
+        "key": "alt+[",
+        "when": "ollamaCopilot.reviewActive && editorTextFocus"
+      },
+      {
+        "command": "ollamaCopilot.reviewNextFile",
+        "key": "alt+shift+]",
+        "when": "ollamaCopilot.reviewActive && editorTextFocus"
+      },
+      {
+        "command": "ollamaCopilot.reviewPrevFile",
+        "key": "alt+shift+[",
+        "when": "ollamaCopilot.reviewActive && editorTextFocus"
+      },
+      {
+        "command": "ollamaCopilot.reviewKeepCurrentHunk",
+        "key": "alt+shift+k",
+        "when": "ollamaCopilot.reviewActive && editorTextFocus"
+      },
+      {
+        "command": "ollamaCopilot.reviewUndoCurrentHunk",
+        "key": "alt+shift+u",
+        "when": "ollamaCopilot.reviewActive && editorTextFocus"
+      },
+      {
+        "command": "ollamaCopilot.reviewCloseReview",
+        "key": "escape",
+        "when": "ollamaCopilot.reviewActive && editorTextFocus && !suggestWidgetVisible && !parameterHintsVisible"
       }
     ],
     "configuration": {

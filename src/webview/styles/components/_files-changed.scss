@@ -1,0 +1,224 @@
+/* Pinned files-changed bar — sits between .messages scroll area and input */
+.files-changed-pinned {
+  border-top: 1px solid var(--surface-border);
+  background: var(--panel-bg);
+  flex-shrink: 0;
+  padding: 4px 12px;
+
+  .files-changed {
+    margin: 0;
+
+    + .files-changed {
+      margin-top: 4px;
+    }
+  }
+}
+
+/* Files Changed Widget — matches GitHub Copilot */
+.files-changed {
+  margin: 10px 0;
+  overflow: hidden;
+
+  &.collapsed {
+    .files-changed-chevron {
+      transform: rotate(0deg);
+    }
+
+    .files-changed-list {
+      display: none;
+    }
+  }
+}
+
+.files-changed-header {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 8px;
+  background: transparent;
+  cursor: pointer;
+  user-select: none;
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--fg);
+
+  &:hover {
+    background: var(--vscode-list-hoverBackground);
+    border-radius: 4px;
+  }
+}
+
+.files-changed-chevron {
+  font-size: 14px;
+  line-height: 1;
+  transition: transform 0.15s;
+  color: var(--muted);
+  transform: rotate(90deg);
+}
+
+.files-changed-title {
+  white-space: nowrap;
+}
+
+.files-changed-loading {
+  .spinner {
+    width: 12px;
+    height: 12px;
+  }
+}
+
+.files-changed-stats {
+  font-size: 11px;
+  display: flex;
+  gap: 5px;
+
+  .stat-add {
+    color: var(--vscode-gitDecoration-addedResourceForeground, #3fb950);
+  }
+
+  .stat-del {
+    color: var(--vscode-gitDecoration-deletedResourceForeground, #f85149);
+  }
+}
+
+.files-changed-actions {
+  display: flex;
+  gap: 6px;
+  margin-left: auto;
+}
+
+.fc-btn {
+  padding: 2px 10px;
+  font-size: 11px;
+  font-weight: 500;
+  border: none;
+  border-radius: 4px;
+  cursor: pointer;
+  white-space: nowrap;
+  line-height: 18px;
+
+  &.fc-btn-keep {
+    background: var(--vscode-gitDecoration-addedResourceForeground, #3fb950);
+    color: #fff;
+
+    &:hover {
+      opacity: 0.88;
+    }
+  }
+
+  &.fc-btn-undo {
+    background: transparent;
+    border: 1px solid var(--border);
+    color: var(--fg);
+
+    &:hover {
+      background: var(--vscode-list-hoverBackground);
+    }
+  }
+}
+
+.files-changed-list {
+  padding: 2px 0 4px;
+}
+
+.files-changed-file {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 3px 12px 3px 24px;
+  font-size: 12px;
+  color: var(--fg);
+  cursor: pointer;
+
+  &:hover {
+    background: var(--vscode-list-hoverBackground);
+  }
+}
+.file-ext-badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 22px;
+  height: 16px;
+  padding: 0 3px;
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: 0.3px;
+  border-radius: 3px;
+  flex-shrink: 0;
+  line-height: 1;
+
+  /* Extension-specific colors */
+  &.ext-ts        { background: #3178c6; color: #fff; }
+  &.ext-js        { background: #f0db4f; color: #323330; }
+  &.ext-vue       { background: #42b883; color: #fff; }
+  &.ext-py        { background: #3776ab; color: #ffe873; }
+  &.ext-json      { background: #5b5b5b; color: #f0db4f; }
+  &.ext-md        { background: #519aba; color: #fff; }
+  &.ext-css       { background: #563d7c; color: #fff; }
+  &.ext-html      { background: #e34c26; color: #fff; }
+  &.ext-yaml      { background: #cb171e; color: #fff; }
+  &.ext-sh        { background: #4eaa25; color: #fff; }
+  &.ext-rs        { background: #dea584; color: #000; }
+  &.ext-go        { background: #00add8; color: #fff; }
+  &.ext-java      { background: #b07219; color: #fff; }
+  &.ext-cpp       { background: #6295cb; color: #fff; }
+  &.ext-default   { background: var(--surface-border); color: var(--muted); }
+}
+
+.file-name {
+  white-space: nowrap;
+  color: var(--fg);
+}
+
+.file-dir {
+  flex: 1;
+  color: var(--muted);
+  font-size: 11px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.file-stats {
+  font-size: 11px;
+  display: flex;
+  gap: 4px;
+  flex-shrink: 0;
+  margin-left: auto;
+
+  .stat-add {
+    color: var(--vscode-gitDecoration-addedResourceForeground, #3fb950);
+  }
+
+  .stat-del {
+    color: var(--vscode-gitDecoration-deletedResourceForeground, #f85149);
+  }
+}
+
+.file-actions {
+  display: flex;
+  gap: 2px;
+  flex-shrink: 0;
+  margin-left: 2px;
+}
+
+.fc-file-btn {
+  width: 20px;
+  height: 20px;
+  padding: 0;
+  font-size: 12px;
+  border: none;
+  border-radius: 3px;
+  background: transparent;
+  color: var(--muted);
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+
+  &:hover {
+    background: var(--vscode-list-hoverBackground);
+    color: var(--fg);
+  }
+}

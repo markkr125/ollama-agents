@@ -25,6 +25,7 @@ import {
   dbMaintenanceStatus,
   deletingSessionIds,
   deletionProgress,
+  filesChangedBlocks,
   hasToken,
   isFirstRun,
   isSearching,
@@ -43,6 +44,7 @@ import {
   settings,
   temperatureSlider,
   timeline,
+  vscode,
   warningBanner
 } from '../state';
 import { buildTimelineFromMessages } from '../timelineBuilder';
@@ -125,6 +127,13 @@ export const handleLoadSessionMessages = (msg: LoadSessionMessagesMessage) => {
   currentAssistantThreadId.value = null;
   if (!scrollTargetMessageId.value) {
     scrollToBottom();
+  }
+
+  // Request diff stats for any pending filesChanged blocks restored from history
+  for (const block of filesChangedBlocks.value) {
+    if (block.statsLoading && block.checkpointId) {
+      vscode.postMessage({ type: 'requestFilesDiffStats', checkpointId: block.checkpointId });
+    }
   }
 };
 
@@ -221,6 +230,7 @@ export const handleAddContextItem = (msg: any) => {
 
 export const handleClearMessages = (msg: any) => {
   timeline.value = [];
+  filesChangedBlocks.value = [];
   currentStreamIndex.value = null;
   currentProgressIndex.value = null;
   currentAssistantThreadId.value = null;

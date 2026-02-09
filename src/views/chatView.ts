@@ -17,6 +17,8 @@ import { DatabaseService } from '../services/databaseService';
 import { getModelCapabilities } from '../services/modelCompatibility';
 import { ModelManager } from '../services/modelManager';
 import { OllamaClient } from '../services/ollamaClient';
+import { PendingEditDecorationProvider } from '../services/pendingEditDecorationProvider';
+import { PendingEditReviewService } from '../services/pendingEditReviewService';
 import { TerminalManager } from '../services/terminalManager';
 import { TokenManager } from '../services/tokenManager';
 import { Model } from '../types/ollama';
@@ -50,7 +52,9 @@ export class ChatViewProvider implements vscode.WebviewViewProvider, WebviewMess
     _modelManager: ModelManager,
     private readonly tokenManager: TokenManager,
     private readonly sessionManager: SessionManager,
-    databaseService: DatabaseService
+    databaseService: DatabaseService,
+    private readonly decorationProvider: PendingEditDecorationProvider,
+    private readonly reviewService?: PendingEditReviewService
   ) {
     this.databaseService = databaseService;
     this.toolRegistry = new ToolRegistry();
@@ -73,7 +77,8 @@ export class ChatViewProvider implements vscode.WebviewViewProvider, WebviewMess
       this.outputChannel,
       this,
       () => this.refreshExplorer(),
-      this.terminalManager
+      this.terminalManager,
+      this.decorationProvider
     );
 
     this.configChangeDisposable = vscode.workspace.onDidChangeConfiguration(async e => {
@@ -81,6 +86,53 @@ export class ChatViewProvider implements vscode.WebviewViewProvider, WebviewMess
         await this.settingsHandler.sendSettingsUpdate();
       }
     });
+
+    // Subscribe to review service file-resolved events → update DB + files-changed widget
+    if (this.reviewService) {
+      this.reviewService.onDidResolveFile(async (event) => {
+        const sessionId = this.sessionController.getCurrentSessionId();
+
+        // 1. Persist to database — the review service already reverted the file
+        //    content (for undo), so we only need the DB status + decoration update.
+        if (event.action === 'kept') {
+          await this.agentExecutor.keepFile(event.checkpointId, event.filePath);
+        } else {
+          // File already reverted by review service — just update DB status + decoration + checkpoint
+          await this.agentExecutor.markFileUndone(event.checkpointId, event.filePath);
+        }
+
+        // 2. Persist UI event BEFORE posting (CRITICAL RULE #1)
+        const resultPayload = {
+          checkpointId: event.checkpointId,
+          filePath: event.filePath,
+          action: event.action,
+          success: true
+        };
+        await this.agentExecutor.persistUiEvent(sessionId, 'fileChangeResult', resultPayload);
+
+        // 3. Update the webview widget
+        this.postMessage({
+          type: 'fileChangeResult',
+          ...resultPayload,
+          sessionId
+        });
+
+        // 4. Refresh diff stats for the whole checkpoint — file contents changed
+        try {
+          const stats = await this.agentExecutor.computeFilesDiffStats(event.checkpointId);
+          this.postMessage({ type: 'filesDiffStats', checkpointId: event.checkpointId, files: stats });
+        } catch { /* non-critical */ }
+      });
+
+      // Subscribe to hunk-level stats updates → sync widget per-file stats in real-time
+      this.reviewService.onDidUpdateHunkStats((event) => {
+        this.postMessage({
+          type: 'filesDiffStats',
+          checkpointId: event.checkpointId,
+          files: [{ path: event.filePath, additions: event.additions, deletions: event.deletions }]
+        });
+      });
+    }
   }
 
   postMessage(message: any): void {
@@ -235,6 +287,31 @@ export class ChatViewProvider implements vscode.WebviewViewProvider, WebviewMess
           break;
         case 'openFileDiff':
           await this.agentExecutor.openFileDiff(data.approvalId);
+          break;
+        case 'openFileChangeDiff':
+          await this.agentExecutor.openSnapshotDiff(data.checkpointId, data.filePath, this.sessionController.getCurrentSessionId());
+          break;
+        case 'openFileChangeReview':
+          if (this.reviewService) {
+            await this.reviewService.openFileReview(data.checkpointId, data.filePath, this.sessionController.getCurrentSessionId());
+          } else {
+            await this.agentExecutor.openSnapshotDiff(data.checkpointId, data.filePath, this.sessionController.getCurrentSessionId());
+          }
+          break;
+        case 'requestFilesDiffStats':
+          await this.handleRequestFilesDiffStats(data.checkpointId);
+          break;
+        case 'keepFile':
+          await this.handleKeepFile(data.checkpointId, data.filePath, data.sessionId);
+          break;
+        case 'undoFile':
+          await this.handleUndoFile(data.checkpointId, data.filePath, data.sessionId);
+          break;
+        case 'keepAllChanges':
+          await this.handleKeepAllChanges(data.checkpointId, data.sessionId);
+          break;
+        case 'undoAllChanges':
+          await this.handleUndoAllChanges(data.checkpointId, data.sessionId);
           break;
         case 'refreshCapabilities':
           this.handleRefreshCapabilities(/* onlyMissing */ false);
@@ -721,6 +798,60 @@ export class ChatViewProvider implements vscode.WebviewViewProvider, WebviewMess
     this.currentModel = modelName;
     await vscode.workspace.getConfiguration('ollamaCopilot')
       .update('agentMode.model', modelName, vscode.ConfigurationTarget.Global);
+  }
+
+  // ---------------------------------------------------------------------------
+  // Files Changed handlers
+  // ---------------------------------------------------------------------------
+
+  private async handleRequestFilesDiffStats(checkpointId: string) {
+    if (!checkpointId) return;
+    try {
+      const stats = await this.agentExecutor.computeFilesDiffStats(checkpointId);
+      this.postMessage({ type: 'filesDiffStats', checkpointId, files: stats });
+    } catch (err: any) {
+      console.warn('[ChatView] Failed to compute diff stats:', err);
+    }
+  }
+
+  private async handleKeepFile(checkpointId: string, filePath: string, sessionId?: string) {
+    if (!checkpointId || !filePath) return;
+    const resolvedSessionId = sessionId || this.sessionController.getCurrentSessionId();
+    const result = await this.agentExecutor.keepFile(checkpointId, filePath);
+    this.reviewService?.removeFileFromReview(filePath);
+    const payload = { checkpointId, filePath, action: 'kept', success: result.success };
+    await this.agentExecutor.persistUiEvent(resolvedSessionId, 'fileChangeResult', payload);
+    this.postMessage({ type: 'fileChangeResult', ...payload, sessionId: resolvedSessionId });
+  }
+
+  private async handleUndoFile(checkpointId: string, filePath: string, sessionId?: string) {
+    if (!checkpointId || !filePath) return;
+    const resolvedSessionId = sessionId || this.sessionController.getCurrentSessionId();
+    const result = await this.agentExecutor.undoFile(checkpointId, filePath);
+    this.reviewService?.removeFileFromReview(filePath);
+    const payload = { checkpointId, filePath, action: 'undone', success: result.success };
+    await this.agentExecutor.persistUiEvent(resolvedSessionId, 'fileChangeResult', payload);
+    this.postMessage({ type: 'fileChangeResult', ...payload, sessionId: resolvedSessionId });
+  }
+
+  private async handleKeepAllChanges(checkpointId: string, sessionId?: string) {
+    if (!checkpointId) return;
+    const resolvedSessionId = sessionId || this.sessionController.getCurrentSessionId();
+    const result = await this.agentExecutor.keepAllChanges(checkpointId);
+    this.reviewService?.closeReview();
+    const payload = { checkpointId, action: 'kept', success: result.success };
+    await this.agentExecutor.persistUiEvent(resolvedSessionId, 'keepUndoResult', payload);
+    this.postMessage({ type: 'keepUndoResult', ...payload, sessionId: resolvedSessionId });
+  }
+
+  private async handleUndoAllChanges(checkpointId: string, sessionId?: string) {
+    if (!checkpointId) return;
+    const resolvedSessionId = sessionId || this.sessionController.getCurrentSessionId();
+    const result = await this.agentExecutor.undoAllChanges(checkpointId);
+    this.reviewService?.closeReview();
+    const payload = { checkpointId, action: 'undone', success: result.success, errors: result.errors };
+    await this.agentExecutor.persistUiEvent(resolvedSessionId, 'keepUndoResult', payload);
+    this.postMessage({ type: 'keepUndoResult', ...payload, sessionId: resolvedSessionId });
   }
 
   private async getHtmlForWebview(webview: vscode.Webview): Promise<string> {

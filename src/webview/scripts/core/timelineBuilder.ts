@@ -1,10 +1,13 @@
+import { recalcBlockTotals } from './messageHandlers/filesChanged';
+import { filesChangedBlocks } from './state';
 import type {
-    AssistantThreadItem,
-    AssistantThreadToolsBlock,
-    CommandApprovalItem,
-    FileEditApprovalItem,
-    ProgressItem,
-    TimelineItem
+  AssistantThreadFilesChangedBlock,
+  AssistantThreadItem,
+  AssistantThreadToolsBlock,
+  CommandApprovalItem,
+  FileEditApprovalItem,
+  ProgressItem,
+  TimelineItem
 } from './types';
 
 /**
@@ -13,6 +16,7 @@ import type {
  */
 export const buildTimelineFromMessages = (messages: any[]): TimelineItem[] => {
   const items: TimelineItem[] = [];
+  const restoredFcBlocks: AssistantThreadFilesChangedBlock[] = [];
   let currentThread: AssistantThreadItem | null = null;
   let currentGroup: ProgressItem | null = null;
 
@@ -49,6 +53,9 @@ export const buildTimelineFromMessages = (messages: any[]): TimelineItem[] => {
   const appendText = (content: string, model?: string) => {
     if (!content) return;
     const thread = ensureThread(model);
+
+    // Only append to existing text block if it's the LAST block in thread.
+    // If tools/thinking blocks have been added since, create a new text block.
     const lastBlock = thread.blocks[thread.blocks.length - 1];
     if (lastBlock && lastBlock.type === 'text') {
       lastBlock.content = lastBlock.content ? `${lastBlock.content}\n\n${content}` : content;
@@ -139,7 +146,9 @@ export const buildTimelineFromMessages = (messages: any[]): TimelineItem[] => {
               status,
               icon: uiEvent.payload?.icon || '•',
               text: actionText,
-              detail: uiEvent.payload?.detail || null
+              detail: uiEvent.payload?.detail || null,
+              filePath: uiEvent.payload?.filePath || undefined,
+              checkpointId: uiEvent.payload?.checkpointId || undefined
             };
 
             // Match live handler: update existing pending/running action with same text, or push new
@@ -342,6 +351,85 @@ export const buildTimelineFromMessages = (messages: any[]): TimelineItem[] => {
             currentGroup = null;
             break;
           }
+          case 'filesChanged': {
+            const payload = uiEvent.payload || {};
+            const checkpointId = payload.checkpointId || '';
+            const isPending = !payload.status || payload.status === 'pending';
+
+            // Merge into existing block with same checkpointId (matches live handler)
+            const existing = checkpointId
+              ? restoredFcBlocks.find(b => b.checkpointId === checkpointId)
+              : null;
+
+            if (existing) {
+              // Add any files not already in the block
+              for (const f of payload.files || []) {
+                if (!existing.files.some((ef: any) => ef.path === f.path)) {
+                  existing.files.push({
+                    path: f.path,
+                    action: f.action || 'modified',
+                    additions: undefined,
+                    deletions: undefined,
+                    status: 'pending' as const
+                  });
+                }
+              }
+            } else {
+              const block: AssistantThreadFilesChangedBlock = {
+                type: 'filesChanged',
+                checkpointId,
+                files: (payload.files || []).map((f: any) => ({
+                  path: f.path,
+                  action: f.action || 'modified',
+                  additions: undefined,
+                  deletions: undefined,
+                  status: payload.status === 'kept' ? 'kept' as const
+                    : payload.status === 'undone' ? 'undone' as const
+                    : 'pending' as const
+                })),
+                totalAdditions: undefined,
+                totalDeletions: undefined,
+                status: payload.status || 'pending',
+                collapsed: !isPending,
+                statsLoading: isPending
+              };
+              restoredFcBlocks.push(block);
+            }
+            break;
+          }
+          case 'fileChangeResult': {
+            // Remove a resolved file from an existing filesChanged block
+            const payload = uiEvent.payload || {};
+            if (payload.success && payload.checkpointId) {
+              const fcBlock = restoredFcBlocks.find(b => b.checkpointId === payload.checkpointId);
+              if (fcBlock) {
+                const idx = fcBlock.files.findIndex((f: any) => f.path === payload.filePath);
+                if (idx >= 0) {
+                  fcBlock.files.splice(idx, 1);
+                }
+                // If no files left, remove the block entirely
+                if (fcBlock.files.length === 0) {
+                  const blockIdx = restoredFcBlocks.indexOf(fcBlock);
+                  if (blockIdx >= 0) restoredFcBlocks.splice(blockIdx, 1);
+                } else {
+                  recalcBlockTotals(fcBlock);
+                }
+              }
+            }
+            break;
+          }
+          case 'keepUndoResult': {
+            // Keep All / Undo All resolves every file — remove ALL blocks for this checkpoint
+            const payload = uiEvent.payload || {};
+            if (payload.success && payload.checkpointId) {
+              for (let i = restoredFcBlocks.length - 1; i >= 0; i--) {
+                if (restoredFcBlocks[i].checkpointId === payload.checkpointId) {
+                  restoredFcBlocks.splice(i, 1);
+                }
+              }
+            }
+            break;
+          }
           default:
             break;
         }
@@ -352,6 +440,9 @@ export const buildTimelineFromMessages = (messages: any[]): TimelineItem[] => {
       // They're only here for backwards compatibility with old sessions
     }
   }
+
+  // Push restored filesChanged blocks to the standalone state
+  filesChangedBlocks.value = restoredFcBlocks;
 
   return items;
 };

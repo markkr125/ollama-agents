@@ -52,7 +52,7 @@
                 </div>
               </details>
 
-              <div v-else class="assistant-tools">
+              <div v-else-if="block.type === 'tools'" class="assistant-tools">
                 <template v-for="toolItem in block.tools" :key="toolItem.id">
                   <template v-if="toolItem.type === 'commandApproval'">
                     <CommandApproval
@@ -148,6 +148,14 @@
       </div>
     </div>
 
+    <div v-if="filesChangedBlocks.length" class="files-changed-pinned">
+      <FilesChanged
+        v-for="block in filesChangedBlocks"
+        :key="block.checkpointId"
+        :block="block"
+      />
+    </div>
+
     <ChatInput
       :contextList="contextList"
       :inputText="inputText"
@@ -170,10 +178,11 @@
 <script setup lang="ts">
 import type { ChatPageProps } from '../../scripts/core/chat';
 import { useChatPage } from '../../scripts/core/chat';
-import { warningBanner } from '../../scripts/core/state';
+import { filesChangedBlocks, warningBanner } from '../../scripts/core/state';
 import ChatInput from './components/ChatInput.vue';
 import CommandApproval from './components/CommandApproval.vue';
 import FileEditApproval from './components/FileEditApproval.vue';
+import FilesChanged from './components/FilesChanged.vue';
 import MarkdownBlock from './components/MarkdownBlock.vue';
 import ProgressGroup from './components/ProgressGroup.vue';
 import SessionControls from './components/SessionControls.vue';

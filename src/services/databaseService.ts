@@ -494,6 +494,55 @@ export class DatabaseService {
   }
 
   // --------------------------------------------------------------------------
+  // Checkpoint & file snapshot CRUD (delegates to SQLite)
+  // --------------------------------------------------------------------------
+
+  async createCheckpoint(sessionId: string, messageId?: string): Promise<string> {
+    this.ensureReady();
+    return this.sessionIndex.createCheckpoint(sessionId, messageId);
+  }
+
+  async getCheckpoints(sessionId: string) {
+    this.ensureReady();
+    return this.sessionIndex.getCheckpoints(sessionId);
+  }
+
+  async updateCheckpointStatus(id: string, status: string): Promise<void> {
+    this.ensureReady();
+    await this.sessionIndex.updateCheckpointStatus(id, status);
+  }
+
+  async insertFileSnapshot(checkpointId: string, filePath: string, originalContent: string | null, action: string): Promise<void> {
+    this.ensureReady();
+    await this.sessionIndex.insertFileSnapshot(checkpointId, filePath, originalContent, action);
+  }
+
+  async getFileSnapshots(checkpointId: string) {
+    this.ensureReady();
+    return this.sessionIndex.getFileSnapshots(checkpointId);
+  }
+
+  async getSnapshotForFile(checkpointId: string, filePath: string) {
+    this.ensureReady();
+    return this.sessionIndex.getSnapshotForFile(checkpointId, filePath);
+  }
+
+  async updateFileSnapshotStatus(checkpointId: string, filePath: string, status: string): Promise<void> {
+    this.ensureReady();
+    await this.sessionIndex.updateFileSnapshotStatus(checkpointId, filePath, status);
+  }
+
+  async pruneKeptCheckpointContent(checkpointId: string): Promise<void> {
+    this.ensureReady();
+    await this.sessionIndex.pruneKeptCheckpointContent(checkpointId);
+  }
+
+  async getPendingCheckpoints() {
+    this.ensureReady();
+    return this.sessionIndex.getPendingCheckpoints();
+  }
+
+  // --------------------------------------------------------------------------
   // Helpers
   // --------------------------------------------------------------------------
 
