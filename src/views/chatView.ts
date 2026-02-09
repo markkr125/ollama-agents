@@ -722,6 +722,11 @@ export class ChatViewProvider implements vscode.WebviewViewProvider, WebviewMess
     if (this.sessionController.getCurrentSessionId() === sessionId) {
       this.sessionController.pushMessage(result.assistantMessage);
     }
+
+    // Auto-start inline review for any already-open editors
+    if (result.checkpointId && this.reviewService) {
+      await this.reviewService.startReviewForCheckpoint(result.checkpointId);
+    }
   }
 
   private async handleChatMode(

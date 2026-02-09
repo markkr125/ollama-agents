@@ -163,6 +163,31 @@ export class PendingEditReviewService implements vscode.Disposable {
   }
 
   /**
+   * Automatically start a review session for the given checkpoint and apply
+   * decorations to any editors that are already visible (no new tabs opened).
+   * Called after the agent finishes writing files.
+   */
+  async startReviewForCheckpoint(checkpointId: string): Promise<void> {
+    if (!checkpointId) return;
+
+    // Don't replace an existing session for the same checkpoint
+    if (this.activeSession?.checkpointId === checkpointId) return;
+
+    await this.buildReviewSession(checkpointId);
+    if (!this.activeSession) return;
+
+    // Apply decorations to any already-visible editors that match reviewed files
+    for (const editor of vscode.window.visibleTextEditors) {
+      const fileState = this.activeSession.files.find(
+        f => f.uri.toString() === editor.document.uri.toString()
+      );
+      if (fileState) {
+        this.applyDecorations(editor, fileState);
+      }
+    }
+  }
+
+  /**
    * Navigate to prev/next file in the review session.
    */
   async navigateFile(direction: 'prev' | 'next'): Promise<void> {

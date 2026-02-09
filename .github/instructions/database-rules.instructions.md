@@ -36,6 +36,39 @@ The `models` table caches model metadata fetched from Ollama for offline fallbac
 
 `upsertModels()` replaces the entire table (`DELETE FROM models` + batch `INSERT`) on each refresh, so stale models are automatically removed.
 
+### SQLite `checkpoints` Table
+
+Tracks file-change groups created per agent execution (one checkpoint per user prompt):
+
+| Column | Type | Purpose |
+|--------|------|---------|
+| `id` | `TEXT PRIMARY KEY` | UUID, created at start of each agent execution |
+| `session_id` | `TEXT NOT NULL` | FK → sessions (CASCADE delete) |
+| `message_id` | `TEXT` | Associated message (nullable) |
+| `status` | `TEXT NOT NULL DEFAULT 'pending'` | `'pending'` → `'kept'` / `'undone'` / `'partial'` |
+| `created_at` | `INTEGER NOT NULL` | Timestamp |
+
+### SQLite `file_snapshots` Table
+
+Stores original file content captured BEFORE agent edits, enabling undo:
+
+| Column | Type | Purpose |
+|--------|------|---------|
+| `id` | `TEXT PRIMARY KEY` | UUID |
+| `checkpoint_id` | `TEXT NOT NULL` | FK → checkpoints (CASCADE delete) |
+| `file_path` | `TEXT NOT NULL` | Workspace-relative path |
+| `original_content` | `TEXT` | Content before edit (NULL after kept+pruned) |
+| `action` | `TEXT NOT NULL DEFAULT 'modified'` | `'modified'` / `'created'` |
+| `file_status` | `TEXT NOT NULL DEFAULT 'pending'` | `'pending'` / `'kept'` / `'undone'` |
+| `created_at` | `INTEGER NOT NULL` | Timestamp |
+| **UNIQUE** | | `(checkpoint_id, file_path)` — INSERT OR IGNORE keeps only first snapshot |
+
+**Snapshot lifecycle**:
+1. `snapshotFileBeforeEdit()` uses INSERT OR IGNORE — only the first (true original) snapshot per file per checkpoint is stored
+2. `updateFileSnapshotStatus()` flips `file_status` to `'kept'` or `'undone'`
+3. `pruneCheckpointContent()` NULLs out `original_content` for kept files (saves storage)
+4. Review service reads `file_snapshots` with `file_status = 'pending'` to build decorations
+
 ## ⚠️ NEVER Auto-Delete User Data
 
 **DO NOT** implement automatic deletion or recreation of the messages table. This includes:

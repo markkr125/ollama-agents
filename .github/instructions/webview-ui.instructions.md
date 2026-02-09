@@ -125,6 +125,9 @@ UI events (progress groups, tool actions, approvals) are persisted as `__ui__` t
 - `requestFileEditApproval` - Creates pending file edit approval card with diff + "Awaiting approval" action
 - `fileEditApprovalResult` - Updates file edit approval status and action status
 - `thinkingBlock` - Stores collapsed thinking content for history rebuild
+- `filesChanged` - Creates/merges standalone files-changed widget block
+- `fileChangeResult` - Removes a single file from widget (after keep/undo)
+- `keepUndoResult` - Removes entire widget block (after Keep All / Undo All)
 
 **Not persisted** (transient UI states):
 - "Running" status updates that will be replaced by final status
@@ -273,6 +276,48 @@ components/
 - ✅ `App.ts` should only route messages and export barrels.
 
 If you add new functionality, place it in the appropriate folder above and keep files small and single-purpose. Avoid creating new "catch-all" files.
+
+## Files Changed Widget (Standalone State)
+
+The files-changed widget shows which files the agent modified and lets users Keep/Undo changes. It is **NOT** part of the assistant thread blocks — it uses standalone reactive state:
+
+```typescript
+// src/webview/scripts/core/state.ts
+export const filesChangedBlocks = ref<AssistantThreadFilesChangedBlock[]>([]);
+```
+
+### Why Standalone?
+
+The widget is pinned to the bottom of the chat (below the input area), not embedded in the message timeline. This means:
+- It is NOT an `AssistantThreadItem.blocks` entry
+- `AssistantThreadFilesChangedBlock` is NOT in the thread block union type
+- `ChatPage.vue` renders it from `filesChangedBlocks` state, not from timeline items
+
+### Widget Data Flow
+
+| Action | Handler | Effect |
+|--------|---------|--------|
+| Agent writes files | `handleFilesChanged()` | Creates/merges block in `filesChangedBlocks` by `checkpointId` |
+| Stats arrive | `handleFilesDiffStats()` | Populates `additions`/`deletions` on matching files |
+| Single keep/undo | `handleFileChangeResult()` | Splices file out of block; removes block if empty |
+| Keep All / Undo All | `handleKeepUndoResult()` | Removes entire block |
+| Session cleared | `handleClearMessages()` | Sets `filesChangedBlocks.value = []` |
+
+### History Restoration
+
+`timelineBuilder.ts` rebuilds `filesChangedBlocks` into a local `restoredFcBlocks` array, then assigns it to `filesChangedBlocks.value` at the end. Key rules:
+
+1. **Merge by checkpointId**: Multiple incremental `filesChanged` events with the same `checkpointId` must merge into one block (add only files not already present)
+2. **fileChangeResult removes files**: Splice the resolved file out; remove the block if it's now empty
+3. **keepUndoResult removes ALL blocks**: Use a backward loop to remove ALL blocks with matching `checkpointId` (not just the first)
+
+### Component: `FilesChanged.vue`
+
+- Renders from `filesChangedBlocks` (standalone state, not thread blocks)
+- Per-file row shows: file icon, relative path, `+N -N` stats, ✓ (keep) and ↩ (undo) buttons, 📂 (review) icon
+- Header shows total file count, total `+N -N`, Keep All and Undo All buttons
+- Actions are in `src/webview/scripts/core/actions/filesChanged.ts`
+- Handlers are in `src/webview/scripts/core/messageHandlers/filesChanged.ts`
 
 ## Modifying the Chat UI
 

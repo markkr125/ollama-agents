@@ -50,6 +50,10 @@ description: "Backend-to-frontend and frontend-to-backend message protocol for t
 | `modelEnabledChanged` | `{models}` | Broadcast updated model list after enable/disable toggle |
 | `capabilityCheckProgress` | `{completed, total}` | Progressive capability detection progress |
 | `capabilityCheckComplete` | - | Capability detection finished |
+| `filesChanged` | `{checkpointId, files: [{path, action}], status, sessionId}` | Show files-changed widget (standalone, not in thread) |
+| `filesDiffStats` | `{checkpointId, files: [{path, additions, deletions}]}` | Update per-file +/- stats in widget |
+| `fileChangeResult` | `{checkpointId, filePath, action, success, sessionId}` | Single file kept/undone — remove from widget |
+| `keepUndoResult` | `{checkpointId, action, success, sessionId}` | Keep All / Undo All — remove entire widget block |
 
 ## Frontend → Backend Messages
 
@@ -79,6 +83,13 @@ description: "Backend-to-frontend and frontend-to-backend message protocol for t
 | `openFileDiff` | `{approvalId}` | Open file diff in VS Code editor |
 | `refreshCapabilities` | - | Trigger background `/api/show` for all models |
 | `toggleModelEnabled` | `{modelName, enabled}` | Enable/disable a model in SQLite |
+| `keepFile` | `{checkpointId, filePath}` | Keep a single file's changes |
+| `undoFile` | `{checkpointId, filePath}` | Undo a single file's changes |
+| `keepAllChanges` | `{checkpointId}` | Keep all files in checkpoint |
+| `undoAllChanges` | `{checkpointId}` | Undo all files in checkpoint |
+| `requestFilesDiffStats` | `{checkpointId}` | Request +/- diff stats for widget |
+| `openFileChangeDiff` | `{checkpointId, filePath}` | Open diff view for a file |
+| `openFileChangeReview` | `{checkpointId, filePath}` | Open inline review (CodeLens) for a file |
 
 ## Session-Concurrent Streaming
 
@@ -90,6 +101,34 @@ description: "Backend-to-frontend and frontend-to-backend message protocol for t
 ## Chat View Backend Structure
 
 Keep `src/views/chatView.ts` small and focused. Use these files for specific concerns:
+
+## Files Changed Widget Message Flow
+
+The files-changed widget lives in **standalone state** (`filesChangedBlocks` ref), not inside assistant thread blocks. Messages flow as:
+
+```
+Agent writes files
+  → agentChatExecutor emits 'filesChanged' (persisted + posted)
+  → webview handleFilesChanged() creates/merges standalone block
+  → webview requests 'requestFilesDiffStats' for +/- counts
+  → backend responds with 'filesDiffStats'
+
+User clicks Keep/Undo on a file
+  → webview posts 'keepFile'/'undoFile' (NO sessionId!)
+  → chatView.handleKeepFile() resolves sessionId from sessionController
+  → Persists 'fileChangeResult' + posts to webview
+  → webview handleFileChangeResult() removes file from block
+
+User clicks Keep All / Undo All
+  → webview posts 'keepAllChanges'/'undoAllChanges' (NO sessionId!)
+  → chatView.handleKeepAllChanges() resolves sessionId from sessionController
+  → Persists 'keepUndoResult' + posts to webview
+  → webview handleKeepUndoResult() removes entire block
+```
+
+**⚠️ The webview does NOT send `sessionId`** in keep/undo messages. The backend MUST resolve it via `this.sessionController.getCurrentSessionId()`. Without this, `persistUiEvent` silently skips (see Pitfall #13 in `copilot-instructions.md`).
+
+**History restoration**: `timelineBuilder.ts` handles `filesChanged`, `fileChangeResult`, and `keepUndoResult` events by building/merging/removing standalone `filesChangedBlocks`. Multiple incremental `filesChanged` events with the same `checkpointId` must be **merged** (not duplicated) — see Pitfall #14.
 
 - **`src/views/chatView.ts`**
   - Webview lifecycle + routing only

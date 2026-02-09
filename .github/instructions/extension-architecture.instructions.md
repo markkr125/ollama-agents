@@ -195,3 +195,102 @@ These are stored per-session and toggled independently. **Critical severity comm
 2. Disposes `OllamaClient` (cancels pending HTTP)
 3. Clears `ModelManager` cache
 4. Calls `disposeDatabaseService()` (fire-and-forget, not awaited)
+
+## PendingEditReviewService (`src/services/pendingEditReviewService.ts`)
+
+Provides inline change review after the agent edits files — green/red line decorations, per-hunk CodeLens actions (Keep / Undo / ↑ / ↓), and file navigation.
+
+### Lifecycle
+
+```
+Agent writes files → agentChatExecutor creates checkpoint + file snapshots
+  → execute() returns { checkpointId } to handleAgentMode()
+  → handleAgentMode() calls reviewService.startReviewForCheckpoint(checkpointId)
+      → buildReviewSession(checkpointId)
+          ├─ Reads file_snapshots from DB
+          ├─ Diffs original_content vs current on-disk content (structuredPatch)
+          ├─ Creates per-file decoration types + ReviewHunk[] arrays
+          └─ Registers CodeLens provider (scheme: 'file')
+      → Applies decorations to all visible editors that match reviewed files
+```
+
+### Key Concepts
+
+| Concept | Description |
+|---------|-------------|
+| **ReviewSession** | One active session at a time, tied to a `checkpointId`. Contains array of `FileReviewState`. |
+| **FileReviewState** | Per-file: URI, hunks[], decoration types, current hunk index |
+| **ReviewHunk** | Contiguous diff region: `startLine`, `endLine`, `addedLines[]`, `deletedCount`, `originalText`, `newText` |
+| **Auto-start** | `startReviewForCheckpoint()` is called automatically when agent finishes — decorations appear on already-open files without user action |
+| **Manual start** | User clicks ✓ icon on a file in the widget → `openFileReview()` → opens file + applies decorations |
+| **Hunk resolution** | `keepHunk()` removes the hunk from tracking. `undoHunk()` reverts the text via `editor.edit()`, then removes + shifts subsequent hunks by line delta. |
+
+### Widget ↔ Review Service Coupling
+
+The files-changed widget and the review service both track file change state independently. They sync via events:
+
+| Direction | Mechanism | When |
+|-----------|-----------|------|
+| Widget → Review | `chatView.handleKeepFile()` calls `reviewService.removeFileFromReview(filePath)` | User clicks Keep/Undo in widget |
+| Widget → Review | `chatView.handleKeepAllChanges()` calls `reviewService.closeReview()` | User clicks Keep All / Undo All |
+| Review → Widget | `onDidResolveFile` event → chatView persists + posts `fileChangeResult` | All hunks in a file resolved via CodeLens |
+| Review → Widget | `onDidUpdateHunkStats` event → chatView posts `filesDiffStats` | Any hunk keep/undo changes +/- counts |
+
+### ⚠️ sessionId Resolution in File Change Handlers
+
+The webview's `keepFile`, `undoFile`, `keepAllChanges`, `undoAllChanges` actions do **not** include `sessionId` in the `postMessage`. The backend handlers in `chatView.ts` must resolve it:
+
+```typescript
+private async handleUndoAllChanges(checkpointId: string, sessionId?: string) {
+  const resolvedSessionId = sessionId || this.sessionController.getCurrentSessionId();
+  // ... use resolvedSessionId for persistUiEvent
+}
+```
+
+Without this, `persistUiEvent()` silently drops the event (`if (!sessionId) return`), and session history will be missing the keep/undo result — the widget reappears on reload.
+
+## Checkpoint & Snapshot Architecture
+
+### Data Model
+
+Checkpoints and file snapshots are stored in SQLite (not LanceDB):
+
+**`checkpoints` table:**
+| Column | Type | Purpose |
+|--------|------|---------|
+| `id` | `TEXT PRIMARY KEY` | UUID, created at start of each agent execution |
+| `session_id` | `TEXT NOT NULL` | FK → sessions |
+| `message_id` | `TEXT` | Associated message (nullable) |
+| `status` | `TEXT` | `'pending'` → `'kept'` / `'undone'` / `'partial'` |
+| `created_at` | `INTEGER` | Timestamp |
+
+**`file_snapshots` table:**
+| Column | Type | Purpose |
+|--------|------|---------|
+| `id` | `TEXT PRIMARY KEY` | UUID |
+| `checkpoint_id` | `TEXT NOT NULL` | FK → checkpoints (CASCADE delete) |
+| `file_path` | `TEXT NOT NULL` | Workspace-relative path |
+| `original_content` | `TEXT` | Content BEFORE agent edit (NULL after kept+pruned) |
+| `action` | `TEXT` | `'modified'` / `'created'` |
+| `file_status` | `TEXT` | `'pending'` / `'kept'` / `'undone'` |
+| `created_at` | `INTEGER` | Timestamp |
+| **UNIQUE** | | `(checkpoint_id, file_path)` — INSERT OR IGNORE keeps first snapshot |
+
+### Checkpoint Lifecycle
+
+```
+1. Agent loop starts → createCheckpoint(sessionId) → returns checkpointId
+2. Before each write_file/create_file → snapshotFileBeforeEdit()
+   └─ INSERT OR IGNORE (only first snapshot per file per checkpoint is kept)
+3. Agent loop ends → filesChanged payload with checkpointId sent to webview
+4. User actions:
+   ├─ Keep file → updateFileSnapshotStatus('kept') + pruneCheckpointContent()
+   ├─ Undo file → revert file on disk + updateFileSnapshotStatus('undone')
+   ├─ Keep All → mark all 'kept' + prune
+   └─ Undo All → revert all + mark 'undone'
+5. All resolved → updateCheckpointStatus('kept'/'undone'/'partial')
+```
+
+### Snapshot Content Pruning
+
+After a file is **kept**, its `original_content` is set to `NULL` via `pruneCheckpointContent()`. This saves storage since the original is no longer needed for undo. Undone files retain `original_content` for debugging.

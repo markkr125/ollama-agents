@@ -55,13 +55,17 @@ this.emitter.postMessage({ type: 'showToolAction', status: 'pending', ..., sessi
 | `finishProgressGroup` | After all tools in group complete | `{}` |
 | `thinkingBlock` | After model finishes a thinking round | `{ content }` |
 | `showError` | On fatal loop error before break | `{ message }` |
+| `filesChanged` | After agent loop emits changed files | `{ checkpointId, files, status }` |
+| `fileChangeResult` | After single file keep/undo | `{ checkpointId, filePath, action, success }` |
+| `keepUndoResult` | After Keep All / Undo All | `{ checkpointId, action, success }` |
 
 ### Debugging Live vs History Mismatch
 
 If live chat shows something that session history doesn't:
 1. **Check if the event is being persisted** - search for `persistUiEvent` near the `postMessage` call
-2. **Check the order** - events must be persisted in the same order they're posted
-3. **Check timelineBuilder.ts** - the handler for that `eventType` must reconstruct the UI correctly
+2. **Check the `sessionId` is defined** - `persistUiEvent` silently returns if `sessionId` is `undefined`. Webview `postMessage` payloads often omit `sessionId` — the backend handler must resolve it via `sessionController.getCurrentSessionId()`
+3. **Check the order** - events must be persisted in the same order they're posted
+4. **Check timelineBuilder.ts** - the handler for that `eventType` must reconstruct the UI correctly
 
 ### Important Handler Rules
 
@@ -124,6 +128,8 @@ These are the mistakes most frequently made when editing this codebase. **Check 
 | 10 | Using `out/` as extension runtime output | `out/` is only for **test compilation** (`tsc`). The extension runtime bundle is in `dist/` (webpack). | Never reference `out/` in `package.json` "main" or runtime code paths. |
 | 11 | Restructuring `.github/instructions/`, `.github/skills/`, or `docs/` | The preamble table in this file, `docs/README.md` index, and `npm run lint:docs` all validate structure. Renaming, moving, or deleting these files breaks cross-references. | Run `npm run lint:docs` after any docs/instructions/skills change. Keep the preamble table, docs index, and frontmatter in sync. |
 | 12 | Omitting `tool_name` or `thinking` from conversation history messages | The Ollama API requires `tool_name` on `role:'tool'` messages so the model knows which tool produced which result. Omitting `thinking` causes the model to lose chain-of-thought context across iterations. | Always include `tool_name` on tool result messages and `thinking` on assistant messages when thinking content exists. See `agent-tools.instructions.md` → Native Tool Calling. |
+| 13 | Webview actions not sending `sessionId` → `persistUiEvent` silently skips | Webview `postMessage` often omits `sessionId` (the webview doesn't always know it). `persistUiEvent` has `if (!sessionId) return;` — silently drops the event. Live UI works, but session history is missing the event forever. | Backend handlers that receive webview messages must resolve sessionId: `const id = data.sessionId \|\| this.sessionController.getCurrentSessionId()`. |
+| 14 | `timelineBuilder` always pushing new `filesChanged` blocks instead of merging | Multiple incremental `filesChanged` events with the same `checkpointId` create duplicate blocks. Then `keepUndoResult` only removes the first match, leaving orphan phantom blocks in restored history. | Merge by `checkpointId`: find existing block, add only new files. Remove ALL blocks with matching `checkpointId` on `keepUndoResult`. |
 
 ---
 
@@ -169,6 +175,8 @@ src/
 │   ├── modelCompatibility.ts # Model feature detection
 │   ├── modelManager.ts   # Model listing/selection
 │   ├── ollamaClient.ts   # Ollama API client
+│   ├── pendingEditDecorationProvider.ts # File explorer decoration (pending badge)
+│   ├── pendingEditReviewService.ts # Inline change review (decorations + CodeLens + hunk ops)
 │   ├── sessionIndexService.ts # SQLite-backed chat session index
 │   ├── terminalManager.ts # Terminal lifecycle + command execution
 │   └── tokenManager.ts   # Bearer token management
@@ -192,6 +200,7 @@ src/
 │   │   │       ├── ChatInput.vue
 │   │   │       ├── CommandApproval.vue
 │   │   │       ├── FileEditApproval.vue
+│   │   │       ├── FilesChanged.vue
 │   │   │       ├── MarkdownBlock.vue
 │   │   │       ├── ProgressGroup.vue
 │   │   │       └── SessionControls.vue
@@ -210,7 +219,9 @@ src/
 │   │   │   └── App.ts      # Entry/wiring for message handling
 │   │   └── core/
 │   │       ├── actions/    # UI actions split by concern (+ index.ts barrel)
+│   │       │   └── filesChanged.ts # Keep/undo/review/diffStats actions
 │   │       ├── messageHandlers/ # Webview message handlers split by concern
+│   │       │   └── filesChanged.ts # filesChanged/filesDiffStats/keepUndoResult handlers
 │   │       ├── timelineBuilder.ts # Rebuild timeline from stored messages
 │   │       ├── computed.ts # Derived state
 │   │       ├── state.ts    # Reactive state/refs
@@ -275,10 +286,16 @@ User types message in webview
                   └─ Continue to next iteration
               → Persist final assistant message to DB
               → Post 'finalMessage' to webview
+              → Persist + post 'filesChanged' (if files were modified)
+              → Return { summary, assistantMessage, checkpointId }
+          ← Back in handleAgentMode()
+              → Auto-start inline review (reviewService.startReviewForCheckpoint)
               → Post 'generationStopped'
 ```
 
 **Key invariant**: Every `postMessage` to the webview has a matching `persistUiEvent` to the database, in the same order. This ensures session history matches live chat exactly.
+
+**Key invariant**: `filesChanged`, `fileChangeResult`, and `keepUndoResult` events must also be persisted. The backend handler must resolve `sessionId` from `sessionController.getCurrentSessionId()` when the webview doesn't provide it (see Pitfall #13).
 
 ---
 
@@ -453,5 +470,8 @@ vsce package
 | DB maintenance actions | `src/views/settingsHandler.ts` | `database-rules` instructions |
 | Terminal command execution | `src/services/terminalManager.ts` + `src/utils/commandSafety.ts` | `agent-tools` instructions |
 | File edit approval | `src/utils/fileSensitivity.ts` + `src/services/agentChatExecutor.ts` | `agent-tools` instructions |
+| Inline change review (CodeLens) | `src/services/pendingEditReviewService.ts` | `extension-architecture` instructions |
+| Files changed widget | `src/webview/components/chat/components/FilesChanged.vue` + `src/webview/scripts/core/actions/filesChanged.ts` + `src/webview/scripts/core/messageHandlers/filesChanged.ts` | `webview-ui` + `ui-messages` instructions |
+| Checkpoint/snapshot management | `src/services/sessionIndexService.ts` (tables) + `src/services/agentChatExecutor.ts` (lifecycle) | `database-rules` + `agent-tools` instructions |
 | Write/edit instructions | `.github/instructions/` + `.github/skills/` | `copilot-custom-instructions` skill |
 | Add a new test | `tests/extension/suite/` or `tests/webview/` | `add-test` skill |

@@ -87,7 +87,7 @@ export class AgentChatExecutor {
     sessionId: string,
     model: string,
     capabilities?: ModelCapabilities
-  ): Promise<{ summary: string; assistantMessage: MessageRecord }> {
+  ): Promise<{ summary: string; assistantMessage: MessageRecord; checkpointId?: string }> {
     const context = {
       workspace: agentSession.workspace,
       token,
@@ -763,7 +763,7 @@ export class AgentChatExecutor {
 
     this.emitter.postMessage({ type: 'hideThinking', sessionId });
 
-    return { summary, assistantMessage };
+    return { summary, assistantMessage, checkpointId: currentCheckpointId || undefined };
   }
 
   /**

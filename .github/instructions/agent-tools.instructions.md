@@ -17,6 +17,7 @@ When user sends a message in Agent mode:
        ├─ Detect tool calling mode:
        │   ├─ Native: model has 'tools' capability → uses Ollama tools API
        │   └─ XML fallback: no capability → parses <tool_call> from text
+       ├─ Create checkpoint (SQLite) → currentCheckpointId
        └─ LOOP (max iterations):
            ├─ Build chat request (with tools[] + think:true if native)
            ├─ Stream LLM response via OllamaClient.chat()
@@ -30,8 +31,8 @@ When user sends a message in Agent mode:
            │   ├─ Push assistant message to history (with thinking + tool_calls)
            │   ├─ Persist + post 'startProgressGroup'
            │   ├─ For each tool:
+           │   │   ├─ [write_file] → snapshotFileBeforeEdit() → fileSensitivity → approval
            │   │   ├─ [Terminal cmd] → commandSafety → approval flow
-           │   │   ├─ [File edit] → fileSensitivity → approval flow
            │   │   ├─ [Other tool] → direct execution via ToolRegistry
            │   │   ├─ Persist tool result to DB
            │   │   ├─ Persist + post 'showToolAction' (success/error)
@@ -42,6 +43,11 @@ When user sends a message in Agent mode:
            └─ Continue to next iteration
        → Persist final assistant message to DB
        → Post 'finalMessage' to webview
+       → Persist + post 'filesChanged' with checkpointId (if files modified)
+       → Return { summary, assistantMessage, checkpointId }
+   ← Back in handleAgentMode():
+       → reviewService.startReviewForCheckpoint(checkpointId)
+         (decorates already-open editors with green/red + CodeLens)
        → Post 'generationStopped'
 ```
 
