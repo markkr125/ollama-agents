@@ -1,7 +1,7 @@
 import * as vscode from 'vscode';
 import { Step, Task, TaskTracker } from '../agent/taskTracker';
 import { getModeConfig } from '../config/settings';
-import { OllamaClient } from '../services/ollamaClient';
+import { OllamaClient } from '../services/model/ollamaClient';
 import { ChatMessage } from '../types/ollama';
 
 export class PlanModeHandler {

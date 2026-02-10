@@ -1,3 +1,26 @@
+import * as vscode from 'vscode';
+
+/**
+ * A message handler that processes one or more webview message types.
+ * Implementations are registered with MessageRouter for dispatch.
+ */
+export interface IMessageHandler {
+  /** Message types this handler processes. */
+  readonly handledTypes: readonly string[];
+  /** Handle a webview message. */
+  handle(data: any): Promise<void>;
+}
+
+/**
+ * Shared mutable state for the chat view, accessible by message handlers.
+ * Owned by ChatViewProvider, passed by reference to handlers.
+ */
+export interface ViewState {
+  currentMode: string;
+  currentModel: string;
+  readonly activeSessions: Map<string, vscode.CancellationTokenSource>;
+}
+
 export interface ChatMessage {
   role: 'user' | 'assistant' | 'tool';
   content: string;

@@ -150,7 +150,7 @@ export class PRWorkflow {
     // Open git diff view
     try {
       await vscode.commands.executeCommand('git.openChange', session.filesChanged[0]);
-    } catch (error) {
+    } catch (_error) {
       vscode.window.showWarningMessage('Could not open diff view');
     }
   }

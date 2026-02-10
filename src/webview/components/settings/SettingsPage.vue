@@ -60,11 +60,11 @@
             :toggleAutocomplete="toggleAutocomplete"
           />
           <AgentSection
+            v-model:localSessionPatterns="localSessionPatterns"
             :activeSection="activeSection"
             :settings="settings"
             :toolTimeoutSeconds="toolTimeoutSeconds"
             :onToolTimeoutInput="onToolTimeoutInput"
-            v-model:localSessionPatterns="localSessionPatterns"
             :saveSessionPatterns="saveSessionPatterns"
             :agentSettings="agentSettings"
             :saveAgentSettings="saveAgentSettings"

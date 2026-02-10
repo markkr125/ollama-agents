@@ -18,11 +18,11 @@
       </div>
       <div class="settings-item">
         <label class="settings-label">Trigger Delay (ms)</label>
-        <input type="number" v-model.number="autocomplete.triggerDelay" />
+        <input v-model.number="autocomplete.triggerDelay" type="number" />
       </div>
       <div class="settings-item">
         <label class="settings-label">Max Tokens</label>
-        <input type="number" v-model.number="autocomplete.maxTokens" />
+        <input v-model.number="autocomplete.maxTokens" type="number" />
       </div>
     </div>
   </div>

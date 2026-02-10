@@ -1,5 +1,4 @@
 import { createTwoFilesPatch } from 'diff';
-// eslint-disable-next-line @typescript-eslint/no-var-requires
 const diff2html = require('diff2html');
 
 export const renderDiffHtml = (

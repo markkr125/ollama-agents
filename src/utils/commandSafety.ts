@@ -19,7 +19,7 @@ const patterns: CommandSafetyMatch[] = [
   {
     severity: 'critical',
     reason: 'Recursive deletion (Windows)',
-    pattern: /\b(Remove-Item|ri|del|rd|rmdir)\b[^\n]*(-Recurse|\/s|\-r)\b/i,
+    pattern: /\b(Remove-Item|ri|del|rd|rmdir)\b[^\n]*(-Recurse|\/s|-r)\b/i,
     platforms: ['win32']
   },
   {

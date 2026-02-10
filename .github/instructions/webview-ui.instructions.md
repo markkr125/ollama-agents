@@ -243,8 +243,7 @@ components/
 - ✅ Sub-components = nested `components/` subfolder (e.g. `chat/components/ChatInput.vue`).
 - ✅ Sub-components import from `'../../../scripts/core/...'` (one extra `../` because of the nesting).
 - ✅ Main page imports sub-components via `'./components/Foo.vue'`.
-- ✅ Standalone components that have no sub-components (like `HeaderBar.vue`, `SessionsPanel.vue`) stay directly in `components/`.
-- ❌ Do NOT put all `.vue` files flat in the same folder — keep main pages and sub-components visually separated.
+- ✅ Standalone components that have no sub-components (like `HeaderBar.vue`, `SessionsPanel.vue`) stay directly in `components/`.- ✅ Naming: `.vue` files use **PascalCase**, `.ts` files use **camelCase**, folders use **camelCase**. Enforced by `npm run lint:naming`.- ❌ Do NOT put all `.vue` files flat in the same folder — keep main pages and sub-components visually separated.
 - ❌ Do NOT use barrel `index.ts` files for Vue component re-exports — import `.vue` files directly for better "go to definition" support.
 
 **When adding a new page:**

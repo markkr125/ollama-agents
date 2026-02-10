@@ -33,7 +33,7 @@
       <div class="confirm-dialog-message">
         Commands will run automatically without asking for approval.
         <strong>This can be risky</strong> as it allows the agent to execute terminal commands without your review.
-        <br><br>
+        <br /><br />
         Critical commands (like <code>rm -rf</code>, <code>sudo</code>) will still require approval.
       </div>
       <div class="confirm-dialog-actions">
@@ -55,7 +55,7 @@
       <div class="confirm-dialog-message">
         Edits to sensitive files (config files, secrets, etc.) will be applied automatically without review.
         <strong>This can be risky</strong> as it allows the agent to modify critical files without your approval.
-        <br><br>
+        <br /><br />
         Make sure you trust the agent's changes before enabling this.
       </div>
       <div class="confirm-dialog-actions">

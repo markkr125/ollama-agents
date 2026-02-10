@@ -1,8 +1,8 @@
 <template>
   <div class="page" :class="{ active: currentPage === 'chat' }">
     <SessionControls
-      :currentMode="currentMode"
       v-model:expanded="sessionControlsExpanded"
+      :currentMode="currentMode"
       :autoApproveCommands="autoApproveCommands"
       :autoApproveConfirmVisible="autoApproveConfirmVisible"
       :toggleAutoApproveCommands="toggleAutoApproveCommands"
@@ -15,11 +15,11 @@
       :cancelAutoApproveSensitiveEdits="cancelAutoApproveSensitiveEdits"
     />
 
-    <div class="messages" ref="localMessagesEl">
+    <div ref="localMessagesEl" class="messages">
       <div v-if="warningBanner.visible" class="warning-banner">
         <span class="warning-banner-icon">⚠️</span>
         <span class="warning-banner-text">{{ warningBanner.message }}</span>
-        <button class="warning-banner-dismiss" @click="warningBanner.visible = false" title="Dismiss">✕</button>
+        <button class="warning-banner-dismiss" title="Dismiss" @click="warningBanner.visible = false">✕</button>
       </div>
 
       <div v-if="timeline.length === 0" class="empty-state">
@@ -30,9 +30,9 @@
       <template v-for="(item, index) in timeline" :key="item.id">
         <template v-if="item.type === 'assistantThread'">
           <div
+            :id="`message-${item.id}`"
             class="message"
             :class="item.role === 'user' ? 'message-user' : 'message-assistant'"
-            :id="`message-${item.id}`"
             :data-message-id="item.id"
           >
             <template v-for="(block, bIndex) in item.blocks" :key="`${item.id}-${bIndex}`">
@@ -96,9 +96,9 @@
 
         <template v-else-if="item.type === 'message'">
           <div
+            :id="`message-${item.id}`"
             class="message"
             :class="item.role === 'user' ? 'message-user' : 'message-assistant'"
-            :id="`message-${item.id}`"
             :data-message-id="item.id"
           >
             <MarkdownBlock v-if="item.role === 'assistant'" :content="item.content" />

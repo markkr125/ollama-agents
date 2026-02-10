@@ -26,23 +26,32 @@ The codebase has **three different interfaces** for messages. Using the wrong on
 
 ## Service Initialization Order
 
-In `extension.ts → activate()`:
+In `extension.ts → activate()`, a `ServiceContainer` groups all extension-wide service instances. Initialization is split into named helper functions for readability:
 
 ```
-1. getConfig()                    ← reads VS Code settings (snapshot)
-2. TokenManager(context)          ← creates secure storage accessor
-3. OllamaClient(baseUrl, token)   ← HTTP client (no connections yet)
-4. ModelManager(client)            ← model listing/caching
-5. getDatabaseService(context)     ← singleton accessor
-6. databaseService.initialize()    ← SQLite: EAGER (blocks activation)
-                                     LanceDB: LAZY (background promise)
-7. ChatViewProvider(...)           ← creates ToolRegistry, TerminalManager,
-                                     ChatSessionController, SettingsHandler,
-                                     AgentChatExecutor internally
-8. testConnection() (fire-and-forget) ← non-blocking
+1. initCoreServices()
+   ├─ getConfig()                    ← reads VS Code settings (snapshot)
+   ├─ TokenManager(context)          ← creates secure storage accessor
+   ├─ OllamaClient(baseUrl, token)   ← HTTP client (no connections yet)
+   ├─ ModelManager(client)            ← model listing/caching
+   ├─ getDatabaseService(context)     ← singleton accessor
+   ├─ databaseService.initialize()    ← SQLite: EAGER (blocks activation)
+   │                                    LanceDB: LAZY (background promise, via LanceSearchService)
+   └─ Returns ServiceContainer with all services
+2. registerFileDecorations()       ← pending edit badge + restore from DB
+3. registerReviewService()         ← CodeLens + review navigation commands
+4. fireAndForgetConnectionCheck()  ← non-blocking
+5. registerStatusBar()             ← model selector status bar item
+6. registerCompletionProvider()    ← inline completions (if model configured)
+7. registerCommands()              ← selectModel, setBearerToken
+8. registerChatView()              ← creates ChatViewProvider (owns ToolRegistry,
+                                     TerminalManager, ChatSessionController,
+                                     SettingsHandler, AgentChatExecutor internally)
+9. registerModes()                 ← plan, agent, edit
+10. checkFirstRun()                ← navigate to settings on first activation
 ```
 
-**Key rule**: SQLite is ready after `initialize()` returns. LanceDB may still be initializing. Any code that needs LanceDB must call `await databaseService.ensureLanceReady()` which awaits the background promise.
+**Key rule**: SQLite is ready after `initialize()` returns. LanceDB may still be initializing. Any code that needs LanceDB must call `await lanceSearchService.ensureReady()` which awaits the background promise.
 
 ## DatabaseService Singleton Pattern
 
@@ -59,7 +68,7 @@ disposeDatabaseService();
 
 **Gotcha**: `disposeDatabaseService()` calls `close()` but **does not await it**. The `close()` method is async (awaits `lanceInitPromise`), but the dispose function fires and forgets. If you need clean shutdown (e.g., in tests), await `close()` directly.
 
-**Embedding fallback**: `computeEmbedding()` uses a trivial character-hash vector when no embedding model is configured — deterministic but semantically meaningless. Good for dedup, not for semantic search.
+**Embedding fallback**: `LanceSearchService.generateEmbedding()` (private) uses a trivial character-hash vector when no embedding model is configured — deterministic but semantically meaningless. Good for dedup, not for semantic search.
 
 ## Configuration Pattern — Snapshots, Not Reactive
 
@@ -141,7 +150,7 @@ Output is hard-truncated to **100 lines** (15 head + 85 tail) with a `[N lines t
 ### Execution Caveat
 `waitForCommandEnd()` relies on the `onDidEndTerminalShellExecution` event. If the event never fires (e.g., shell integration bug), the promise **never resolves**. There is no timeout.
 
-## Model Compatibility (`src/services/modelCompatibility.ts`)
+## Model Compatibility (`src/services/model/modelCompatibility.ts`)
 
 Reads **model capabilities from the Ollama `/api/show` endpoint** which returns a `capabilities` string array (e.g. `["completion", "vision", "tools", "insert"]`). The module maps those API strings to the UI-facing `ModelCapabilities` type:
 
@@ -196,9 +205,20 @@ These are stored per-session and toggled independently. **Critical severity comm
 3. Clears `ModelManager` cache
 4. Calls `disposeDatabaseService()` (fire-and-forget, not awaited)
 
-## PendingEditReviewService (`src/services/pendingEditReviewService.ts`)
+## PendingEditReviewService (`src/services/review/pendingEditReviewService.ts`)
 
 Provides inline change review after the agent edits files — green/red line decorations, per-hunk CodeLens actions (Keep / Undo / ↑ / ↓), and cross-file hunk navigation.
+
+The service is decomposed into focused sub-classes:
+
+| File | Responsibility |
+|------|----------------|
+| `pendingEditReviewService.ts` | **Thin facade** — owns session state, events, lifecycle, and hunk keep/undo operations. Delegates to sub-classes below. |
+| `reviewSessionBuilder.ts` | Constructs `ReviewSession` from DB checkpoint snapshots + `computeHunks()` diff logic |
+| `reviewNavigator.ts` | Pure stateless navigation math — file/hunk/change traversal, position calculations |
+| `reviewDecorationManager.ts` | VS Code editor decorations — gutter arrow, added/deleted highlights, file opening |
+| `reviewCodeLensProvider.ts` | CodeLens provider for Keep/Undo hunk actions |
+| `reviewTypes.ts` | Shared type definitions (`ReviewHunk`, `FileReviewState`, `ReviewSession`, events) |
 
 ### Lifecycle
 
@@ -237,18 +257,20 @@ When the agent runs multiple iterations (each creating a checkpoint), the review
 - `startReviewForCheckpoint()` merges new checkpoint IDs with existing ones: `[...new Set([...existing, ...new])]`
 - `buildReviewSession()` sorts IDs chronologically before iterating (checkpoint IDs are `ckpt_<timestamp>_<random>`, so string sort = chronological order). This ensures file order in the review session matches the widget display.
 
-### Concurrency: Promise-Chain Mutex (`_buildLock`)
+### Concurrency: AsyncMutex (`src/utils/asyncMutex.ts`)
 
 Multiple `requestFilesDiffStats` messages can arrive concurrently (one per checkpoint in the widget). Without synchronization, two concurrent `startReviewForCheckpoint` calls would race — each calling `closeReview()` (nulling `activeSession`), so the second call couldn't see the first's session to merge IDs.
 
-**Solution**: A promise-chain mutex serializes all session-building operations:
+**Solution**: A reusable `AsyncMutex` serializes all session-building operations:
 
 ```typescript
-private _buildLock: Promise<void> = Promise.resolve();
+import { AsyncMutex } from '../../utils/asyncMutex';
 
-private withBuildLock<T>(fn: () => Promise<T>): Promise<T> {
-  // Chains onto previous lock — second caller waits for first to finish
-}
+private readonly mutex = new AsyncMutex();
+
+await this.mutex.runExclusive(async () => {
+  // Only one build runs at a time
+});
 ```
 
 Wrapped operations: `startReviewForCheckpoint`, `navigateChange` (only when rebuilding), `openFileReview`.
@@ -259,7 +281,8 @@ Wrapped operations: `startReviewForCheckpoint`, `navigateChange` (only when rebu
 
 - **Does NOT rebuild on every call** — that would destroy the current navigation position (currentFileIndex, currentHunkIndex)
 - **Only rebuilds when**: no active session exists, OR the active session is missing some requested checkpoint IDs
-- When it does rebuild, it uses `withBuildLock` to serialize with other builds
+- When it does rebuild, it uses the `AsyncMutex` to serialize with other builds
+- Navigation math is delegated to the stateless `ReviewNavigator` class — it computes target indices, the facade applies side effects (opening files, scrolling)
 - Returns `{ current, total, filePath? }` for the widget's "Change X of Y" counter
 
 ### Widget ↔ Review Service Coupling
@@ -268,22 +291,22 @@ The files-changed widget and the review service both track file change state ind
 
 | Direction | Mechanism | When |
 |-----------|-----------|------|
-| Widget → Review | `chatView.handleKeepFile()` calls `reviewService.removeFileFromReview(filePath)` | User clicks Keep/Undo in widget |
-| Widget → Review | `chatView.handleKeepAllChanges()` calls `reviewService.closeReview()` | User clicks Keep All / Undo All |
-| Widget → Review | `chatView.handleRequestFilesDiffStats()` calls `reviewService.startReviewForCheckpoint()` | Widget requests diff stats — also builds/merges review session |
-| Widget → Review | `chatView.navigateReviewPrev/Next` calls `reviewService.navigateChange()` | User clicks prev/next in nav bar |
-| Widget → Review | `chatView.openFileChangeReview` calls `reviewService.openFileReview()` | User clicks review icon on a file row |
+| Widget → Review | `fileChangeMessageHandler.handleKeepFile()` calls `reviewService.removeFileFromReview(filePath)` | User clicks Keep/Undo in widget |
+| Widget → Review | `fileChangeMessageHandler.handleKeepAllChanges()` calls `reviewService.closeReview()` | User clicks Keep All / Undo All |
+| Widget → Review | `fileChangeMessageHandler.handleRequestFilesDiffStats()` calls `reviewService.startReviewForCheckpoint()` | Widget requests diff stats — also builds/merges review session |
+| Widget → Review | `reviewNavMessageHandler` calls `reviewService.navigateChange()` | User clicks prev/next in nav bar |
+| Widget → Review | `fileChangeMessageHandler` calls `reviewService.openFileReview()` | User clicks review icon on a file row |
 | Review → Widget | `onDidResolveFile` event → chatView persists + posts `fileChangeResult` | All hunks in a file resolved via CodeLens |
 | Review → Widget | `onDidUpdateHunkStats` event → chatView posts `filesDiffStats` | Any hunk keep/undo changes +/- counts |
 | Review → Widget | `reviewChangePosition` message posted after nav/open/stats | Updates "Change X of Y" counter + `activeFilePath` in widget |
 
 ### Session Stats Refresh After Keep/Undo
 
-All four keep/undo handlers in `chatView.ts` (`handleKeepFile`, `handleUndoFile`, `handleKeepAllChanges`, `handleUndoAllChanges`) call `await this.sessionController.sendSessionsList()` after resolving the operation. This refreshes the sessions panel's `+N -N` badge so it reflects the updated pending file stats.
+All four keep/undo handlers in `fileChangeMessageHandler.ts` (`handleKeepFile`, `handleUndoFile`, `handleKeepAllChanges`, `handleUndoAllChanges`) call `await this.sessionController.sendSessionsList()` after resolving the operation. This refreshes the sessions panel's `+N -N` badge so it reflects the updated pending file stats.
 
 ### ⚠️ sessionId Resolution in File Change Handlers
 
-The webview's `keepFile`, `undoFile`, `keepAllChanges`, `undoAllChanges` actions do **not** include `sessionId` in the `postMessage`. The backend handlers in `chatView.ts` must resolve it:
+The webview's `keepFile`, `undoFile`, `keepAllChanges`, `undoAllChanges` actions do **not** include `sessionId` in the `postMessage`. The backend handlers in `fileChangeMessageHandler.ts` must resolve it:
 
 ```typescript
 private async handleUndoAllChanges(checkpointId: string, sessionId?: string) {

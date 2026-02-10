@@ -121,19 +121,20 @@ export function parseEditResponse(
   const format = detectFormat(response);
 
   switch (format) {
-    case 'code-block':
+    case 'code-block': {
       const codeBlock = extractCodeBlock(response, languageId);
       return codeBlock || {
         format: 'full-replacement',
         content: response.trim(),
         language: languageId
       };
+    }
 
     case 'unified-diff':
       return parseUnifiedDiff(response, originalCode);
 
     case 'full-replacement':
-    default:
+    default: {
       // Try to extract code block first
       const extracted = extractCodeBlock(response, languageId);
       if (extracted) {
@@ -146,6 +147,7 @@ export function parseEditResponse(
         content: response.trim(),
         language: languageId
       };
+    }
   }
 }
 

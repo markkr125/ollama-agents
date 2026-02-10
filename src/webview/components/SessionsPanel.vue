@@ -19,17 +19,21 @@
         <button
           v-if="!selectionMode"
           class="toolbar-btn"
-          @click="toggleSelectionMode"
           title="Select sessions"
-        >Select</button>
+          @click="toggleSelectionMode"
+        >
+          Select
+        </button>
         <template v-else>
           <button class="toolbar-btn" @click="selectAllSessions">All</button>
-          <span class="toolbar-count" v-if="selectedCount > 0">{{ selectedCount }} selected</span>
+          <span v-if="selectedCount > 0" class="toolbar-count">{{ selectedCount }} selected</span>
           <button
             class="toolbar-btn toolbar-btn-danger"
             :disabled="selectedCount === 0"
             @click="deleteSelectedSessions"
-          >Delete ({{ selectedCount }})</button>
+          >
+            Delete ({{ selectedCount }})
+          </button>
           <button class="toolbar-btn" @click="clearSelection">Cancel</button>
         </template>
       </div>
@@ -45,18 +49,18 @@
       <!-- Search results -->
       <div v-if="searchResults.length > 0" class="search-results" @scroll="onSearchResultsScroll">
         <div
-          class="search-result-group"
           v-for="group in searchResults"
           :key="group.session.id"
+          class="search-result-group"
         >
           <div class="search-result-session" @click="onLoadSession(group.session.id)">
             <span class="session-title">{{ group.session.title }}</span>
             <span class="session-time">{{ relativeTime(group.session.timestamp) }}</span>
           </div>
           <div
-            class="search-result-message"
             v-for="message in group.messages"
             :key="message.id"
+            class="search-result-message"
             @click="onLoadWithMessage(group.session.id, message.id)"
           >
             <span class="message-role">{{ message.role }}</span>
@@ -80,13 +84,13 @@
       </div>
 
       <!-- Regular sessions list (when not searching) -->
-      <div v-else-if="!searchQuery" class="sessions-list" ref="sessionsListRef" @scroll="onSessionsScroll">
-        <div class="sessions-group" v-for="group in categorizedSessions" :key="group.key">
+      <div v-else-if="!searchQuery" ref="sessionsListRef" class="sessions-list" @scroll="onSessionsScroll">
+        <div v-for="group in categorizedSessions" :key="group.key" class="sessions-group">
           <div class="sessions-group-title">{{ group.label }}</div>
           <div
-            class="session-item"
             v-for="session in group.items"
             :key="session.id"
+            class="session-item"
             :class="{
               active: session.id === currentSessionId && !selectionMode,
               selected: selectionMode && selectedSessionIds.has(session.id),
@@ -111,8 +115,8 @@
                 <span v-else class="status-icon" aria-hidden="true">✓</span>
                 <span class="status-text">
                   {{ session.status === 'generating' ? 'Loading...' :
-                     session.status === 'error' ? 'Error' :
-                     session.status === 'idle' ? 'Idle' : 'Completed' }}
+                    session.status === 'error' ? 'Error' :
+                    session.status === 'idle' ? 'Idle' : 'Completed' }}
                 </span>
                 <span v-if="session.pendingFileCount && ((session.pendingAdditions ?? 0) > 0 || (session.pendingDeletions ?? 0) > 0)" class="session-pending-badge" :title="`${session.pendingFileCount} file(s) with pending changes`">
                   <span class="pending-additions">+{{ session.pendingAdditions }}</span>
@@ -125,8 +129,8 @@
               v-if="!selectionMode"
               class="session-delete"
               :disabled="deletingSessionIds.has(session.id)"
-              @click.stop="onDeleteSession(session.id)"
               title="Delete conversation"
+              @click.stop="onDeleteSession(session.id)"
             >
               <span v-if="deletingSessionIds.has(session.id)" class="delete-spinner">⟳</span>
               <span v-else class="delete-icon">🗑</span>

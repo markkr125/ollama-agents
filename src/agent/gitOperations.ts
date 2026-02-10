@@ -21,7 +21,7 @@ export class GitOperations {
           return this.gitApiCache;
         }
       }
-    } catch (error) {
+    } catch (_error) {
       console.log('Git API not available, using CLI fallback');
     }
 

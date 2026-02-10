@@ -1,14 +1,12 @@
 import * as vscode from 'vscode';
-import { OllamaClient } from '../services/ollamaClient';
+import { OllamaClient } from '../services/model/ollamaClient';
+import type { ExecutorConfig } from '../types/agent';
 import { ChatMessage, ToolCall } from '../types/ollama';
 import { Session, ToolExecution } from '../types/session';
 import { ToolContext, ToolRegistry } from './toolRegistry';
 
-export interface ExecutorConfig {
-  maxIterations: number;
-  toolTimeout: number;
-  temperature: number;
-}
+// Re-export for backward compatibility with agentMode.ts
+export type { ExecutorConfig } from '../types/agent';
 
 export class AgentExecutor {
   constructor(
@@ -152,35 +150,30 @@ export class AgentExecutor {
   ): Promise<string | null> {
     let fullResponse = '';
 
-    try {
-      const stream = this.client.chat({
-        model,
-        messages,
-        options: {
-          temperature: config.temperature
-        }
-      });
+    const stream = this.client.chat({
+      model,
+      messages,
+      options: {
+        temperature: config.temperature
+      }
+    });
 
-      for await (const chunk of stream) {
-        if (token.isCancellationRequested) {
-          return null;
-        }
-
-        const content = chunk.message?.content || chunk.response || '';
-        if (content) {
-          fullResponse += content;
-        }
-
-        if (chunk.done) {
-          break;
-        }
+    for await (const chunk of stream) {
+      if (token.isCancellationRequested) {
+        return null;
       }
 
-      return fullResponse;
+      const content = chunk.message?.content || chunk.response || '';
+      if (content) {
+        fullResponse += content;
+      }
 
-    } catch (error) {
-      throw error;
+      if (chunk.done) {
+        break;
+      }
     }
+
+    return fullResponse;
   }
 
   /**
@@ -236,7 +229,7 @@ Guidelines:
             }
           });
         }
-      } catch (error) {
+      } catch (_error) {
         // Invalid JSON, skip
       }
     }

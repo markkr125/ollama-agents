@@ -1,7 +1,7 @@
 <template>
   <div class="input-container">
     <div class="context-chips" :class="{ visible: contextList.length > 0 }">
-      <div class="context-chip" v-for="(c, i) in contextList" :key="c.fileName + i">
+      <div v-for="(c, i) in contextList" :key="c.fileName + i" class="context-chip">
         <span>📄 {{ c.fileName }}</span>
         <span class="context-chip-remove" @click="removeContext(i)">×</span>
       </div>

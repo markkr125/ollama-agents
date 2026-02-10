@@ -344,21 +344,25 @@ afterEach(() => {
 | Assertions | `assert.strictEqual()`, `assert.ok()` | `expect().toBe()`, `expect().toEqual()` |
 | Async | `async` test functions | `async` test functions |
 
+Naming conventions are enforced by `npm run lint:naming`. Run `npm run lint:all` before pushing to catch violations.
+
 ---
 
 ## Existing Coverage
 
-### Webview Tests (77 tests)
+### Webview Tests (128 tests)
 
 | Suite | Tests | What it covers |
 |-------|-------|----------------|
-| `timelineBuilder.test.ts` | 23 | `buildTimelineFromMessages`: block structure, UI event replay, approval flows, edge cases |
-| `messageHandlers.test.ts` | 15 | Live streaming handlers, progress groups, approval handlers, live/history parity contracts |
+| `timelineBuilder.test.ts` | 28 | `buildTimelineFromMessages`: block structure, UI event replay, approval flows, thinking blocks, showError, live/history parity |
+| `messageHandlers.test.ts` | 21 | Live streaming handlers, progress groups, approval handlers, thinking blocks, connection test, live/history parity contracts |
 | `actions.test.ts` | 10 | Debounced search, auto-approve toggle/confirm, context packaging |
 | `computed.test.ts` | 4 | Temperature display, tool timeout conversion, header title |
 | `SettingsPage.test.ts` | 19 | Settings page rendering, section switching, input binding |
 | `MarkdownBlock.test.ts` | 4 | Markdown rendering, content updates, caching |
 | `CommandApproval.test.ts` | 2 | Editable input when pending, approve sends edited command |
+| `parity.test.ts` | 12 | Live/history structural parity — ensures message handlers and timelineBuilder produce identical timelines |
+| `filesChanged.test.ts` | 28 | Files-changed widget: merging, diff stats, per-file/bulk keep/undo, timeline builder merging, session restore, nav |
 
 ### Extension Host Tests
 

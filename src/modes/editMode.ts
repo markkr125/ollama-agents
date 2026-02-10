@@ -1,7 +1,7 @@
 import * as vscode from 'vscode';
 import { getModeConfig } from '../config/settings';
 import { EditManager } from '../services/editManager';
-import { OllamaClient } from '../services/ollamaClient';
+import { OllamaClient } from '../services/model/ollamaClient';
 
 export async function registerEditMode(
   context: vscode.ExtensionContext,

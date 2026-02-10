@@ -1,7 +1,7 @@
 <template>
   <!-- Flat rendering for completed file-only groups -->
   <div v-if="isCompletedFileGroup" class="flat-file-actions">
-    <div class="flat-action" v-for="action in item.actions" :key="action.id">
+    <div v-for="action in item.actions" :key="action.id" class="flat-action">
       <span class="action-status" :class="actionStatusClass(action.status)">
         <span v-if="action.status === 'success'">✓</span>
         <span v-else-if="action.status === 'error'">✗</span>
@@ -33,7 +33,7 @@
       <span class="progress-title">{{ item.title }}</span>
     </div>
     <div class="progress-actions">
-      <div class="action-item" v-for="action in item.actions" :key="action.id">
+      <div v-for="action in item.actions" :key="action.id" class="action-item">
         <span class="action-status" :class="actionStatusClass(action.status)">
           <span v-if="action.status === 'running'" class="spinner"></span>
           <span v-else-if="action.status === 'success'">✓</span>
@@ -47,8 +47,7 @@
             :class="{ clickable: !!action.filePath }"
             @click.stop="action.filePath && handleOpenDiff(action.checkpointId, action.filePath)"
           >{{ action.text }}</span>
-          <span v-if="action.detail" class="detail" :class="{ 'diff-stats': action.filePath }"
-          > {{ action.detail }}</span>
+          <span v-if="action.detail" class="detail" :class="{ 'diff-stats': action.filePath }"> {{ action.detail }}</span>
         </span>
       </div>
     </div>

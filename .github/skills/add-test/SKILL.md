@@ -145,6 +145,9 @@ npm run test:webview
 
 # All tests
 npm run test:all
+
+# Verify lint (includes naming conventions for new files)
+npm run lint:all
 ```
 
 No test registration is needed — both harnesses auto-discover `*.test.ts` / `*.test.js` files via globs.

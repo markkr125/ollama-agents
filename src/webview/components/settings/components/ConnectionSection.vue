@@ -4,7 +4,7 @@
       <h3>Server Connection</h3>
       <div class="settings-item">
         <label class="settings-label">Ollama / OpenWebUI URL</label>
-        <input type="text" v-model="settings.baseUrl" @blur="saveBaseUrl" @change="saveBaseUrl" />
+        <input v-model="settings.baseUrl" type="text" @blur="saveBaseUrl" @change="saveBaseUrl" />
       </div>
       <div class="settings-item">
         <label class="settings-label">Bearer Token (OpenWebUI)</label>

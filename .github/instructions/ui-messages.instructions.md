@@ -128,17 +128,17 @@ User clicks Keep All / Undo All
   → chatView.handleKeepAllChanges() resolves sessionId from sessionController
   → Persists 'keepUndoResult' + posts to webview
   → webview handleKeepUndoResult() removes entire block
-  → chatView calls sendSessionsList() to refresh session stats badge
+  → chatView MessageRouter → FileChangeMessageHandler calls sendSessionsList() to refresh session stats badge
 
 User navigates changes (prev/next)
   → webview posts 'navigateReviewPrev'/'navigateReviewNext' with checkpointIds[]
-  → chatView calls reviewService.navigateChange(direction, checkpointIds)
+  → ReviewNavMessageHandler calls reviewService.navigateChange(direction, checkpointIds)
   → Backend responds with 'reviewChangePosition' {current, total, filePath}
   → webview updates "Change X of Y" counter + highlights active file
 
 Widget requests diff stats
   → webview posts 'requestFilesDiffStats' per checkpoint
-  → chatView calls reviewService.startReviewForCheckpoint() (builds/merges session)
+  → FileChangeMessageHandler calls reviewService.startReviewForCheckpoint() (builds/merges session)
   → Backend responds with 'filesDiffStats' + 'reviewChangePosition'
 ```
 
@@ -147,9 +147,18 @@ Widget requests diff stats
 **History restoration**: `timelineBuilder.ts` handles `filesChanged`, `fileChangeResult`, and `keepUndoResult` events by building/merging/removing standalone `filesChangedBlocks`. Multiple incremental `filesChanged` events with the same `checkpointId` must be **merged** (not duplicated) — see Pitfall #14.
 
 - **`src/views/chatView.ts`**
-  - Webview lifecycle + routing only
+  - Webview lifecycle + MessageRouter wiring only
   - Implements `WebviewMessageEmitter`
-  - Delegates to services/controllers
+  - Routes all messages via `MessageRouter` to `IMessageHandler` implementations
+
+- **`src/views/messageHandlers/`** (IMessageHandler implementations)
+  - `chatMessageHandler.ts` — chat/agent mode: send, stop, mode/model switch
+  - `sessionMessageHandler.ts` — session load/delete/search
+  - `settingsMessageHandler.ts` — save settings, test connection, DB ops
+  - `approvalMessageHandler.ts` — tool/file approvals, auto-approve toggles
+  - `fileChangeMessageHandler.ts` — keep/undo files, diff stats
+  - `modelMessageHandler.ts` — refresh capabilities, toggle models
+  - `reviewNavMessageHandler.ts` — inline review prev/next navigation
 
 - **`src/views/chatSessionController.ts`**
   - Session creation/loading/deletion
@@ -161,7 +170,7 @@ Widget requests diff stats
   - Test connection + token handling
   - DB maintenance actions
 
-- **`src/services/agentChatExecutor.ts`**
+- **`src/services/agent/agentChatExecutor.ts`** (orchestrator) + **`src/services/agent/agentToolRunner.ts`** (tool batch execution) + **`src/services/agent/agentStreamProcessor.ts`** (streaming) + **`src/services/agent/agentSummaryBuilder.ts`** (post-loop finalization)
   - Agent execution loop
   - Tool call parsing + execution
   - Progress group + tool UI updates (via emitter)
@@ -170,10 +179,10 @@ Widget requests diff stats
   - Pure helpers mapping tool calls/results → UI text/icons
 
 - **`src/views/chatTypes.ts`**
-  - Shared view types
+  - Shared view types + `IMessageHandler` + `ViewState`
   - `WebviewMessageEmitter` interface
 
-**Rule:** Do not re-bloat `chatView.ts`. If a method exceeds ~50 lines or handles a distinct concern, extract it into one of the modules above.
+**Rule:** Do not re-bloat `chatView.ts`. If a method exceeds ~50 lines or handles a distinct concern, create a new `IMessageHandler` class in `src/views/messageHandlers/`.
 
 ## Streaming Behavior
 

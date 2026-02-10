@@ -3,7 +3,7 @@
     <div class="settings-group">
       <h3>Available Tools</h3>
       <div class="tools-grid">
-        <div class="tool-card" v-for="tool in tools" :key="tool.name">
+        <div v-for="tool in tools" :key="tool.name" class="tool-card">
           <div class="tool-header">
             <span class="tool-icon">{{ tool.icon }}</span>
             <span class="tool-name">{{ tool.name }}</span>

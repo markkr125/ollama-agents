@@ -8,8 +8,8 @@ import {
     OllamaError,
     ShowModelResponse,
     StreamChunk
-} from '../types/ollama';
-import { parseNDJSON } from '../utils/streamParser';
+} from '../../types/ollama';
+import { parseNDJSON } from '../../utils/streamParser';
 
 export class OllamaClient {
   private baseUrl: string;

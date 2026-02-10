@@ -1,9 +1,124 @@
 ---
-applyTo: "src/agent/**,src/services/agentChatExecutor.ts,src/utils/toolCallParser.ts"
+applyTo: "src/agent/**,src/services/agent/**,src/utils/toolCallParser.ts"
 description: "Agent execution flow, tool registry, tool call parser robustness, terminal execution, command safety, file sensitivity, and approval flow"
 ---
 
 # Agent Tools & Execution
+
+## Agent Executor Architecture — Decomposed Structure
+
+The agent execution logic lives in `src/services/agent/` and follows a **strict single-responsibility decomposition**. The executor was decomposed from a monolithic 800-line class into focused sub-handlers. **This structure is intentional — do NOT merge files back together or add new responsibilities to the orchestrator.**
+
+### File Map & Responsibilities
+
+```
+src/services/agent/
+├── agentChatExecutor.ts      # ORCHESTRATOR ONLY — wires sub-handlers, runs main loop
+├── agentStreamProcessor.ts   # LLM streaming — chunk accumulation, throttled UI emission
+├── agentToolRunner.ts        # Tool batch execution — routing, UI events, diff stats
+├── agentSummaryBuilder.ts    # Post-loop — summary generation, final message, filesChanged
+├── approvalManager.ts        # Approval promise lifecycle — waitForApproval / handleResponse
+├── agentTerminalHandler.ts   # Terminal commands — safety check, approval, execution
+├── agentFileEditHandler.ts   # File edits — sensitivity check, approval, diff preview
+└── checkpointManager.ts      # Checkpoints — snapshotting, keep/undo, diff computation
+```
+
+### Ownership Rules — Where Does New Code Go?
+
+| If you need to... | Put it in... | NOT in... |
+|---|---|---|
+| Change LLM streaming, chunk throttling, thinking accumulation | `agentStreamProcessor.ts` | `agentChatExecutor.ts` |
+| Change per-tool execution, tool UI events, inline diff stats | `agentToolRunner.ts` | `agentChatExecutor.ts` |
+| Change post-loop summary, fallback LLM call, final message | `agentSummaryBuilder.ts` | `agentChatExecutor.ts` |
+| Change terminal command safety/approval/execution | `agentTerminalHandler.ts` | `agentToolRunner.ts` |
+| Change file edit sensitivity/approval/diff preview | `agentFileEditHandler.ts` | `agentToolRunner.ts` |
+| Change checkpoint snapshotting, keep/undo, diff computation | `checkpointManager.ts` | `agentChatExecutor.ts` |
+| Change approval promise lifecycle (wait/resolve) | `approvalManager.ts` | handler files |
+| Change loop flow, iteration logic, conversation history | `agentChatExecutor.ts` | sub-handler files |
+
+### `AgentChatExecutor` — The Orchestrator
+
+**This class MUST stay thin.** It owns:
+- Constructor wiring of sub-handlers
+- The main `execute()` while-loop (iteration orchestration)
+- `persistUiEvent()` — the shared persist-to-DB helper
+- `persistGitBranchAction()` — git branch UI event sequence
+- `buildAgentSystemPrompt()` — XML fallback prompt generation
+- `parseToolCalls()` — native vs XML extraction dispatch
+- `logIterationResponse()` — debug output channel logging
+- Pass-through delegates to `checkpointManager` and `approvalManager`
+
+**It does NOT own** streaming, tool execution, diff stats, summary generation, terminal safety, or file sensitivity. Those are in the sub-handlers.
+
+### `AgentStreamProcessor` — LLM Streaming
+
+Owns the `for await (chunk of stream)` loop. Takes a chat request and returns:
+
+```typescript
+interface StreamResult {
+  response: string;           // Full accumulated response text
+  thinkingContent: string;    // Full accumulated thinking/CoT text
+  nativeToolCalls: OllamaToolCall[];  // Native tool calls from API
+  firstChunkReceived: boolean; // Whether any text was sent to UI
+}
+```
+
+Handles: thinking token accumulation, native tool_call accumulation, text content accumulation with 32ms throttled UI emission, first-chunk gate (≥8 word chars), `[TASK_COMPLETE]` partial-prefix stripping, partial tool call detection (XML fallback freezing).
+
+### `AgentToolRunner` — Tool Batch Execution
+
+Executes all tool calls in a single iteration as a batch. Routes to terminal handler, file-edit handler, or generic `ToolRegistry.execute()`. Returns:
+
+```typescript
+interface ToolBatchResult {
+  nativeResults: Array<{ role: 'tool'; content: string; tool_name: string }>;
+  xmlResults: string[];
+  wroteFiles: boolean;  // Whether any file write succeeded (not skipped)
+}
+```
+
+Handles: per-tool "running"→"success"/"error" UI events, `persistUiEvent` for each action, inline diff stats computation (`+N -N` badges), incremental `filesChanged` emission, tool result persistence to DB, skipped-action detection.
+
+### `AgentSummaryBuilder` — Post-Loop Finalization
+
+Called once after the while-loop exits. Handles:
+- Fallback LLM summary generation (when no accumulated explanation text)
+- Tool summary line building (from last 6 tool results)
+- Final assistant message persistence to DB
+- `finalMessage` emission to webview
+- `filesChanged` final emission with checkpoint
+- Has its own `persistUiEvent` (does not share the executor's instance)
+
+### Shared Types Location
+
+All core agent types (`Tool`, `ToolContext`, `ExecutorConfig`, `PersistUiEventFn`) live in `src/types/agent.ts`. Both `toolRegistry.ts` and `agentTerminalHandler.ts` re-export them for backward compatibility, but new code should import from `types/agent` directly.
+
+### Sub-Handler Dependency Pattern
+
+Sub-handlers receive their dependencies via constructor injection (not by holding a reference to the executor). This prevents circular dependencies:
+
+```typescript
+// PersistUiEventFn type — defined in src/types/agent.ts (shared location)
+export type PersistUiEventFn = (
+  sessionId: string | undefined,
+  eventType: string,
+  payload: Record<string, any>
+) => Promise<void>;
+
+// Executor binds its own method and passes it down
+const persistFn = this.persistUiEvent.bind(this);
+this.terminalHandler = new AgentTerminalHandler(..., persistFn, ...);
+```
+
+### ⚠️ Anti-Patterns to Avoid
+
+| Anti-Pattern | Why It's Bad | Do This Instead |
+|---|---|---|
+| Adding streaming logic to `agentChatExecutor.ts` | Executor becomes a god class again | Add to `agentStreamProcessor.ts` |
+| Adding per-tool execution logic to `agentChatExecutor.ts` | Same — executor must stay thin | Add to `agentToolRunner.ts` |
+| Importing `AgentChatExecutor` from a sub-handler | Creates circular dependency | Use `PersistUiEventFn` callback type instead |
+| Making `AgentStreamProcessor` aware of tool execution | Violates streaming ↔ execution boundary | Stream processor returns `StreamResult`, executor decides what to do with it |
+| Putting DB persistence logic in stream processor | Stream processor should only handle UI emission | Persistence belongs in executor or tool runner |
 
 ## Agent Execution Flow
 
@@ -19,35 +134,55 @@ When user sends a message in Agent mode:
        │   └─ XML fallback: no capability → parses <tool_call> from text
        ├─ Create checkpoint (SQLite) → currentCheckpointId
        └─ LOOP (max iterations):
-           ├─ Build chat request (with tools[] + think:true if native)
-           ├─ Stream LLM response via OllamaClient.chat()
-           │   ├─ Accumulate thinking tokens (chunk.message.thinking)
-           │   ├─ Accumulate native tool_calls (chunk.message.tool_calls)
-           │   ├─ Accumulate text content (chunk.message.content)
-           │   └─ Throttled streamChunk to UI (32ms, first-chunk gate ≥8 word chars)
-           ├─ Persist thinking block (if any)
-           ├─ Extract tool calls (native tool_calls[] OR XML <tool_call> parsing)
+           │
+           ├─ [AgentStreamProcessor.streamIteration()]
+           │   ├─ Build chat request (with tools[] + think:true if native)
+           │   ├─ Stream LLM response via OllamaClient.chat()
+           │   │   ├─ Accumulate thinking tokens (chunk.message.thinking)
+           │   │   ├─ Accumulate native tool_calls (chunk.message.tool_calls)
+           │   │   ├─ Accumulate text content (chunk.message.content)
+           │   │   └─ Throttled streamChunk to UI (32ms, first-chunk gate ≥8 word chars)
+           │   └─ Return StreamResult { response, thinkingContent, nativeToolCalls }
+           │
+           ├─ [Back in agentChatExecutor.execute()]
+           │   ├─ De-duplicate thinking echo in response
+           │   ├─ Persist thinking block (if any)
+           │   ├─ Process per-iteration delta text
+           │   ├─ Check [TASK_COMPLETE] → validate writes → break
+           │   └─ parseToolCalls() → native or XML extraction
+           │
            ├─ If tools found:
-           │   ├─ Push assistant message to history (with thinking + tool_calls)
            │   ├─ Persist + post 'startProgressGroup'
-           │   ├─ For each tool:
-           │   │   ├─ [write_file] → snapshotFileBeforeEdit() → fileSensitivity → approval
-           │   │   ├─ [Terminal cmd] → commandSafety → approval flow
-           │   │   ├─ [Other tool] → direct execution via ToolRegistry
-           │   │   ├─ Persist tool result to DB
-           │   │   ├─ Persist + post 'showToolAction' (success/error)
-           │   │   └─ Feed result back: {role:'tool', content, tool_name} (native)
-           │   │                     or accumulated user message (XML)
-           │   └─ Persist + post 'finishProgressGroup'
-           ├─ If [TASK_COMPLETE] → validate writes → break loop
+           │   ├─ Push assistant message to history (with thinking + tool_calls)
+           │   │
+           │   ├─ [AgentToolRunner.executeBatch()]
+           │   │   ├─ For each tool:
+           │   │   │   ├─ [write_file] → CheckpointManager.snapshotFileBeforeEdit()
+           │   │   │   │                → AgentFileEditHandler.execute()
+           │   │   │   │                  → fileSensitivity → approval flow
+           │   │   │   ├─ [Terminal cmd] → AgentTerminalHandler.execute()
+           │   │   │   │                  → commandSafety → approval flow
+           │   │   │   ├─ [Other tool] → ToolRegistry.execute()
+           │   │   │   ├─ Persist tool result to DB
+           │   │   │   ├─ Persist + post 'showToolAction' (success/error)
+           │   │   │   └─ Compute inline diff stats (+N -N badge)
+           │   │   └─ Return ToolBatchResult { nativeResults, xmlResults, wroteFiles }
+           │   │
+           │   ├─ Persist + post 'finishProgressGroup'
+           │   └─ Feed tool results back into conversation history
+           │
            └─ Continue to next iteration
-       → Persist final assistant message to DB
-       → Post 'finalMessage' to webview
-       → Persist + post 'filesChanged' with checkpointId (if files modified)
-       → Return { summary, assistantMessage, checkpointId }
+       │
+       ├─ [AgentSummaryBuilder.finalize()]
+       │   ├─ Generate fallback LLM summary (if no accumulated text)
+       │   ├─ Persist final assistant message to DB
+       │   ├─ Post 'finalMessage' to webview
+       │   ├─ Persist + post 'filesChanged' with checkpointId (if files modified)
+       │   └─ Return { summary, assistantMessage }
+       │
+       └─ Return { summary, assistantMessage, checkpointId }
    ← Back in handleAgentMode():
        → reviewService.startReviewForCheckpoint(checkpointId)
-         (decorates already-open editors with green/red + CodeLens)
        → Post 'generationStopped'
 ```
 
@@ -77,9 +212,33 @@ The executor supports two tool calling paths, selected based on model capabiliti
 
 ## ToolRegistry (`src/agent/toolRegistry.ts`)
 
-Defines tools available to the agent for autonomous operations.
+Manages tool registration, lookup, and execution. The registry itself is a slim class (~110 LOC) — individual tool implementations live in `src/agent/tools/`, one file per tool.
 
-**Built-in Tools (6 total — defined in `registerBuiltInTools()`):**
+### Tool File Structure
+
+```
+src/agent/tools/
+├── index.ts              # Barrel export — builtInTools[] array
+├── pathUtils.ts          # resolveWorkspacePath() shared utility
+├── readFile.ts           # read_file tool
+├── writeFile.ts          # write_file tool
+├── searchWorkspace.ts    # search_workspace tool
+├── listFiles.ts          # list_files tool
+├── runTerminalCommand.ts # run_terminal_command tool
+└── getDiagnostics.ts     # get_diagnostics tool
+```
+
+### Shared Types (`src/types/agent.ts`)
+
+All core agent types are centralised in `src/types/agent.ts`:
+- `Tool` — tool definition (name, description, schema, execute)
+- `ToolContext` — runtime context for tool execution
+- `ExecutorConfig` — agent loop configuration (maxIterations, toolTimeout, temperature)
+- `PersistUiEventFn` — callback type for DB persistence
+
+`toolRegistry.ts` and `agentTerminalHandler.ts` re-export these types for backward compatibility.
+
+**Built-in Tools (6 total):**
 | Tool | Description |
 |------|-------------|
 | `read_file` | Read file contents |
@@ -229,27 +388,14 @@ Both terminal and file edit approvals follow the **persist+post sequence** defin
 
 ## Adding a New Tool
 
-1. Add to `toolRegistry.ts` in `registerBuiltInTools()`:
-```typescript
-this.register({
-  name: 'my_tool',
-  description: 'What this tool does',
-  schema: {
-    type: 'object',
-    properties: {
-      param1: { type: 'string', description: 'Param description' }
-    },
-    required: ['param1']
-  },
-  execute: async (params, context) => {
-    // Implementation
-    return 'Result string';
-  }
-});
-```
+> **Full step-by-step guide**: See the `add-agent-tool` skill (`.github/skills/add-agent-tool/SKILL.md`).
 
-2. Add UI representation in `getToolActionInfo()` in `src/views/toolUIFormatter.ts`
+Each tool lives in its own file under `src/agent/tools/`. Quick summary:
 
-3. Add to Tools section in settings UI
+1. **Create tool file** — `src/agent/tools/myTool.ts` exporting a `Tool` object (`{ name, description, schema, execute }`).
+2. **Register in barrel** — Add to `builtInTools[]` in `src/agent/tools/index.ts`.
+3. **Add UI mapping** — Add a `case` in `getToolActionInfo()` in `src/views/toolUIFormatter.ts`.
+4. **Add to Settings UI** (if toggleable) — `src/webview/components/settings/components/ToolsSection.vue`.
+5. **Write tests** — `tests/extension/suite/agent/toolRegistry.test.ts`.
 
-4. Write tests in `tests/extension/suite/agent/toolRegistry.test.ts`
+Execution routing: `agentToolRunner.ts` calls `ToolRegistry.execute()` for standard tools. Terminal commands and file edits have dedicated sub-handlers (`agentTerminalHandler.ts`, `agentFileEditHandler.ts`).
