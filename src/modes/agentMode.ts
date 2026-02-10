@@ -1,11 +1,12 @@
 import * as vscode from 'vscode';
-import { AgentExecutor, ExecutorConfig } from '../agent/executor';
+import { AgentExecutor } from '../agent/executor';
 import { GitOperations } from '../agent/gitOperations';
 import { PRWorkflow } from '../agent/prWorkflow';
 import { SessionManager } from '../agent/sessionManager';
 import { ToolRegistry } from '../agent/toolRegistry';
 import { getModeConfig } from '../config/settings';
 import { OllamaClient } from '../services/model/ollamaClient';
+import { ExecutorConfig } from '../types/agent';
 
 export class AgentModeHandler {
   constructor(

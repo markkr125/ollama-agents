@@ -1,8 +1,8 @@
 import * as vscode from 'vscode';
-import { ExecutorConfig } from '../../agent/executor';
 import { SessionManager } from '../../agent/sessionManager';
 import { ToolRegistry } from '../../agent/toolRegistry';
 import { getConfig } from '../../config/settings';
+import { ExecutorConfig } from '../../types/agent';
 import { MessageRecord } from '../../types/session';
 import { extractToolCalls, removeToolCalls } from '../../utils/toolCallParser';
 import { WebviewMessageEmitter } from '../../views/chatTypes';

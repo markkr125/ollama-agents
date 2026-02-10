@@ -84,7 +84,7 @@ The sessions panel shows `+N -N` badges per session. This is computed by `getSes
 
 This two-level approach handles the transition period where some checkpoints have per-file stats and others only have checkpoint-level fallback totals. The `+0 -0` badge is hidden on the frontend via `v-if="(pendingAdditions ?? 0) > 0 || (pendingDeletions ?? 0) > 0"`.
 
-**Refresh trigger**: All four keep/undo handlers in `chatView.ts` call `await sessionController.sendSessionsList()` after resolving, which calls `getSessionsPendingStats()` and pushes updated stats to the webview.
+**Refresh trigger**: All four keep/undo handlers in `fileChangeMessageHandler.ts` call `await sessionController.sendSessionsList()` after resolving, which calls `getSessionsPendingStats()` and pushes updated stats to the webview.
 
 ## ⚠️ NEVER Auto-Delete User Data
 
@@ -116,7 +116,24 @@ LanceDB stores data in `.lance` directories with metadata files referencing data
 
 **Error signature**: `Not found: .../ollama-copilot.lance/messages.lance/data/<uuid>.lance`
 
-**Handling**: LanceDB corruption is detected during `initLanceDb()` in `src/services/database/databaseService.ts`. If initialization fails, search is disabled but the extension continues to function. Users can manually trigger "Recreate Messages Table" from Advanced Settings (`src/views/settingsHandler.ts` → `recreateMessagesTable()`) to clear and rebuild the table.
+**Handling**: LanceDB corruption is detected during `initLanceDb()` in `src/services/database/lanceSearchService.ts`. If initialization fails, search is disabled but the extension continues to function. Users can manually trigger "Recreate Messages Table" from Advanced Settings (`src/views/settingsHandler.ts` → `recreateMessagesTable()`) to clear and rebuild the table.
+
+## LanceSearchService API (`src/services/database/lanceSearchService.ts`)
+
+`LanceSearchService` owns all LanceDB interactions. `DatabaseService` delegates to it for message indexing and search.
+
+| Method | Visibility | Purpose |
+|--------|------------|---------|
+| `startInit()` | public | Kicks off background LanceDB init (table open/create). Called once from `DatabaseService.initialize()`. |
+| `ensureReady()` | public | Awaits `lanceInitPromise`. Returns `true` if table is usable. |
+| `indexMessage(msg)` | public | Inserts a `MessageRecord` into LanceDB (with embedding + snippet). |
+| `searchByKeyword(query, limit)` | public | FTS keyword search on content field. |
+| `searchSemantic(query, limit)` | public | Vector cosine-similarity search using `generateEmbedding()`. |
+| `searchHybrid(query, limit)` | public | Runs keyword + semantic in parallel, combines via RRF reranking. |
+| `deleteSessionEntries(id)` | public | Deletes all LanceDB rows for a session. |
+| `recreateSearchTable()` | public | Drops + recreates the messages table (manual "Recreate Messages Table"). |
+| `close()` | public | Awaits background init, then nulls state. See "DatabaseService.close()" below. |
+| `generateEmbedding(text)` | **private** | Trivial character-hash vector (deterministic, not semantic). |
 
 ## Message Ordering
 
@@ -139,7 +156,7 @@ During agent execution, messages must be saved to the database in the exact orde
 
 ## DatabaseService.close() and LanceDB Background Init
 
-**Critical**: `close()` must await the background `lanceInitPromise` before nulling out state. Without this, closing a `DatabaseService` instance while LanceDB is still initializing in the background can leave corrupt/partial files that cause subsequent instances to fail.
+**Critical**: `LanceSearchService.close()` must await the background `lanceInitPromise` before nulling out state. Without this, closing while LanceDB is still initializing in the background can leave corrupt/partial files that cause subsequent instances to fail.
 
 ```typescript
 if (this.lanceInitPromise) {

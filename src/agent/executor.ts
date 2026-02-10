@@ -1,14 +1,12 @@
 import * as vscode from 'vscode';
 import { OllamaClient } from '../services/model/ollamaClient';
+import type { ExecutorConfig } from '../types/agent';
 import { ChatMessage, ToolCall } from '../types/ollama';
 import { Session, ToolExecution } from '../types/session';
 import { ToolContext, ToolRegistry } from './toolRegistry';
 
-export interface ExecutorConfig {
-  maxIterations: number;
-  toolTimeout: number;
-  temperature: number;
-}
+// Re-export for backward compatibility with agentMode.ts
+export type { ExecutorConfig } from '../types/agent';
 
 export class AgentExecutor {
   constructor(

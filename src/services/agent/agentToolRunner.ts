@@ -2,13 +2,14 @@ import { structuredPatch } from 'diff';
 import * as path from 'path';
 import * as vscode from 'vscode';
 import { ToolRegistry } from '../../agent/toolRegistry';
+import { PersistUiEventFn } from '../../types/agent';
 import { ToolExecution } from '../../types/session';
 import { WebviewMessageEmitter } from '../../views/chatTypes';
 import { getToolActionInfo, getToolSuccessInfo } from '../../views/toolUIFormatter';
 import { DatabaseService } from '../database/databaseService';
 import { PendingEditDecorationProvider } from '../pendingEditDecorationProvider';
 import { AgentFileEditHandler } from './agentFileEditHandler';
-import { AgentTerminalHandler, PersistUiEventFn } from './agentTerminalHandler';
+import { AgentTerminalHandler } from './agentTerminalHandler';
 import { CheckpointManager } from './checkpointManager';
 
 // ---------------------------------------------------------------------------

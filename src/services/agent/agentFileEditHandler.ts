@@ -1,12 +1,12 @@
 import * as path from 'path';
 import * as vscode from 'vscode';
 import { ToolRegistry } from '../../agent/toolRegistry';
+import { PersistUiEventFn } from '../../types/agent';
 import { renderDiffHtml } from '../../utils/diffRenderer';
 import { DEFAULT_SENSITIVE_FILE_PATTERNS, evaluateFileSensitivity } from '../../utils/fileSensitivity';
 import { WebviewMessageEmitter } from '../../views/chatTypes';
 import { DatabaseService } from '../database/databaseService';
 import { EditManager } from '../editManager';
-import { PersistUiEventFn } from './agentTerminalHandler';
 import { ApprovalManager } from './approvalManager';
 
 // ---------------------------------------------------------------------------

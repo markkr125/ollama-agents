@@ -10,7 +10,7 @@ import { WebviewMessageEmitter } from './chatTypes';
 /**
  * Build enriched model info array with capabilities for the webview.
  */
-function enrichModels(models: Model[]) {
+export function enrichModels(models: Model[]) {
   return models.map(m => {
     const caps = getModelCapabilities(m);
     return {

@@ -1,21 +1,16 @@
 import * as path from 'path';
 import * as vscode from 'vscode';
 import { ToolRegistry } from '../../agent/toolRegistry';
+import type { PersistUiEventFn } from '../../types/agent';
 import { analyzeDangerousCommand } from '../../utils/commandSafety';
 import { computeTerminalApprovalDecision } from '../../utils/terminalApproval';
 import { WebviewMessageEmitter } from '../../views/chatTypes';
 import { DatabaseService } from '../database/databaseService';
 import { ApprovalManager } from './approvalManager';
 
-// ---------------------------------------------------------------------------
-// PersistUiEvent callback type — avoids circular dependency on executor
-// ---------------------------------------------------------------------------
-
-export type PersistUiEventFn = (
-  sessionId: string | undefined,
-  eventType: string,
-  payload: Record<string, any>
-) => Promise<void>;
+// Re-export PersistUiEventFn from the shared types location.
+// Consumers should prefer importing from '../../types/agent' directly.
+export type { PersistUiEventFn } from '../../types/agent';
 
 // ---------------------------------------------------------------------------
 // AgentTerminalHandler — terminal command safety check, approval flow, and

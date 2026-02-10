@@ -89,12 +89,16 @@ Called once after the while-loop exits. Handles:
 - `filesChanged` final emission with checkpoint
 - Has its own `persistUiEvent` (does not share the executor's instance)
 
+### Shared Types Location
+
+All core agent types (`Tool`, `ToolContext`, `ExecutorConfig`, `PersistUiEventFn`) live in `src/types/agent.ts`. Both `toolRegistry.ts` and `agentTerminalHandler.ts` re-export them for backward compatibility, but new code should import from `types/agent` directly.
+
 ### Sub-Handler Dependency Pattern
 
 Sub-handlers receive their dependencies via constructor injection (not by holding a reference to the executor). This prevents circular dependencies:
 
 ```typescript
-// PersistUiEventFn type — defined in agentTerminalHandler.ts to avoid circular dep
+// PersistUiEventFn type — defined in src/types/agent.ts (shared location)
 export type PersistUiEventFn = (
   sessionId: string | undefined,
   eventType: string,
@@ -208,9 +212,33 @@ The executor supports two tool calling paths, selected based on model capabiliti
 
 ## ToolRegistry (`src/agent/toolRegistry.ts`)
 
-Defines tools available to the agent for autonomous operations.
+Manages tool registration, lookup, and execution. The registry itself is a slim class (~110 LOC) — individual tool implementations live in `src/agent/tools/`, one file per tool.
 
-**Built-in Tools (6 total — defined in `registerBuiltInTools()`):**
+### Tool File Structure
+
+```
+src/agent/tools/
+├── index.ts              # Barrel export — builtInTools[] array
+├── pathUtils.ts          # resolveWorkspacePath() shared utility
+├── readFile.ts           # read_file tool
+├── writeFile.ts          # write_file tool
+├── searchWorkspace.ts    # search_workspace tool
+├── listFiles.ts          # list_files tool
+├── runTerminalCommand.ts # run_terminal_command tool
+└── getDiagnostics.ts     # get_diagnostics tool
+```
+
+### Shared Types (`src/types/agent.ts`)
+
+All core agent types are centralised in `src/types/agent.ts`:
+- `Tool` — tool definition (name, description, schema, execute)
+- `ToolContext` — runtime context for tool execution
+- `ExecutorConfig` — agent loop configuration (maxIterations, toolTimeout, temperature)
+- `PersistUiEventFn` — callback type for DB persistence
+
+`toolRegistry.ts` and `agentTerminalHandler.ts` re-export these types for backward compatibility.
+
+**Built-in Tools (6 total):**
 | Tool | Description |
 |------|-------------|
 | `read_file` | Read file contents |
@@ -360,27 +388,14 @@ Both terminal and file edit approvals follow the **persist+post sequence** defin
 
 ## Adding a New Tool
 
-1. Add to `toolRegistry.ts` in `registerBuiltInTools()`:
-```typescript
-this.register({
-  name: 'my_tool',
-  description: 'What this tool does',
-  schema: {
-    type: 'object',
-    properties: {
-      param1: { type: 'string', description: 'Param description' }
-    },
-    required: ['param1']
-  },
-  execute: async (params, context) => {
-    // Implementation
-    return 'Result string';
-  }
-});
-```
+> **Full step-by-step guide**: See the `add-agent-tool` skill (`.github/skills/add-agent-tool/SKILL.md`).
 
-2. Add UI representation in `getToolActionInfo()` in `src/views/toolUIFormatter.ts`
+Each tool lives in its own file under `src/agent/tools/`. Quick summary:
 
-3. Add to Tools section in settings UI
+1. **Create tool file** — `src/agent/tools/myTool.ts` exporting a `Tool` object (`{ name, description, schema, execute }`).
+2. **Register in barrel** — Add to `builtInTools[]` in `src/agent/tools/index.ts`.
+3. **Add UI mapping** — Add a `case` in `getToolActionInfo()` in `src/views/toolUIFormatter.ts`.
+4. **Add to Settings UI** (if toggleable) — `src/webview/components/settings/components/ToolsSection.vue`.
+5. **Write tests** — `tests/extension/suite/agent/toolRegistry.test.ts`.
 
-4. Write tests in `tests/extension/suite/agent/toolRegistry.test.ts`
+Execution routing: `agentToolRunner.ts` calls `ToolRegistry.execute()` for standard tools. Terminal commands and file edits have dedicated sub-handlers (`agentTerminalHandler.ts`, `agentFileEditHandler.ts`).

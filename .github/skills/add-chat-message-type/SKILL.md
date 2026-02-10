@@ -29,7 +29,7 @@ this.emitter.postMessage({
 | Agent tool execution / progress | `src/services/agent/agentChatExecutor.ts` (orchestrator) + `src/services/agent/agentToolRunner.ts` (tool batch execution) |
 | Session state / list updates | `src/views/chatSessionController.ts` |
 | Settings / connection / DB ops | `src/views/settingsHandler.ts` |
-| Chat/agent mode dispatch | `src/views/chatView.ts` |
+| Chat/agent mode dispatch | `src/views/messageHandlers/chatMessageHandler.ts` |
 
 ### Step 2: Add Type Interface (optional but recommended)
 
@@ -105,20 +105,39 @@ vscode.postMessage({ type: 'myAction', payload: value });
 
 Typically called from an action function in `src/webview/scripts/core/actions/`.
 
-### Step 2: Handle in Backend Router
+### Step 2: Handle in Backend via IMessageHandler
 
-In `src/views/chatView.ts`, add a `case` in the `resolveWebviewView` → `onDidReceiveMessage` switch:
+The backend uses a `MessageRouter` that dispatches messages to `IMessageHandler` classes. Add your message type to the appropriate handler in `src/views/messageHandlers/`:
+
+| Concern | Handler File |
+|---------|-------------|
+| Chat / agent mode / model selection | `chatMessageHandler.ts` |
+| Session load / delete / search | `sessionMessageHandler.ts` |
+| Settings / connection / DB | `settingsMessageHandler.ts` |
+| Tool / file approvals | `approvalMessageHandler.ts` |
+| Keep / undo / diff stats | `fileChangeMessageHandler.ts` |
+| Model capabilities / toggle | `modelMessageHandler.ts` |
+| Inline review navigation | `reviewNavMessageHandler.ts` |
+| New concern? | Create a new `IMessageHandler` class |
+
+1. Add the message type string to the handler's `handledTypes` array
+2. Add a case in the handler's `handle(data)` method:
 
 ```typescript
-case 'myAction':
-  await this.handleMyAction(data.payload);
-  break;
+class MyHandler implements IMessageHandler {
+  readonly handledTypes = ['existingType', 'myAction'] as const;
+
+  async handle(data: any): Promise<void> {
+    switch (data.type) {
+      case 'myAction':
+        await this.handleMyAction(data.payload);
+        break;
+    }
+  }
+}
 ```
 
-**Keep the handler thin** — if logic exceeds ~10 lines, delegate to the appropriate service:
-- Session operations → `chatSessionController`
-- Settings/connection → `settingsHandler`
-- Agent tool responses → `agentExecutor`
+**Keep the handler focused** — if it doesn't fit an existing handler's concern, create a new `IMessageHandler` class, register it in `chatView.ts`'s constructor, and add it to the `MessageRouter`.
 
 ### Step 3: Add Action Function (if triggered by UI)
 
@@ -155,6 +174,6 @@ if (msg.sessionId && msg.sessionId !== currentSessionId.value) return;
 
 **Frontend → Backend:**
 - [ ] `vscode.postMessage()` call (in action function or component)
-- [ ] Case in `chatView.ts` → `onDidReceiveMessage` switch
-- [ ] Delegate to appropriate service (keep `chatView.ts` thin)
+- [ ] Handler in appropriate `src/views/messageHandlers/*.ts` class (add to `handledTypes` + `handle()` switch)
+- [ ] Delegate to appropriate service (keep handlers focused)
 - [ ] Update `ui-messages.instructions.md` protocol table
