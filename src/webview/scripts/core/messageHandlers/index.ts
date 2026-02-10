@@ -13,7 +13,7 @@ import type {
     ToolApprovalResultMessage
 } from '../types';
 import { handleFileEditApprovalResult, handleRequestFileEditApproval, handleRequestToolApproval, handleToolApprovalResult } from './approvals';
-import { handleFileChangeResult, handleFilesChanged, handleFilesDiffStats, handleKeepUndoResult } from './filesChanged';
+import { handleFileChangeResult, handleFilesChanged, handleFilesDiffStats, handleKeepUndoResult, handleReviewChangePosition } from './filesChanged';
 import { handleFinishProgressGroup, handleShowError, handleShowToolAction, handleStartProgressGroup } from './progress';
 import {
     handleAddContextItem,
@@ -180,6 +180,9 @@ export const handleMessage = (msg: any) => {
       break;
     case 'keepUndoResult':
       handleKeepUndoResult(msg);
+      break;
+    case 'reviewChangePosition':
+      handleReviewChangePosition(msg);
       break;
   }
 };

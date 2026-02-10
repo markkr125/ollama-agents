@@ -42,10 +42,12 @@ Tracks file-change groups created per agent execution (one checkpoint per user p
 
 | Column | Type | Purpose |
 |--------|------|---------|
-| `id` | `TEXT PRIMARY KEY` | UUID, created at start of each agent execution |
+| `id` | `TEXT PRIMARY KEY` | UUID (`ckpt_<timestamp>_<random>`), created at start of each agent execution |
 | `session_id` | `TEXT NOT NULL` | FK → sessions (CASCADE delete) |
 | `message_id` | `TEXT` | Associated message (nullable) |
 | `status` | `TEXT NOT NULL DEFAULT 'pending'` | `'pending'` → `'kept'` / `'undone'` / `'partial'` |
+| `total_additions` | `INTEGER DEFAULT NULL` | Cached total added lines across all files (migration-added) |
+| `total_deletions` | `INTEGER DEFAULT NULL` | Cached total deleted lines across all files (migration-added) |
 | `created_at` | `INTEGER NOT NULL` | Timestamp |
 
 ### SQLite `file_snapshots` Table
@@ -60,6 +62,8 @@ Stores original file content captured BEFORE agent edits, enabling undo:
 | `original_content` | `TEXT` | Content before edit (NULL after kept+pruned) |
 | `action` | `TEXT NOT NULL DEFAULT 'modified'` | `'modified'` / `'created'` |
 | `file_status` | `TEXT NOT NULL DEFAULT 'pending'` | `'pending'` / `'kept'` / `'undone'` |
+| `additions` | `INTEGER DEFAULT NULL` | Per-file added line count (migration-added, NULL until stats computed) |
+| `deletions` | `INTEGER DEFAULT NULL` | Per-file deleted line count (migration-added, NULL until stats computed) |
 | `created_at` | `INTEGER NOT NULL` | Timestamp |
 | **UNIQUE** | | `(checkpoint_id, file_path)` — INSERT OR IGNORE keeps only first snapshot |
 
@@ -68,6 +72,19 @@ Stores original file content captured BEFORE agent edits, enabling undo:
 2. `updateFileSnapshotStatus()` flips `file_status` to `'kept'` or `'undone'`
 3. `pruneCheckpointContent()` NULLs out `original_content` for kept files (saves storage)
 4. Review service reads `file_snapshots` with `file_status = 'pending'` to build decorations
+5. `updateFileDiffStats()` batch-updates `additions`/`deletions` on `file_snapshots` for a checkpoint
+6. `updateCheckpointDiffStats()` caches `total_additions`/`total_deletions` on `checkpoints`
+
+### Session Stats (`getSessionsPendingStats`)
+
+The sessions panel shows `+N -N` badges per session. This is computed by `getSessionsPendingStats()` via a **two-level aggregation query**:
+
+1. **Inner query** (per-checkpoint): For each checkpoint with pending files, sums `file_snapshots.additions`/`deletions`. If any files have non-NULL per-file stats, uses those sums; otherwise falls back to `checkpoints.total_additions`/`total_deletions`.
+2. **Outer query** (per-session): Sums the per-checkpoint totals + file counts across all checkpoints in a session.
+
+This two-level approach handles the transition period where some checkpoints have per-file stats and others only have checkpoint-level fallback totals. The `+0 -0` badge is hidden on the frontend via `v-if="(pendingAdditions ?? 0) > 0 || (pendingDeletions ?? 0) > 0"`.
+
+**Refresh trigger**: All four keep/undo handlers in `chatView.ts` call `await sessionController.sendSessionsList()` after resolving, which calls `getSessionsPendingStats()` and pushes updated stats to the webview.
 
 ## ⚠️ NEVER Auto-Delete User Data
 

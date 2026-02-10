@@ -16,14 +16,28 @@ export const undoFile = (checkpointId: string, filePath: string) => {
   vscode.postMessage({ type: 'undoFile', checkpointId, filePath });
 };
 
-export const keepAllChanges = (checkpointId: string) => {
-  vscode.postMessage({ type: 'keepAllChanges', checkpointId });
+/** Keep all pending changes across ALL checkpoints. */
+export const keepAllChanges = (checkpointIds: string[]) => {
+  for (const checkpointId of checkpointIds) {
+    vscode.postMessage({ type: 'keepAllChanges', checkpointId });
+  }
 };
 
-export const undoAllChanges = (checkpointId: string) => {
-  vscode.postMessage({ type: 'undoAllChanges', checkpointId });
+/** Undo all pending changes across ALL checkpoints. */
+export const undoAllChanges = (checkpointIds: string[]) => {
+  for (const checkpointId of checkpointIds) {
+    vscode.postMessage({ type: 'undoAllChanges', checkpointId });
+  }
 };
 
 export const requestFilesDiffStats = (checkpointId: string) => {
   vscode.postMessage({ type: 'requestFilesDiffStats', checkpointId });
+};
+
+export const navigatePrevChange = (checkpointIds: string[]) => {
+  vscode.postMessage({ type: 'navigateReviewPrev', checkpointIds });
+};
+
+export const navigateNextChange = (checkpointIds: string[]) => {
+  vscode.postMessage({ type: 'navigateReviewNext', checkpointIds });
 };

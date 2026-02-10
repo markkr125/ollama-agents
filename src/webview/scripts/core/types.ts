@@ -45,17 +45,21 @@ export type FileChangeFileItem = {
   additions?: number;
   deletions?: number;
   status: 'pending' | 'kept' | 'undone';
+  checkpointId: string;
 };
 
 export type AssistantThreadFilesChangedBlock = {
   type: 'filesChanged';
-  checkpointId: string;
+  checkpointIds: string[];
   files: FileChangeFileItem[];
   totalAdditions?: number;
   totalDeletions?: number;
   status: 'pending' | 'kept' | 'undone' | 'partial';
   collapsed: boolean;
   statsLoading: boolean;
+  currentChange?: number;
+  totalChanges?: number;
+  activeFilePath?: string;
 };
 
 export type AssistantThreadItem = {
@@ -120,6 +124,9 @@ export type SessionItem = {
   timestamp: number;
   active: boolean;
   status: 'idle' | 'generating' | 'completed' | 'error';
+  pendingAdditions?: number;
+  pendingDeletions?: number;
+  pendingFileCount?: number;
 };
 
 export type StatusMessage = {

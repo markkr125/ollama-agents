@@ -11,8 +11,8 @@
         <span class="stat-del">-{{ block.totalDeletions }}</span>
       </span>
       <span class="files-changed-actions" @click.stop>
-        <button class="fc-btn fc-btn-keep" @click="handleKeepAll" title="Keep all changes">Keep</button>
-        <button class="fc-btn fc-btn-undo" @click="handleUndoAll" title="Undo all changes">Undo</button>
+        <button class="fc-btn fc-btn-keep" @click="handleKeepAll" title="Keep all changes">Keep All</button>
+        <button class="fc-btn fc-btn-undo" @click="handleUndoAll" title="Undo all changes">Undo All</button>
       </span>
     </div>
 
@@ -21,7 +21,8 @@
         v-for="file in block.files"
         :key="file.path"
         class="files-changed-file"
-        @click="handleOpenReview(file.path)"
+        :class="{ 'files-changed-file--active': block.activeFilePath === file.path }"
+        @click="handleOpenReview(file.path, file.checkpointId)"
       >
         <span class="file-ext-badge" :class="fileExtClass(file.path)">{{ fileExt(file.path) }}</span>
         <span class="file-name" :title="file.path">{{ fileName(file.path) }}</span>
@@ -31,16 +32,22 @@
           <span class="stat-del">-{{ file.deletions }}</span>
         </span>
         <span class="file-actions" @click.stop>
-          <button class="fc-file-btn" @click="handleKeepFile(file.path)" title="Keep this file">✓</button>
-          <button class="fc-file-btn" @click="handleUndoFile(file.path)" title="Undo this file">↩</button>
+          <button class="fc-file-btn" @click="handleKeepFile(file.path, file.checkpointId)" title="Keep this file">✓</button>
+          <button class="fc-file-btn" @click="handleUndoFile(file.path, file.checkpointId)" title="Undo this file">↩</button>
         </span>
       </div>
+    </div>
+
+    <div class="files-changed-nav" v-if="block.totalChanges" @click.stop>
+      <span class="fc-nav-label">Change {{ block.currentChange ?? 0 }} of {{ block.totalChanges }}</span>
+      <button class="fc-nav-arrow-btn" @click="handleNavPrev" title="Previous change">←</button>
+      <button class="fc-nav-arrow-btn" @click="handleNavNext" title="Next change">→</button>
     </div>
   </div>
 </template>
 
 <script setup lang="ts">
-import { keepAllChanges, keepFile, openFileChangeReview, undoAllChanges, undoFile } from '../../../scripts/core/actions';
+import { keepAllChanges, keepFile, navigateNextChange, navigatePrevChange, openFileChangeReview, undoAllChanges, undoFile } from '../../../scripts/core/actions';
 import type { AssistantThreadFilesChangedBlock } from '../../../scripts/core/types';
 
 const props = defineProps<{
@@ -82,23 +89,31 @@ const fileExtClass = (path: string): string => {
   return extColors[ext] || 'ext-default';
 };
 
-const handleOpenReview = (filePath: string) => {
-  openFileChangeReview(props.block.checkpointId, filePath);
+const handleOpenReview = (filePath: string, checkpointId: string) => {
+  openFileChangeReview(checkpointId, filePath);
 };
 
-const handleKeepFile = (filePath: string) => {
-  keepFile(props.block.checkpointId, filePath);
+const handleKeepFile = (filePath: string, checkpointId: string) => {
+  keepFile(checkpointId, filePath);
 };
 
-const handleUndoFile = (filePath: string) => {
-  undoFile(props.block.checkpointId, filePath);
+const handleUndoFile = (filePath: string, checkpointId: string) => {
+  undoFile(checkpointId, filePath);
 };
 
 const handleKeepAll = () => {
-  keepAllChanges(props.block.checkpointId);
+  keepAllChanges(props.block.checkpointIds);
 };
 
 const handleUndoAll = () => {
-  undoAllChanges(props.block.checkpointId);
+  undoAllChanges(props.block.checkpointIds);
+};
+
+const handleNavPrev = () => {
+  if (props.block.checkpointIds.length) navigatePrevChange([...props.block.checkpointIds]);
+};
+
+const handleNavNext = () => {
+  if (props.block.checkpointIds.length) navigateNextChange([...props.block.checkpointIds]);
 };
 </script>

@@ -196,6 +196,14 @@ export class SessionIndexService {
       ON file_snapshots(checkpoint_id);
     `);
 
+    // Additive migrations for checkpoint diff stats
+    await this.ensureColumn('checkpoints', 'total_additions', 'INTEGER DEFAULT NULL');
+    await this.ensureColumn('checkpoints', 'total_deletions', 'INTEGER DEFAULT NULL');
+
+    // Per-file diff stats (accurate session totals after partial keep/undo)
+    await this.ensureColumn('file_snapshots', 'additions', 'INTEGER DEFAULT NULL');
+    await this.ensureColumn('file_snapshots', 'deletions', 'INTEGER DEFAULT NULL');
+
     this.initialized = true;
   }
 
@@ -641,6 +649,65 @@ export class SessionIndexService {
     await dbRun(this.db!, 'UPDATE checkpoints SET status = ? WHERE id = ?;', [status, id]);
   }
 
+  /**
+   * Cache aggregate diff stats on a checkpoint after they've been computed.
+   */
+  async updateCheckpointDiffStats(id: string, totalAdditions: number, totalDeletions: number): Promise<void> {
+    this.ensureReady();
+    await dbRun(this.db!,
+      'UPDATE checkpoints SET total_additions = ?, total_deletions = ? WHERE id = ?;',
+      [totalAdditions, totalDeletions, id]
+    );
+  }
+
+  /**
+   * Get aggregate pending change stats per session (only sessions with pending/partial checkpoints).
+   * Returns a map of session_id → { additions, deletions, fileCount }.
+   */
+  async getSessionsPendingStats(): Promise<Map<string, { additions: number; deletions: number; fileCount: number }>> {
+    this.ensureReady();
+    // Two-level aggregation:
+    //   Inner: per-checkpoint — if any file has per-file stats, sum those
+    //          (accurate after partial keep/undo); otherwise fall back to
+    //          checkpoint-level cached totals (backward compat for old data).
+    //   Outer: per-session — sum the checkpoint subtotals.
+    const rows = await dbAll(this.db!,
+      `SELECT sub.session_id,
+              SUM(sub.additions) AS additions,
+              SUM(sub.deletions) AS deletions,
+              SUM(sub.file_count) AS file_count
+       FROM (
+         SELECT c.session_id,
+                c.id AS checkpoint_id,
+                CASE
+                  WHEN SUM(CASE WHEN fs.additions IS NOT NULL THEN 1 ELSE 0 END) > 0
+                  THEN SUM(COALESCE(fs.additions, 0))
+                  ELSE COALESCE(c.total_additions, 0)
+                END AS additions,
+                CASE
+                  WHEN SUM(CASE WHEN fs.deletions IS NOT NULL THEN 1 ELSE 0 END) > 0
+                  THEN SUM(COALESCE(fs.deletions, 0))
+                  ELSE COALESCE(c.total_deletions, 0)
+                END AS deletions,
+                COUNT(DISTINCT fs.file_path) AS file_count
+         FROM checkpoints c
+         INNER JOIN file_snapshots fs ON fs.checkpoint_id = c.id AND fs.file_status = 'pending'
+         WHERE c.status IN ('pending', 'partial')
+         GROUP BY c.session_id, c.id
+       ) sub
+       GROUP BY sub.session_id;`
+    );
+    const map = new Map<string, { additions: number; deletions: number; fileCount: number }>();
+    for (const r of rows) {
+      map.set(String(r.session_id), {
+        additions: Number(r.additions ?? 0),
+        deletions: Number(r.deletions ?? 0),
+        fileCount: Number(r.file_count ?? 0)
+      });
+    }
+    return map;
+  }
+
   // ---------------------------------------------------------------------------
   // File snapshot CRUD
   // ---------------------------------------------------------------------------
@@ -696,6 +763,19 @@ export class SessionIndexService {
       'UPDATE file_snapshots SET file_status = ? WHERE checkpoint_id = ? AND file_path = ?;',
       [status, checkpointId, filePath]
     );
+  }
+
+  /**
+   * Batch-update per-file diff stats on file_snapshots for a checkpoint.
+   */
+  async updateFileSnapshotsDiffStats(checkpointId: string, fileStats: Array<{ path: string; additions: number; deletions: number }>): Promise<void> {
+    this.ensureReady();
+    for (const f of fileStats) {
+      await dbRun(this.db!,
+        'UPDATE file_snapshots SET additions = ?, deletions = ? WHERE checkpoint_id = ? AND file_path = ?;',
+        [f.additions, f.deletions, checkpointId, f.path]
+      );
+    }
   }
 
   /**

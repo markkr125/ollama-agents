@@ -512,6 +512,16 @@ export class DatabaseService {
     await this.sessionIndex.updateCheckpointStatus(id, status);
   }
 
+  async updateCheckpointDiffStats(id: string, totalAdditions: number, totalDeletions: number): Promise<void> {
+    this.ensureReady();
+    await this.sessionIndex.updateCheckpointDiffStats(id, totalAdditions, totalDeletions);
+  }
+
+  async getSessionsPendingStats() {
+    this.ensureReady();
+    return this.sessionIndex.getSessionsPendingStats();
+  }
+
   async insertFileSnapshot(checkpointId: string, filePath: string, originalContent: string | null, action: string): Promise<void> {
     this.ensureReady();
     await this.sessionIndex.insertFileSnapshot(checkpointId, filePath, originalContent, action);
@@ -530,6 +540,11 @@ export class DatabaseService {
   async updateFileSnapshotStatus(checkpointId: string, filePath: string, status: string): Promise<void> {
     this.ensureReady();
     await this.sessionIndex.updateFileSnapshotStatus(checkpointId, filePath, status);
+  }
+
+  async updateFileSnapshotsDiffStats(checkpointId: string, fileStats: Array<{ path: string; additions: number; deletions: number }>): Promise<void> {
+    this.ensureReady();
+    await this.sessionIndex.updateFileSnapshotsDiffStats(checkpointId, fileStats);
   }
 
   async pruneKeptCheckpointContent(checkpointId: string): Promise<void> {

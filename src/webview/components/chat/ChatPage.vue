@@ -150,8 +150,8 @@
 
     <div v-if="filesChangedBlocks.length" class="files-changed-pinned">
       <FilesChanged
-        v-for="block in filesChangedBlocks"
-        :key="block.checkpointId"
+        v-for="(block, idx) in filesChangedBlocks"
+        :key="idx"
         :block="block"
       />
     </div>

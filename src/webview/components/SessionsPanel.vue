@@ -114,6 +114,10 @@
                      session.status === 'error' ? 'Error' :
                      session.status === 'idle' ? 'Idle' : 'Completed' }}
                 </span>
+                <span v-if="session.pendingFileCount && ((session.pendingAdditions ?? 0) > 0 || (session.pendingDeletions ?? 0) > 0)" class="session-pending-badge" :title="`${session.pendingFileCount} file(s) with pending changes`">
+                  <span class="pending-additions">+{{ session.pendingAdditions }}</span>
+                  <span class="pending-deletions">-{{ session.pendingDeletions }}</span>
+                </span>
               </span>
             </div>
             <span class="session-time">{{ relativeTime(session.timestamp) }}</span>

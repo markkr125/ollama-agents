@@ -9,6 +9,8 @@ AI-powered code completion and chat assistance using local [Ollama](https://olla
 - **Agent Mode** — autonomous coding agent that reads/writes files, runs terminal commands, and iterates until the task is done
 - **Edit Mode** — describe edits in natural language, get code changes applied to your selection
 - **Command Approval** — terminal commands and sensitive file edits require explicit approval with editable commands and side-by-side diffs
+- **Files Changed Widget** — review all agent-modified files with per-file diff stats, Keep/Undo actions, and cross-file hunk navigation
+- **Inline Change Review** — green/red line decorations with CodeLens Keep/Undo/Navigate actions directly in the editor
 - **Session History** — all conversations stored locally with SQLite (sessions) and LanceDB (messages + semantic search)
 - **OpenWebUI Support** — connect to remote instances with bearer token authentication (stored in VS Code's encrypted secret storage)
 

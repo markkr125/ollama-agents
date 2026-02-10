@@ -1,51 +1,51 @@
 import {
-  applySearchResults,
-  applySettings,
-  clearToken,
-  scrollToBottom,
-  setGenerating,
-  showStatus,
-  updateInitState,
-  updateThinking
+    applySearchResults,
+    applySettings,
+    clearToken,
+    scrollToBottom,
+    setGenerating,
+    showStatus,
+    updateInitState,
+    updateThinking
 } from '../actions/index';
 import {
-  autoApproveCommands,
-  autoApproveConfirmVisible,
-  autoApproveSensitiveEdits,
-  capabilityCheckProgress,
-  connectionStatus,
-  contextList,
-  currentAssistantThreadId,
-  currentMode,
-  currentModel,
-  currentPage,
-  currentProgressIndex,
-  currentSessionId,
-  currentStreamIndex,
-  dbMaintenanceStatus,
-  deletingSessionIds,
-  deletionProgress,
-  filesChangedBlocks,
-  hasToken,
-  isFirstRun,
-  isSearching,
-  modelInfo,
-  modelOptions,
-  recreateMessagesStatus,
-  scrollTargetMessageId,
-  selectedSessionIds,
-  selectionMode,
-  sessions,
-  sessionsCursor,
-  sessionSensitiveFilePatterns,
-  sessionsHasMore,
-  sessionsInitialLoaded,
-  sessionsLoading,
-  settings,
-  temperatureSlider,
-  timeline,
-  vscode,
-  warningBanner
+    autoApproveCommands,
+    autoApproveConfirmVisible,
+    autoApproveSensitiveEdits,
+    capabilityCheckProgress,
+    connectionStatus,
+    contextList,
+    currentAssistantThreadId,
+    currentMode,
+    currentModel,
+    currentPage,
+    currentProgressIndex,
+    currentSessionId,
+    currentStreamIndex,
+    dbMaintenanceStatus,
+    deletingSessionIds,
+    deletionProgress,
+    filesChangedBlocks,
+    hasToken,
+    isFirstRun,
+    isSearching,
+    modelInfo,
+    modelOptions,
+    recreateMessagesStatus,
+    scrollTargetMessageId,
+    selectedSessionIds,
+    selectionMode,
+    sessions,
+    sessionsCursor,
+    sessionSensitiveFilePatterns,
+    sessionsHasMore,
+    sessionsInitialLoaded,
+    sessionsLoading,
+    settings,
+    temperatureSlider,
+    timeline,
+    vscode,
+    warningBanner
 } from '../state';
 import { buildTimelineFromMessages } from '../timelineBuilder';
 import type { InitMessage, LoadSessionMessagesMessage, SearchResultGroup } from '../types';
@@ -131,8 +131,10 @@ export const handleLoadSessionMessages = (msg: LoadSessionMessagesMessage) => {
 
   // Request diff stats for any pending filesChanged blocks restored from history
   for (const block of filesChangedBlocks.value) {
-    if (block.statsLoading && block.checkpointId) {
-      vscode.postMessage({ type: 'requestFilesDiffStats', checkpointId: block.checkpointId });
+    if (block.statsLoading && block.checkpointIds?.length) {
+      for (const checkpointId of block.checkpointIds) {
+        vscode.postMessage({ type: 'requestFilesDiffStats', checkpointId });
+      }
     }
   }
 };

@@ -1,13 +1,13 @@
 import { recalcBlockTotals } from './messageHandlers/filesChanged';
 import { filesChangedBlocks } from './state';
 import type {
-  AssistantThreadFilesChangedBlock,
-  AssistantThreadItem,
-  AssistantThreadToolsBlock,
-  CommandApprovalItem,
-  FileEditApprovalItem,
-  ProgressItem,
-  TimelineItem
+    AssistantThreadFilesChangedBlock,
+    AssistantThreadItem,
+    AssistantThreadToolsBlock,
+    CommandApprovalItem,
+    FileEditApprovalItem,
+    ProgressItem,
+    TimelineItem
 } from './types';
 
 /**
@@ -356,76 +356,85 @@ export const buildTimelineFromMessages = (messages: any[]): TimelineItem[] => {
             const checkpointId = payload.checkpointId || '';
             const isPending = !payload.status || payload.status === 'pending';
 
-            // Merge into existing block with same checkpointId (matches live handler)
-            const existing = checkpointId
-              ? restoredFcBlocks.find(b => b.checkpointId === checkpointId)
-              : null;
+            // ONE block — merge all filesChanged events into a single block
+            let theBlock = restoredFcBlocks.length > 0 ? restoredFcBlocks[0] : null;
 
-            if (existing) {
-              // Add any files not already in the block
-              for (const f of payload.files || []) {
-                if (!existing.files.some((ef: any) => ef.path === f.path)) {
-                  existing.files.push({
-                    path: f.path,
-                    action: f.action || 'modified',
-                    additions: undefined,
-                    deletions: undefined,
-                    status: 'pending' as const
-                  });
-                }
-              }
-            } else {
-              const block: AssistantThreadFilesChangedBlock = {
+            if (!theBlock) {
+              theBlock = {
                 type: 'filesChanged',
-                checkpointId,
-                files: (payload.files || []).map((f: any) => ({
-                  path: f.path,
-                  action: f.action || 'modified',
-                  additions: undefined,
-                  deletions: undefined,
-                  status: payload.status === 'kept' ? 'kept' as const
-                    : payload.status === 'undone' ? 'undone' as const
-                    : 'pending' as const
-                })),
+                checkpointIds: checkpointId ? [checkpointId] : [],
+                files: [],
                 totalAdditions: undefined,
                 totalDeletions: undefined,
                 status: payload.status || 'pending',
                 collapsed: !isPending,
                 statsLoading: isPending
               };
-              restoredFcBlocks.push(block);
+              restoredFcBlocks.push(theBlock);
+            } else {
+              // Track this checkpoint
+              if (checkpointId && !theBlock.checkpointIds.includes(checkpointId)) {
+                theBlock.checkpointIds.push(checkpointId);
+              }
+              // If new event is pending, ensure block is visible
+              if (isPending) {
+                theBlock.collapsed = false;
+                theBlock.statsLoading = true;
+              }
+            }
+
+            // Add files not already present
+            for (const f of payload.files || []) {
+              if (!theBlock.files.some((ef: any) => ef.path === f.path)) {
+                theBlock.files.push({
+                  path: f.path,
+                  action: f.action || 'modified',
+                  additions: undefined,
+                  deletions: undefined,
+                  status: payload.status === 'kept' ? 'kept' as const
+                    : payload.status === 'undone' ? 'undone' as const
+                    : 'pending' as const,
+                  checkpointId
+                });
+              }
             }
             break;
           }
           case 'fileChangeResult': {
-            // Remove a resolved file from an existing filesChanged block
+            // Remove a resolved file from the ONE block
             const payload = uiEvent.payload || {};
-            if (payload.success && payload.checkpointId) {
-              const fcBlock = restoredFcBlocks.find(b => b.checkpointId === payload.checkpointId);
-              if (fcBlock) {
-                const idx = fcBlock.files.findIndex((f: any) => f.path === payload.filePath);
-                if (idx >= 0) {
-                  fcBlock.files.splice(idx, 1);
-                }
-                // If no files left, remove the block entirely
-                if (fcBlock.files.length === 0) {
-                  const blockIdx = restoredFcBlocks.indexOf(fcBlock);
-                  if (blockIdx >= 0) restoredFcBlocks.splice(blockIdx, 1);
-                } else {
-                  recalcBlockTotals(fcBlock);
-                }
+            if (payload.success && payload.checkpointId && restoredFcBlocks.length > 0) {
+              const fcBlock = restoredFcBlocks[0];
+              const idx = fcBlock.files.findIndex((f: any) => f.path === payload.filePath && f.checkpointId === payload.checkpointId);
+              if (idx >= 0) {
+                fcBlock.files.splice(idx, 1);
+              }
+              // Clean up checkpointId if no files reference it
+              if (!fcBlock.files.some(f => f.checkpointId === payload.checkpointId)) {
+                const cidx = fcBlock.checkpointIds.indexOf(payload.checkpointId);
+                if (cidx >= 0) fcBlock.checkpointIds.splice(cidx, 1);
+              }
+              // If no files left, remove the block
+              if (fcBlock.files.length === 0) {
+                restoredFcBlocks.splice(0, 1);
+              } else {
+                recalcBlockTotals(fcBlock);
               }
             }
             break;
           }
           case 'keepUndoResult': {
-            // Keep All / Undo All resolves every file — remove ALL blocks for this checkpoint
+            // Remove all files for this checkpoint from the ONE block
             const payload = uiEvent.payload || {};
-            if (payload.success && payload.checkpointId) {
-              for (let i = restoredFcBlocks.length - 1; i >= 0; i--) {
-                if (restoredFcBlocks[i].checkpointId === payload.checkpointId) {
-                  restoredFcBlocks.splice(i, 1);
-                }
+            if (payload.success && payload.checkpointId && restoredFcBlocks.length > 0) {
+              const fcBlock = restoredFcBlocks[0];
+              fcBlock.files = fcBlock.files.filter(f => f.checkpointId !== payload.checkpointId);
+              const cidx = fcBlock.checkpointIds.indexOf(payload.checkpointId);
+              if (cidx >= 0) fcBlock.checkpointIds.splice(cidx, 1);
+              if (fcBlock.files.length === 0) {
+                restoredFcBlocks.splice(0, 1);
+              } else {
+                recalcBlockTotals(fcBlock);
               }
             }
             break;

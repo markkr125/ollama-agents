@@ -294,6 +294,10 @@ export class ChatViewProvider implements vscode.WebviewViewProvider, WebviewMess
         case 'openFileChangeReview':
           if (this.reviewService) {
             await this.reviewService.openFileReview(data.checkpointId, data.filePath, this.sessionController.getCurrentSessionId());
+            const pos = this.reviewService.getChangePosition(data.checkpointId);
+            if (pos) {
+              this.postMessage({ type: 'reviewChangePosition', checkpointId: data.checkpointId, current: pos.current, total: pos.total, filePath: pos.filePath });
+            }
           } else {
             await this.agentExecutor.openSnapshotDiff(data.checkpointId, data.filePath, this.sessionController.getCurrentSessionId());
           }
@@ -313,6 +317,22 @@ export class ChatViewProvider implements vscode.WebviewViewProvider, WebviewMess
         case 'undoAllChanges':
           await this.handleUndoAllChanges(data.checkpointId, data.sessionId);
           break;
+        case 'navigateReviewPrev': {
+          try {
+            const ids = data.checkpointIds || (data.checkpointId ? [data.checkpointId] : []);
+            const pos = await this.reviewService?.navigateChange('prev', ids);
+            if (pos) { this.postMessage({ type: 'reviewChangePosition', checkpointId: ids[0], current: pos.current, total: pos.total, filePath: pos.filePath }); }
+          } catch (err: any) { console.error('[ChatView] navigateReviewPrev failed:', err); }
+          break;
+        }
+        case 'navigateReviewNext': {
+          try {
+            const ids = data.checkpointIds || (data.checkpointId ? [data.checkpointId] : []);
+            const pos = await this.reviewService?.navigateChange('next', ids);
+            if (pos) { this.postMessage({ type: 'reviewChangePosition', checkpointId: ids[0], current: pos.current, total: pos.total, filePath: pos.filePath }); }
+          } catch (err: any) { console.error('[ChatView] navigateReviewNext failed:', err); }
+          break;
+        }
         case 'refreshCapabilities':
           this.handleRefreshCapabilities(/* onlyMissing */ false);
           break;
@@ -726,6 +746,10 @@ export class ChatViewProvider implements vscode.WebviewViewProvider, WebviewMess
     // Auto-start inline review for any already-open editors
     if (result.checkpointId && this.reviewService) {
       await this.reviewService.startReviewForCheckpoint(result.checkpointId);
+      const pos = this.reviewService.getChangePosition(result.checkpointId);
+      if (pos) {
+        this.postMessage({ type: 'reviewChangePosition', checkpointId: result.checkpointId, current: pos.current, total: pos.total, filePath: pos.filePath });
+      }
     }
   }
 
@@ -817,6 +841,17 @@ export class ChatViewProvider implements vscode.WebviewViewProvider, WebviewMess
     } catch (err: any) {
       console.warn('[ChatView] Failed to compute diff stats:', err);
     }
+    // Send change position — build review session if needed so the
+    // "Change X of Y" counter is populated on first load.
+    if (this.reviewService) {
+      try {
+        await this.reviewService.startReviewForCheckpoint(checkpointId);
+        const pos = this.reviewService.getChangePosition(checkpointId);
+        if (pos) {
+          this.postMessage({ type: 'reviewChangePosition', checkpointId, current: pos.current, total: pos.total, filePath: pos.filePath });
+        }
+      } catch { /* non-critical — navigation still works on click */ }
+    }
   }
 
   private async handleKeepFile(checkpointId: string, filePath: string, sessionId?: string) {
@@ -827,6 +862,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider, WebviewMess
     const payload = { checkpointId, filePath, action: 'kept', success: result.success };
     await this.agentExecutor.persistUiEvent(resolvedSessionId, 'fileChangeResult', payload);
     this.postMessage({ type: 'fileChangeResult', ...payload, sessionId: resolvedSessionId });
+    await this.sessionController.sendSessionsList();
   }
 
   private async handleUndoFile(checkpointId: string, filePath: string, sessionId?: string) {
@@ -837,6 +873,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider, WebviewMess
     const payload = { checkpointId, filePath, action: 'undone', success: result.success };
     await this.agentExecutor.persistUiEvent(resolvedSessionId, 'fileChangeResult', payload);
     this.postMessage({ type: 'fileChangeResult', ...payload, sessionId: resolvedSessionId });
+    await this.sessionController.sendSessionsList();
   }
 
   private async handleKeepAllChanges(checkpointId: string, sessionId?: string) {
@@ -847,6 +884,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider, WebviewMess
     const payload = { checkpointId, action: 'kept', success: result.success };
     await this.agentExecutor.persistUiEvent(resolvedSessionId, 'keepUndoResult', payload);
     this.postMessage({ type: 'keepUndoResult', ...payload, sessionId: resolvedSessionId });
+    await this.sessionController.sendSessionsList();
   }
 
   private async handleUndoAllChanges(checkpointId: string, sessionId?: string) {
@@ -857,6 +895,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider, WebviewMess
     const payload = { checkpointId, action: 'undone', success: result.success, errors: result.errors };
     await this.agentExecutor.persistUiEvent(resolvedSessionId, 'keepUndoResult', payload);
     this.postMessage({ type: 'keepUndoResult', ...payload, sessionId: resolvedSessionId });
+    await this.sessionController.sendSessionsList();
   }
 
   private async getHtmlForWebview(webview: vscode.Webview): Promise<string> {

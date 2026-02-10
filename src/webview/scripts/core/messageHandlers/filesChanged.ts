@@ -2,141 +2,156 @@ import { filesChangedBlocks, vscode } from '../state';
 import type { AssistantThreadFilesChangedBlock, FileChangeFileItem } from '../types';
 
 /**
- * Handle 'filesChanged' message from backend — create or update a standalone
- * filesChanged block (NOT inside any assistant thread).
+ * Handle 'filesChanged' message from backend.
  *
- * This is called both:
- *  - Incrementally during the agent loop (each file write emits the growing list)
- *  - Once at end-of-loop as the final persisted event
- *
- * If a block with the same checkpointId already exists, new files are merged in.
- * If no block exists yet, one is created.
+ * There is only ever ONE filesChanged block. If one already exists, new files
+ * from a different checkpoint are merged into it. If none exists, one is created.
  */
 export const handleFilesChanged = (msg: any) => {
   const checkpointId = msg.checkpointId || '';
+  const block = getOrCreateBlock();
 
-  // Try to find an existing block for this checkpoint (incremental update)
-  let block = checkpointId ? findFilesChangedBlock(checkpointId) : null;
-
-  if (block) {
-    // Merge: add any files not already in the block
-    let added = false;
-    for (const f of msg.files || []) {
-      const exists = block.files.some((existing: FileChangeFileItem) => existing.path === f.path);
-      if (!exists) {
-        block.files.push({
-          path: f.path,
-          action: f.action || 'modified',
-          additions: undefined,
-          deletions: undefined,
-          status: 'pending' as const
-        });
-        added = true;
-      }
-    }
-    // Re-request diff stats when new files were added
-    if (added && checkpointId) {
-      block.statsLoading = true;
-      vscode.postMessage({ type: 'requestFilesDiffStats', checkpointId });
-    }
-    return;
+  // Track this checkpoint if new
+  if (checkpointId && !block.checkpointIds.includes(checkpointId)) {
+    block.checkpointIds.push(checkpointId);
   }
 
-  // No existing block — create a new one
-  const newBlock: AssistantThreadFilesChangedBlock = {
-    type: 'filesChanged',
-    checkpointId,
-    files: (msg.files || []).map((f: any) => ({
-      path: f.path,
-      action: f.action || 'modified',
-      additions: undefined,
-      deletions: undefined,
-      status: 'pending' as const
-    })),
-    totalAdditions: undefined,
-    totalDeletions: undefined,
-    status: msg.status || 'pending',
-    collapsed: false,
-    statsLoading: true
-  };
+  // Merge files: add any not already in the block (by path)
+  let added = false;
+  for (const f of msg.files || []) {
+    const exists = block.files.some((existing: FileChangeFileItem) => existing.path === f.path);
+    if (!exists) {
+      block.files.push({
+        path: f.path,
+        action: f.action || 'modified',
+        additions: undefined,
+        deletions: undefined,
+        status: 'pending' as const,
+        checkpointId
+      });
+      added = true;
+    }
+  }
 
-  filesChangedBlocks.value.push(newBlock);
-
-  // Request diff stats from backend
-  if (checkpointId) {
+  // Request diff stats for this checkpoint
+  if (added && checkpointId) {
+    block.statsLoading = true;
     vscode.postMessage({ type: 'requestFilesDiffStats', checkpointId });
+  }
+
+  // Safety net: request stats for any older checkpoints whose files are missing stats
+  // (e.g. after webview recreation where session restore missed re-fetching)
+  if (added) {
+    const alreadyRequested = new Set<string>();
+    if (checkpointId) alreadyRequested.add(checkpointId);
+    for (const f of block.files) {
+      if (f.additions === undefined && f.checkpointId && !alreadyRequested.has(f.checkpointId)) {
+        alreadyRequested.add(f.checkpointId);
+        vscode.postMessage({ type: 'requestFilesDiffStats', checkpointId: f.checkpointId });
+      }
+    }
   }
 };
 
 /**
- * Handle 'filesDiffStats' message — populate diff stats on the matching filesChanged block.
+ * Handle 'filesDiffStats' message — populate diff stats on files from this checkpoint.
  */
 export const handleFilesDiffStats = (msg: any) => {
   const checkpointId = msg.checkpointId;
   if (!checkpointId) return;
 
-  const block = findFilesChangedBlock(checkpointId);
+  const block = getTheBlock();
   if (!block) return;
 
   for (const stat of msg.files || []) {
-    const file = block.files.find(f => f.path === stat.path);
+    const file = block.files.find(f => f.path === stat.path && f.checkpointId === checkpointId);
     if (file && file.status === 'pending') {
-      // Only update stats for pending files — resolved files already have
-      // their stats zeroed (undone) or locked (kept).
       file.additions = stat.additions;
       file.deletions = stat.deletions;
     }
   }
 
-  // Recalculate totals from the block's own files (respects resolved zeros)
   recalcBlockTotals(block);
   block.statsLoading = false;
 };
 
 /**
- * Handle 'fileChangeResult' — update a single file's status in the filesChanged block.
+ * Handle 'fileChangeResult' — remove a single resolved file.
  */
 export const handleFileChangeResult = (msg: any) => {
-  const block = findFilesChangedBlock(msg.checkpointId);
+  const block = getTheBlock();
   if (!block) return;
 
   if (msg.success) {
-    // Remove the resolved file from the list
-    const idx = block.files.findIndex(f => f.path === msg.filePath);
+    const idx = block.files.findIndex(f => f.path === msg.filePath && f.checkpointId === msg.checkpointId);
     if (idx >= 0) {
       block.files.splice(idx, 1);
     }
 
-    // If no files left, remove the entire block
+    // Remove the checkpointId if no more files from it
+    cleanupCheckpointId(block, msg.checkpointId);
+
     if (block.files.length === 0) {
-      removeBlock(block);
+      removeBlock();
       return;
     }
 
-    // Recalculate header totals from remaining files
     recalcBlockTotals(block);
   }
 };
 
 /**
- * Handle 'keepUndoResult' — update all files' status in the filesChanged block.
+ * Handle 'keepUndoResult' — remove all files for the given checkpoint.
  */
 export const handleKeepUndoResult = (msg: any) => {
-  const block = findFilesChangedBlock(msg.checkpointId);
+  const block = getTheBlock();
   if (!block) return;
 
   if (msg.success) {
-    // Keep All / Undo All resolves every pending file — remove the entire block
-    removeBlock(block);
+    // Remove all files belonging to this checkpoint
+    block.files = block.files.filter(f => f.checkpointId !== msg.checkpointId);
+    cleanupCheckpointId(block, msg.checkpointId);
+
+    if (block.files.length === 0) {
+      removeBlock();
+    } else {
+      recalcBlockTotals(block);
+    }
   }
 };
 
 // ---------------------------------------------------------------------------
-// Helpers (exported for use by timelineBuilder)
+// Helpers (exported for use by timelineBuilder and tests)
 // ---------------------------------------------------------------------------
 
+/** Get the single filesChanged block, or null. */
+export function getTheBlock(): AssistantThreadFilesChangedBlock | null {
+  return filesChangedBlocks.value.length > 0 ? filesChangedBlocks.value[0] : null;
+}
+
+/** Find the block that contains files for a given checkpointId. */
 export function findFilesChangedBlock(checkpointId: string): AssistantThreadFilesChangedBlock | null {
-  return filesChangedBlocks.value.find(b => b.checkpointId === checkpointId) || null;
+  const block = getTheBlock();
+  return block && block.checkpointIds.includes(checkpointId) ? block : null;
+}
+
+/** Get or create the ONE block. */
+function getOrCreateBlock(): AssistantThreadFilesChangedBlock {
+  if (filesChangedBlocks.value.length > 0) {
+    return filesChangedBlocks.value[0];
+  }
+  const block: AssistantThreadFilesChangedBlock = {
+    type: 'filesChanged',
+    checkpointIds: [],
+    files: [],
+    totalAdditions: undefined,
+    totalDeletions: undefined,
+    status: 'pending',
+    collapsed: false,
+    statsLoading: false
+  };
+  filesChangedBlocks.value.push(block);
+  return block;
 }
 
 export function recalcBlockTotals(block: AssistantThreadFilesChangedBlock): void {
@@ -162,10 +177,26 @@ export function updateBlockStatus(block: AssistantThreadFilesChangedBlock): void
   }
 }
 
-/** Remove a filesChanged block from the standalone list. */
-export function removeBlock(block: AssistantThreadFilesChangedBlock): void {
-  const idx = filesChangedBlocks.value.indexOf(block);
-  if (idx >= 0) {
-    filesChangedBlocks.value.splice(idx, 1);
+/** Remove the ONE block. */
+export function removeBlock(): void {
+  filesChangedBlocks.value.splice(0, filesChangedBlocks.value.length);
+}
+
+/** Remove a checkpointId from the block if no files reference it. */
+function cleanupCheckpointId(block: AssistantThreadFilesChangedBlock, checkpointId: string): void {
+  if (!block.files.some(f => f.checkpointId === checkpointId)) {
+    const idx = block.checkpointIds.indexOf(checkpointId);
+    if (idx >= 0) block.checkpointIds.splice(idx, 1);
   }
 }
+
+/**
+ * Handle 'reviewChangePosition' message — update the nav counter.
+ */
+export const handleReviewChangePosition = (msg: any) => {
+  const block = getTheBlock();
+  if (!block) return;
+  block.currentChange = msg.current;
+  block.totalChanges = msg.total;
+  if (msg.filePath) block.activeFilePath = msg.filePath;
+};

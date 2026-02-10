@@ -54,6 +54,7 @@ description: "Backend-to-frontend and frontend-to-backend message protocol for t
 | `filesDiffStats` | `{checkpointId, files: [{path, additions, deletions}]}` | Update per-file +/- stats in widget |
 | `fileChangeResult` | `{checkpointId, filePath, action, success, sessionId}` | Single file kept/undone — remove from widget |
 | `keepUndoResult` | `{checkpointId, action, success, sessionId}` | Keep All / Undo All — remove entire widget block |
+| `reviewChangePosition` | `{checkpointId, current, total, filePath?}` | Update "Change X of Y" counter + active file indicator in widget |
 
 ## Frontend → Backend Messages
 
@@ -87,9 +88,11 @@ description: "Backend-to-frontend and frontend-to-backend message protocol for t
 | `undoFile` | `{checkpointId, filePath}` | Undo a single file's changes |
 | `keepAllChanges` | `{checkpointId}` | Keep all files in checkpoint |
 | `undoAllChanges` | `{checkpointId}` | Undo all files in checkpoint |
-| `requestFilesDiffStats` | `{checkpointId}` | Request +/- diff stats for widget |
+| `requestFilesDiffStats` | `{checkpointId}` | Request +/- diff stats for widget (also triggers review session build) |
 | `openFileChangeDiff` | `{checkpointId, filePath}` | Open diff view for a file |
 | `openFileChangeReview` | `{checkpointId, filePath}` | Open inline review (CodeLens) for a file |
+| `navigateReviewPrev` | `{checkpointIds}` | Navigate to previous change (hunk-level, cross-file) |
+| `navigateReviewNext` | `{checkpointIds}` | Navigate to next change (hunk-level, cross-file) |
 
 ## Session-Concurrent Streaming
 
@@ -118,12 +121,25 @@ User clicks Keep/Undo on a file
   → chatView.handleKeepFile() resolves sessionId from sessionController
   → Persists 'fileChangeResult' + posts to webview
   → webview handleFileChangeResult() removes file from block
+  → chatView calls sendSessionsList() to refresh session stats badge
 
 User clicks Keep All / Undo All
   → webview posts 'keepAllChanges'/'undoAllChanges' (NO sessionId!)
   → chatView.handleKeepAllChanges() resolves sessionId from sessionController
   → Persists 'keepUndoResult' + posts to webview
   → webview handleKeepUndoResult() removes entire block
+  → chatView calls sendSessionsList() to refresh session stats badge
+
+User navigates changes (prev/next)
+  → webview posts 'navigateReviewPrev'/'navigateReviewNext' with checkpointIds[]
+  → chatView calls reviewService.navigateChange(direction, checkpointIds)
+  → Backend responds with 'reviewChangePosition' {current, total, filePath}
+  → webview updates "Change X of Y" counter + highlights active file
+
+Widget requests diff stats
+  → webview posts 'requestFilesDiffStats' per checkpoint
+  → chatView calls reviewService.startReviewForCheckpoint() (builds/merges session)
+  → Backend responds with 'filesDiffStats' + 'reviewChangePosition'
 ```
 
 **⚠️ The webview does NOT send `sessionId`** in keep/undo messages. The backend MUST resolve it via `this.sessionController.getCurrentSessionId()`. Without this, `persistUiEvent` silently skips (see Pitfall #13 in `copilot-instructions.md`).

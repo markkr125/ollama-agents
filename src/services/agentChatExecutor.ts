@@ -1473,6 +1473,14 @@ export class AgentChatExecutor {
       });
     }
 
+    // Persist per-file diff stats for accurate session-level totals
+    await this.databaseService.updateFileSnapshotsDiffStats(checkpointId, results);
+
+    // Cache aggregate stats on the checkpoint for fast session list queries
+    const totalAdd = results.reduce((s, r) => s + r.additions, 0);
+    const totalDel = results.reduce((s, r) => s + r.deletions, 0);
+    await this.databaseService.updateCheckpointDiffStats(checkpointId, totalAdd, totalDel);
+
     return results;
   }
 

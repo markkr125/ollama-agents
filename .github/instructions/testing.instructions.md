@@ -116,6 +116,20 @@ The following test suites exist in `tests/webview/`:
 - **Composable (`useSettingsPage`)**: bearer input, temperature input, tool timeout input, recreate messages table delegation, dismiss welcome, session patterns sync (immediate, reactive, defaults)
 - **Component**: welcome banner visibility + dismiss, navigation sections rendering + click + active class, page visibility based on `currentPage`, recreate messages button, test connection button, model options in select dropdowns
 
+**`parity.test.ts`** (12 tests) - Tests live/history structural parity:
+- Ensures that live message handlers and `timelineBuilder` produce identical timeline structures for the same event sequences
+
+**`core/filesChanged.test.ts`** (28 tests) - Tests files-changed widget state management:
+- **ONE-widget merging**: single block creation, merging across checkpoints, dedup files, dedup checkpointIds
+- **Diff stats**: `handleFilesDiffStats` populates per-file `additions`/`deletions`, recalculates totals
+- **Per-file keep/undo**: single file removal, block removal when last file resolved, checkpointId cleanup
+- **Bulk keep/undo**: per-checkpoint removal, full block removal, undo variant, failed keepAll no-op
+- **Actions**: `keepAllChanges`, `undoAllChanges`, `keepFile`, `undoFile` postMessage payloads
+- **Timeline builder merging**: two-checkpoint merge into one block, keepUndoResult removes checkpoint, all resolved removes block, fileChangeResult removes single file
+- **REGRESSION: session restore**: requests diff stats for each checkpointId on restore, `statsLoading=true` on pending blocks
+- **REGRESSION: safety net stats**: re-requests stats for old checkpoint files without stats, skips files that already have stats
+- **REGRESSION: nav uses change-level counter**: `reviewChangePosition` updates `currentChange`/`totalChanges`, nav bar hidden until set, hunk-level not file-level count, nav actions post `checkpointIds` array
+
 ## Existing test coverage (Extension Host)
 
 The following test suites exist in `tests/extension/suite/`:

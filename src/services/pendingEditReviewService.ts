@@ -36,10 +36,10 @@ interface FileReviewState {
 }
 
 /**
- * Tracks the full review session (all files in a checkpoint).
+ * Tracks the full review session (files across one or more checkpoints).
  */
 interface ReviewSession {
-  checkpointId: string;
+  checkpointIds: string[];
   files: FileReviewState[];
   currentFileIndex: number;
 }
@@ -73,9 +73,24 @@ export class PendingEditReviewService implements vscode.Disposable {
   private activeSession: ReviewSession | null = null;
   private disposables: vscode.Disposable[] = [];
 
+  // Mutex — serialises operations that read activeSession then call buildReviewSession.
+  // Without this, two concurrent handleRequestFilesDiffStats calls (one per checkpoint)
+  // race: both see activeSession as null and each build with only their own checkpoint.
+  private _buildLock: Promise<void> = Promise.resolve();
+
   // CodeLens
   private codeLensProvider: ReviewCodeLensProvider;
   private codeLensDisposable: vscode.Disposable | null = null;
+
+  // Instant gutter arrow for the currently focused hunk (no CodeLens delay)
+  private gutterArrowDecoration = vscode.window.createTextEditorDecorationType({
+    before: {
+      contentText: '▸',
+      color: new vscode.ThemeColor('editorLineNumber.activeForeground'),
+      fontWeight: 'bold',
+      margin: '0 4px 0 0'
+    }
+  });
 
   // Event: fires whenever review state changes (for external consumers)
   private _onDidChangeReviewState = new vscode.EventEmitter<void>();
@@ -88,6 +103,23 @@ export class PendingEditReviewService implements vscode.Disposable {
   // Event: fires when a hunk is resolved (for widget stats sync)
   private _onDidUpdateHunkStats = new vscode.EventEmitter<FileHunkStatsEvent>();
   readonly onDidUpdateHunkStats = this._onDidUpdateHunkStats.event;
+
+  /**
+   * Acquire the build lock, execute `fn`, then release.
+   * Ensures only one build/merge runs at a time so checkpoint IDs
+   * accumulate correctly across concurrent callers.
+   */
+  private async withBuildLock<T>(fn: () => Promise<T>): Promise<T> {
+    const prev = this._buildLock;
+    let release!: () => void;
+    this._buildLock = new Promise<void>(r => { release = r; });
+    await prev;
+    try {
+      return await fn();
+    } finally {
+      release();
+    }
+  }
 
   constructor(private readonly databaseService: DatabaseService) {
     this.codeLensProvider = new ReviewCodeLensProvider(this);
@@ -144,22 +176,31 @@ export class PendingEditReviewService implements vscode.Disposable {
       return;
     }
 
-    // Build or reuse session
-    if (!this.activeSession || this.activeSession.checkpointId !== resolvedCheckpointId) {
-      await this.buildReviewSession(resolvedCheckpointId);
-    }
+    await this.withBuildLock(async () => {
+      // Build or merge session — always rebuild to pick up newly added files
+      const mergedIds = this.activeSession
+        ? [...new Set([...this.activeSession.checkpointIds, resolvedCheckpointId])]
+        : [resolvedCheckpointId];
 
-    if (!this.activeSession) return;
+      // First try with existing session
+      let idx = this.activeSession?.files.findIndex(f => f.filePath === filePath) ?? -1;
+      if (idx < 0) {
+        // File not in session — rebuild to pick up newly written files
+        await this.buildReviewSession(mergedIds);
+      }
 
-    // Find the file in session and navigate to it
-    const idx = this.activeSession.files.findIndex(f => f.filePath === filePath);
-    if (idx < 0) {
-      vscode.window.showWarningMessage(`File ${filePath} not found in review session`);
-      return;
-    }
+      if (!this.activeSession) return;
 
-    this.activeSession.currentFileIndex = idx;
-    await this.openAndDecorateFile(idx);
+      // Re-find after potential rebuild
+      idx = this.activeSession.files.findIndex(f => f.filePath === filePath);
+      if (idx < 0) {
+        vscode.window.showWarningMessage(`File ${filePath} not found in review session`);
+        return;
+      }
+
+      this.activeSession.currentFileIndex = idx;
+      await this.openAndDecorateFile(idx);
+    });
   }
 
   /**
@@ -167,24 +208,30 @@ export class PendingEditReviewService implements vscode.Disposable {
    * decorations to any editors that are already visible (no new tabs opened).
    * Called after the agent finishes writing files.
    */
-  async startReviewForCheckpoint(checkpointId: string): Promise<void> {
-    if (!checkpointId) return;
+  async startReviewForCheckpoint(checkpointId: string | string[]): Promise<void> {
+    const ids = Array.isArray(checkpointId) ? checkpointId : [checkpointId];
+    if (ids.length === 0) return;
 
-    // Don't replace an existing session for the same checkpoint
-    if (this.activeSession?.checkpointId === checkpointId) return;
+    await this.withBuildLock(async () => {
+      // Always rebuild — snapshots may have grown since the last build
+      // (e.g. new files written in a later agent iteration within the same checkpoint).
+      const mergedIds = this.activeSession
+        ? [...new Set([...this.activeSession.checkpointIds, ...ids])]
+        : ids;
 
-    await this.buildReviewSession(checkpointId);
-    if (!this.activeSession) return;
+      await this.buildReviewSession(mergedIds);
+      if (!this.activeSession) return;
 
-    // Apply decorations to any already-visible editors that match reviewed files
-    for (const editor of vscode.window.visibleTextEditors) {
-      const fileState = this.activeSession.files.find(
-        f => f.uri.toString() === editor.document.uri.toString()
-      );
-      if (fileState) {
-        this.applyDecorations(editor, fileState);
+      // Apply decorations to any already-visible editors that match reviewed files
+      for (const editor of vscode.window.visibleTextEditors) {
+        const fileState = this.activeSession.files.find(
+          f => f.uri.toString() === editor.document.uri.toString()
+        );
+        if (fileState) {
+          this.applyDecorations(editor, fileState);
+        }
       }
-    }
+    });
   }
 
   /**
@@ -206,10 +253,22 @@ export class PendingEditReviewService implements vscode.Disposable {
 
   /**
    * Navigate to prev/next hunk within the current file.
+   * If no active session exists, builds one from the given checkpointId
+   * and opens the first file before navigating.
    */
-  navigateHunk(direction: 'prev' | 'next'): void {
-    if (!this.activeSession) return;
-    const fileState = this.activeSession.files[this.activeSession.currentFileIndex];
+  async navigateHunk(direction: 'prev' | 'next', checkpointId?: string): Promise<void> {
+    // Auto-start review if no session is active
+    if (!this.activeSession && checkpointId) {
+      await this.buildReviewSession([checkpointId]);
+      if (this.activeSession !== null && (this.activeSession as ReviewSession).files.length > 0) {
+        await this.openAndDecorateFile(0);
+        return; // Opening the first file is the first "navigate" action
+      }
+    }
+
+    if (this.activeSession === null) return;
+    const session = this.activeSession as ReviewSession;
+    const fileState = session.files[session.currentFileIndex];
     if (!fileState || fileState.hunks.length === 0) return;
 
     if (direction === 'next') {
@@ -219,6 +278,106 @@ export class PendingEditReviewService implements vscode.Disposable {
     }
 
     this.scrollToHunk(fileState);
+  }
+
+  /**
+   * Navigate across ALL hunks in ALL files sequentially (cross-file navigation).
+   * Returns `{ current, total }` so the widget can show "Change X of Y".
+   * If no active session exists, builds one from the given checkpointId.
+   */
+  async navigateChange(direction: 'prev' | 'next', checkpointId?: string | string[]): Promise<{ current: number; total: number; filePath?: string } | null> {
+    const ids = checkpointId ? (Array.isArray(checkpointId) ? checkpointId : [checkpointId]) : undefined;
+
+    // Only build/merge when we have no session or it's missing requested checkpoints.
+    // Do NOT rebuild on every call — that destroys the current navigation position.
+    if (ids?.length) {
+      const needsBuild = !this.activeSession
+        || !ids.every(id => this.activeSession!.checkpointIds.includes(id));
+      if (needsBuild) {
+        await this.withBuildLock(async () => {
+          const mergedIds = this.activeSession
+            ? [...new Set([...this.activeSession.checkpointIds, ...ids])]
+            : ids;
+          await this.buildReviewSession(mergedIds);
+        });
+        if (!this.activeSession || this.activeSession.files.length === 0) return null;
+      }
+    }
+
+    if (this.activeSession === null) return null;
+    const session = this.activeSession as ReviewSession;
+    if (session.files.length === 0) return null;
+
+    // Compute the flat list of (fileIndex, hunkIndex) pairs
+    const flat: { fileIdx: number; hunkIdx: number }[] = [];
+    for (let fi = 0; fi < session.files.length; fi++) {
+      for (let hi = 0; hi < session.files[fi].hunks.length; hi++) {
+        flat.push({ fileIdx: fi, hunkIdx: hi });
+      }
+    }
+
+    if (flat.length === 0) return null;
+
+    // Find current position in the flat list
+    const currentFlat = flat.findIndex(
+      e => e.fileIdx === session.currentFileIndex
+        && e.hunkIdx === session.files[session.currentFileIndex]?.currentHunkIndex
+    );
+
+    let nextFlat: number;
+    if (currentFlat < 0) {
+      // Not positioned yet — start at first or last
+      nextFlat = direction === 'next' ? 0 : flat.length - 1;
+    } else if (direction === 'next') {
+      nextFlat = (currentFlat + 1) % flat.length;
+    } else {
+      nextFlat = (currentFlat - 1 + flat.length) % flat.length;
+    }
+
+    const target = flat[nextFlat];
+
+    // Switch file if needed
+    if (target.fileIdx !== session.currentFileIndex) {
+      session.currentFileIndex = target.fileIdx;
+      await this.openAndDecorateFile(target.fileIdx);
+    }
+
+    session.files[target.fileIdx].currentHunkIndex = target.hunkIdx;
+    this.scrollToHunk(session.files[target.fileIdx]);
+
+    return { current: nextFlat + 1, total: flat.length, filePath: session.files[target.fileIdx].filePath };
+  }
+
+  /**
+   * Get the current global change position without navigating.
+   * Returns `{ current, total }` or null if no active session.
+   */
+  getChangePosition(checkpointId?: string | string[]): { current: number; total: number; filePath?: string } | null {
+    if (!this.activeSession) return null;
+    if (checkpointId) {
+      const ids = Array.isArray(checkpointId) ? checkpointId : [checkpointId];
+      if (!ids.some(id => this.activeSession!.checkpointIds.includes(id))) return null;
+    }
+    return this.getGlobalChangePosition(this.activeSession);
+  }
+
+  private getGlobalChangePosition(session: ReviewSession): { current: number; total: number; filePath?: string } {
+    let total = 0;
+    let current = 0;
+    let found = false;
+    for (let fi = 0; fi < session.files.length; fi++) {
+      const file = session.files[fi];
+      for (let hi = 0; hi < file.hunks.length; hi++) {
+        total++;
+        if (!found && fi === session.currentFileIndex && hi === file.currentHunkIndex) {
+          current = total;
+          found = true;
+        }
+      }
+    }
+    if (!found) current = total > 0 ? 1 : 0;
+    const filePath = session.files[session.currentFileIndex]?.filePath;
+    return { current, total, filePath };
   }
 
   /**
@@ -501,63 +660,69 @@ export class PendingEditReviewService implements vscode.Disposable {
   // Session building
   // ---------------------------------------------------------------------------
 
-  private async buildReviewSession(checkpointId: string): Promise<void> {
+  private async buildReviewSession(checkpointIds: string[]): Promise<void> {
     // Close any existing session
     this.closeReview();
 
-    const snapshots = await this.databaseService.getFileSnapshots(checkpointId);
-    if (snapshots.length === 0) return;
+    // Sort checkpoint IDs chronologically (oldest first) so the review session
+    // file order matches the widget display order.  IDs are "ckpt_<timestamp>_<random>".
+    const sortedIds = [...checkpointIds].sort();
 
     const workspaceRoot = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath || '';
-
     const files: FileReviewState[] = [];
-    for (const snap of snapshots) {
-      if (snap.file_status !== 'pending') continue; // only review pending files
+    const seenFiles = new Set<string>(); // deduplicate across checkpoints
 
-      const absPath = path.join(workspaceRoot, snap.file_path);
-      const uri = vscode.Uri.file(absPath);
+    for (const cpId of sortedIds) {
+      const snapshots = await this.databaseService.getFileSnapshots(cpId);
+      for (const snap of snapshots) {
+        if (snap.file_status !== 'pending') continue;
+        if (seenFiles.has(snap.file_path)) continue;
+        seenFiles.add(snap.file_path);
 
-      let currentContent = '';
-      try {
-        const data = await vscode.workspace.fs.readFile(uri);
-        currentContent = new TextDecoder().decode(data);
-      } catch {
-        continue; // file deleted or inaccessible
+        const absPath = path.join(workspaceRoot, snap.file_path);
+        const uri = vscode.Uri.file(absPath);
+
+        let currentContent = '';
+        try {
+          const data = await vscode.workspace.fs.readFile(uri);
+          currentContent = new TextDecoder().decode(data);
+        } catch {
+          continue; // file deleted or inaccessible
+        }
+
+        const originalContent = snap.original_content ?? '';
+        const hunks = this.computeHunks(originalContent, currentContent);
+
+        const addedDec = vscode.window.createTextEditorDecorationType({
+          backgroundColor: new vscode.ThemeColor('diffEditor.insertedLineBackground'),
+          isWholeLine: true,
+          overviewRulerColor: new vscode.ThemeColor('minimapGutter.addedBackground'),
+          overviewRulerLane: vscode.OverviewRulerLane.Left
+        });
+
+        const deletedDec = vscode.window.createTextEditorDecorationType({
+          backgroundColor: new vscode.ThemeColor('diffEditor.removedLineBackground'),
+          isWholeLine: true,
+          overviewRulerColor: new vscode.ThemeColor('minimapGutter.deletedBackground'),
+          overviewRulerLane: vscode.OverviewRulerLane.Left
+        });
+
+        files.push({
+          uri,
+          checkpointId: cpId,
+          filePath: snap.file_path,
+          hunks,
+          addedDecoration: addedDec,
+          deletedDecoration: deletedDec,
+          currentHunkIndex: 0
+        });
       }
-
-      const originalContent = snap.original_content ?? '';
-      const hunks = this.computeHunks(originalContent, currentContent);
-
-      // Per-file decoration types so we can dispose them independently
-      const addedDec = vscode.window.createTextEditorDecorationType({
-        backgroundColor: new vscode.ThemeColor('diffEditor.insertedLineBackground'),
-        isWholeLine: true,
-        overviewRulerColor: new vscode.ThemeColor('minimapGutter.addedBackground'),
-        overviewRulerLane: vscode.OverviewRulerLane.Left
-      });
-
-      const deletedDec = vscode.window.createTextEditorDecorationType({
-        backgroundColor: new vscode.ThemeColor('diffEditor.removedLineBackground'),
-        isWholeLine: true,
-        overviewRulerColor: new vscode.ThemeColor('minimapGutter.deletedBackground'),
-        overviewRulerLane: vscode.OverviewRulerLane.Left
-      });
-
-      files.push({
-        uri,
-        checkpointId,
-        filePath: snap.file_path,
-        hunks,
-        addedDecoration: addedDec,
-        deletedDecoration: deletedDec,
-        currentHunkIndex: 0
-      });
     }
 
     if (files.length === 0) return;
 
     this.activeSession = {
-      checkpointId,
+      checkpointIds,
       files,
       currentFileIndex: 0
     };
@@ -703,6 +868,14 @@ export class PendingEditReviewService implements vscode.Disposable {
     const range = new vscode.Range(hunk.startLine, 0, hunk.endLine, 0);
     editor.revealRange(range, vscode.TextEditorRevealType.InCenter);
     editor.selection = new vscode.Selection(hunk.startLine, 0, hunk.startLine, 0);
+
+    // Instant gutter arrow (no delay)
+    editor.setDecorations(this.gutterArrowDecoration, [
+      { range: new vscode.Range(hunk.startLine, 0, hunk.startLine, 0) }
+    ]);
+
+    // Refresh CodeLens so the ▸ marker also moves (slightly delayed by VS Code)
+    this.codeLensProvider.refresh();
   }
 
   // ---------------------------------------------------------------------------
@@ -711,6 +884,7 @@ export class PendingEditReviewService implements vscode.Disposable {
 
   dispose(): void {
     this.closeReview();
+    this.gutterArrowDecoration.dispose();
     this._onDidChangeReviewState.dispose();
     this._onDidResolveFile.dispose();
     this._onDidUpdateHunkStats.dispose();
@@ -738,6 +912,7 @@ class ReviewCodeLensProvider implements vscode.CodeLensProvider {
     if (!fileState) return [];
 
     const lenses: vscode.CodeLens[] = [];
+
     for (let i = 0; i < fileState.hunks.length; i++) {
       const hunk = fileState.hunks[i];
       const range = new vscode.Range(hunk.startLine, 0, hunk.startLine, 0);
@@ -751,7 +926,7 @@ class ReviewCodeLensProvider implements vscode.CodeLensProvider {
 
       // "Undo" lens
       lenses.push(new vscode.CodeLens(range, {
-        title: '↩ Undo',
+        title: '✕ Undo',
         command: 'ollamaCopilot.reviewUndoHunk',
         arguments: [fileState.filePath, i]
       }));

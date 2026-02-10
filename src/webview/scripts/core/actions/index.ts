@@ -18,6 +18,8 @@ export {
 export {
     keepAllChanges,
     keepFile,
+    navigateNextChange,
+    navigatePrevChange,
     openFileChangeDiff,
     openFileChangeReview,
     requestFilesDiffStats,

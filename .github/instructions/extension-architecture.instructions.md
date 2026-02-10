@@ -198,7 +198,7 @@ These are stored per-session and toggled independently. **Critical severity comm
 
 ## PendingEditReviewService (`src/services/pendingEditReviewService.ts`)
 
-Provides inline change review after the agent edits files — green/red line decorations, per-hunk CodeLens actions (Keep / Undo / ↑ / ↓), and file navigation.
+Provides inline change review after the agent edits files — green/red line decorations, per-hunk CodeLens actions (Keep / Undo / ↑ / ↓), and cross-file hunk navigation.
 
 ### Lifecycle
 
@@ -206,24 +206,61 @@ Provides inline change review after the agent edits files — green/red line dec
 Agent writes files → agentChatExecutor creates checkpoint + file snapshots
   → execute() returns { checkpointId } to handleAgentMode()
   → handleAgentMode() calls reviewService.startReviewForCheckpoint(checkpointId)
-      → buildReviewSession(checkpointId)
-          ├─ Reads file_snapshots from DB
+      → buildReviewSession([checkpointId])
+          ├─ Sorts checkpoint IDs chronologically (oldest first)
+          ├─ Reads file_snapshots from DB for each sorted checkpoint
+          ├─ Filters to pending files only, deduplicates by path
           ├─ Diffs original_content vs current on-disk content (structuredPatch)
           ├─ Creates per-file decoration types + ReviewHunk[] arrays
           └─ Registers CodeLens provider (scheme: 'file')
       → Applies decorations to all visible editors that match reviewed files
+      → Returns { current, total, filePath } change position
 ```
 
 ### Key Concepts
 
 | Concept | Description |
 |---------|-------------|
-| **ReviewSession** | One active session at a time, tied to a `checkpointId`. Contains array of `FileReviewState`. |
-| **FileReviewState** | Per-file: URI, hunks[], decoration types, current hunk index |
+| **ReviewSession** | One active session at a time, tied to `checkpointIds: string[]` (multiple checkpoints across agent iterations). Contains array of `FileReviewState` and `currentFileIndex`. |
+| **FileReviewState** | Per-file: URI, filePath, hunks[], decoration types, current hunk index |
 | **ReviewHunk** | Contiguous diff region: `startLine`, `endLine`, `addedLines[]`, `deletedCount`, `originalText`, `newText` |
 | **Auto-start** | `startReviewForCheckpoint()` is called automatically when agent finishes — decorations appear on already-open files without user action |
-| **Manual start** | User clicks ✓ icon on a file in the widget → `openFileReview()` → opens file + applies decorations |
+| **Manual start** | User clicks the review icon on a file in the widget → `openFileReview()` → opens file + applies decorations |
 | **Hunk resolution** | `keepHunk()` removes the hunk from tracking. `undoHunk()` reverts the text via `editor.edit()`, then removes + shifts subsequent hunks by line delta. |
+| **Change position** | `getGlobalChangePosition()` returns `{ current, total, filePath? }` — the current hunk index across ALL files (not per-file). The widget shows "Change X of Y" from this. |
+
+### Multi-Checkpoint Support
+
+When the agent runs multiple iterations (each creating a checkpoint), the review session accumulates ALL checkpoint IDs:
+
+- `AssistantThreadFilesChangedBlock.checkpointIds: string[]` holds all checkpoints belonging to a widget
+- `startReviewForCheckpoint()` merges new checkpoint IDs with existing ones: `[...new Set([...existing, ...new])]`
+- `buildReviewSession()` sorts IDs chronologically before iterating (checkpoint IDs are `ckpt_<timestamp>_<random>`, so string sort = chronological order). This ensures file order in the review session matches the widget display.
+
+### Concurrency: Promise-Chain Mutex (`_buildLock`)
+
+Multiple `requestFilesDiffStats` messages can arrive concurrently (one per checkpoint in the widget). Without synchronization, two concurrent `startReviewForCheckpoint` calls would race — each calling `closeReview()` (nulling `activeSession`), so the second call couldn't see the first's session to merge IDs.
+
+**Solution**: A promise-chain mutex serializes all session-building operations:
+
+```typescript
+private _buildLock: Promise<void> = Promise.resolve();
+
+private withBuildLock<T>(fn: () => Promise<T>): Promise<T> {
+  // Chains onto previous lock — second caller waits for first to finish
+}
+```
+
+Wrapped operations: `startReviewForCheckpoint`, `navigateChange` (only when rebuilding), `openFileReview`.
+
+### Navigation Behavior
+
+`navigateChange(direction, checkpointIds?)` handles forward/backward hunk traversal:
+
+- **Does NOT rebuild on every call** — that would destroy the current navigation position (currentFileIndex, currentHunkIndex)
+- **Only rebuilds when**: no active session exists, OR the active session is missing some requested checkpoint IDs
+- When it does rebuild, it uses `withBuildLock` to serialize with other builds
+- Returns `{ current, total, filePath? }` for the widget's "Change X of Y" counter
 
 ### Widget ↔ Review Service Coupling
 
@@ -233,8 +270,16 @@ The files-changed widget and the review service both track file change state ind
 |-----------|-----------|------|
 | Widget → Review | `chatView.handleKeepFile()` calls `reviewService.removeFileFromReview(filePath)` | User clicks Keep/Undo in widget |
 | Widget → Review | `chatView.handleKeepAllChanges()` calls `reviewService.closeReview()` | User clicks Keep All / Undo All |
+| Widget → Review | `chatView.handleRequestFilesDiffStats()` calls `reviewService.startReviewForCheckpoint()` | Widget requests diff stats — also builds/merges review session |
+| Widget → Review | `chatView.navigateReviewPrev/Next` calls `reviewService.navigateChange()` | User clicks prev/next in nav bar |
+| Widget → Review | `chatView.openFileChangeReview` calls `reviewService.openFileReview()` | User clicks review icon on a file row |
 | Review → Widget | `onDidResolveFile` event → chatView persists + posts `fileChangeResult` | All hunks in a file resolved via CodeLens |
 | Review → Widget | `onDidUpdateHunkStats` event → chatView posts `filesDiffStats` | Any hunk keep/undo changes +/- counts |
+| Review → Widget | `reviewChangePosition` message posted after nav/open/stats | Updates "Change X of Y" counter + `activeFilePath` in widget |
+
+### Session Stats Refresh After Keep/Undo
+
+All four keep/undo handlers in `chatView.ts` (`handleKeepFile`, `handleUndoFile`, `handleKeepAllChanges`, `handleUndoAllChanges`) call `await this.sessionController.sendSessionsList()` after resolving the operation. This refreshes the sessions panel's `+N -N` badge so it reflects the updated pending file stats.
 
 ### ⚠️ sessionId Resolution in File Change Handlers
 
@@ -258,10 +303,12 @@ Checkpoints and file snapshots are stored in SQLite (not LanceDB):
 **`checkpoints` table:**
 | Column | Type | Purpose |
 |--------|------|---------|
-| `id` | `TEXT PRIMARY KEY` | UUID, created at start of each agent execution |
+| `id` | `TEXT PRIMARY KEY` | UUID (`ckpt_<timestamp>_<random>`), created at start of each agent execution |
 | `session_id` | `TEXT NOT NULL` | FK → sessions |
 | `message_id` | `TEXT` | Associated message (nullable) |
 | `status` | `TEXT` | `'pending'` → `'kept'` / `'undone'` / `'partial'` |
+| `total_additions` | `INTEGER` | Cached total added lines across all files (migration-added) |
+| `total_deletions` | `INTEGER` | Cached total deleted lines across all files (migration-added) |
 | `created_at` | `INTEGER` | Timestamp |
 
 **`file_snapshots` table:**
@@ -274,7 +321,18 @@ Checkpoints and file snapshots are stored in SQLite (not LanceDB):
 | `action` | `TEXT` | `'modified'` / `'created'` |
 | `file_status` | `TEXT` | `'pending'` / `'kept'` / `'undone'` |
 | `created_at` | `INTEGER` | Timestamp |
+| `additions` | `INTEGER` | Per-file added line count (migration-added, NULL until stats computed) |
+| `deletions` | `INTEGER` | Per-file deleted line count (migration-added, NULL until stats computed) |
 | **UNIQUE** | | `(checkpoint_id, file_path)` — INSERT OR IGNORE keeps first snapshot |
+
+### Session Stats (`getSessionsPendingStats`)
+
+The sessions panel shows `+N -N` badges per session. `getSessionsPendingStats()` computes these via a **two-level aggregation query**:
+
+1. **Inner query** (per-checkpoint): For each checkpoint with pending files, sums `file_snapshots.additions`/`deletions`. If any files have non-NULL stats, uses those; otherwise falls back to `checkpoints.total_additions`/`total_deletions`.
+2. **Outer query** (per-session): Sums the per-checkpoint totals across all checkpoints in a session.
+
+This two-level approach handles the case where some checkpoints have per-file stats and others only have checkpoint-level totals.
 
 ### Checkpoint Lifecycle
 
