@@ -1,6 +1,6 @@
 import * as vscode from 'vscode';
 import { extractContext } from '../services/contextBuilder';
-import { OllamaClient } from '../services/ollamaClient';
+import { OllamaClient } from '../services/model/ollamaClient';
 import { getFIMPrompt, hasFIMSupport } from '../templates/fimTemplates';
 import { ModeConfig } from '../types/config';
 

@@ -12,13 +12,13 @@ import { GitOperations } from '../agent/gitOperations';
 import { SessionManager } from '../agent/sessionManager';
 import { ToolRegistry } from '../agent/toolRegistry';
 import { getConfig, getModeConfig } from '../config/settings';
-import { AgentChatExecutor } from '../services/agentChatExecutor';
-import { DatabaseService } from '../services/databaseService';
-import { getModelCapabilities } from '../services/modelCompatibility';
-import { ModelManager } from '../services/modelManager';
-import { OllamaClient } from '../services/ollamaClient';
+import { AgentChatExecutor } from '../services/agent/agentChatExecutor';
+import { DatabaseService } from '../services/database/databaseService';
+import { getModelCapabilities } from '../services/model/modelCompatibility';
+import { ModelManager } from '../services/model/modelManager';
+import { OllamaClient } from '../services/model/ollamaClient';
 import { PendingEditDecorationProvider } from '../services/pendingEditDecorationProvider';
-import { PendingEditReviewService } from '../services/pendingEditReviewService';
+import { PendingEditReviewService } from '../services/review/pendingEditReviewService';
 import { TerminalManager } from '../services/terminalManager';
 import { TokenManager } from '../services/tokenManager';
 import { Model } from '../types/ollama';
@@ -729,7 +729,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider, WebviewMess
     const config: ExecutorConfig = { maxIterations: getConfig().agent.maxIterations, toolTimeout: getConfig().agent.toolTimeout, temperature: 0.7 };
 
     // Fetch model capabilities to decide native vs XML tool calling
-    let capabilities: import('../services/modelCompatibility').ModelCapabilities | undefined;
+    let capabilities: import('../services/model/modelCompatibility').ModelCapabilities | undefined;
     try {
       const cached = await this.databaseService.getCachedModels();
       const modelRecord = cached.find(m => m.name === this.currentModel);

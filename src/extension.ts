@@ -6,11 +6,11 @@ import { registerAgentMode } from './modes/agentMode';
 import { registerEditMode } from './modes/editMode';
 import { registerPlanMode } from './modes/planMode';
 import { CompletionProvider } from './providers/completionProvider';
-import { DatabaseService, disposeDatabaseService, getDatabaseService } from './services/databaseService';
-import { ModelManager } from './services/modelManager';
-import { OllamaClient } from './services/ollamaClient';
+import { DatabaseService, disposeDatabaseService, getDatabaseService } from './services/database/databaseService';
+import { ModelManager } from './services/model/modelManager';
+import { OllamaClient } from './services/model/ollamaClient';
 import { PendingEditDecorationProvider } from './services/pendingEditDecorationProvider';
-import { PendingEditReviewService } from './services/pendingEditReviewService';
+import { PendingEditReviewService } from './services/review/pendingEditReviewService';
 import { TokenManager } from './services/tokenManager';
 import { ChatViewProvider } from './views/chatView';
 

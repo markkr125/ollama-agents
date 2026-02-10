@@ -1,7 +1,7 @@
 import * as vscode from 'vscode';
-import { OllamaClient } from '../services/ollamaClient';
 import { ChatMessage } from '../types/ollama';
 import { cleanResponseText, parseEditResponse } from '../utils/diffParser';
+import { OllamaClient } from './model/ollamaClient';
 
 export class EditManager {
   constructor(private client: OllamaClient) {}

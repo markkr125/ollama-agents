@@ -141,7 +141,7 @@ Output is hard-truncated to **100 lines** (15 head + 85 tail) with a `[N lines t
 ### Execution Caveat
 `waitForCommandEnd()` relies on the `onDidEndTerminalShellExecution` event. If the event never fires (e.g., shell integration bug), the promise **never resolves**. There is no timeout.
 
-## Model Compatibility (`src/services/modelCompatibility.ts`)
+## Model Compatibility (`src/services/model/modelCompatibility.ts`)
 
 Reads **model capabilities from the Ollama `/api/show` endpoint** which returns a `capabilities` string array (e.g. `["completion", "vision", "tools", "insert"]`). The module maps those API strings to the UI-facing `ModelCapabilities` type:
 
@@ -196,7 +196,7 @@ These are stored per-session and toggled independently. **Critical severity comm
 3. Clears `ModelManager` cache
 4. Calls `disposeDatabaseService()` (fire-and-forget, not awaited)
 
-## PendingEditReviewService (`src/services/pendingEditReviewService.ts`)
+## PendingEditReviewService (`src/services/review/pendingEditReviewService.ts`)
 
 Provides inline change review after the agent edits files — green/red line decorations, per-hunk CodeLens actions (Keep / Undo / ↑ / ↓), and cross-file hunk navigation.
 

@@ -1,6 +1,6 @@
 import * as vscode from 'vscode';
-import { Model } from '../types/ollama';
-import { DatabaseService } from './databaseService';
+import { Model } from '../../types/ollama';
+import { DatabaseService } from '../database/databaseService';
 import { checkModelCompatibility } from './modelCompatibility';
 import { OllamaClient } from './ollamaClient';
 

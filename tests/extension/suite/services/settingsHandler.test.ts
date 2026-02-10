@@ -1,5 +1,5 @@
 import * as assert from 'assert';
-import { OllamaClient } from '../../../../src/services/ollamaClient';
+import { OllamaClient } from '../../../../src/services/model/ollamaClient';
 import { WebviewMessageEmitter } from '../../../../src/views/chatTypes';
 import { SettingsHandler } from '../../../../src/views/settingsHandler';
 import { startOllamaMockServer } from '../../mocks/ollamaMockServer';

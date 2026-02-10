@@ -5,7 +5,7 @@
 // This module maps those strings to the UI-facing ModelCapabilities type and
 // provides helpers for the model-selection quick pick.
 
-import type { Model } from '../types/ollama';
+import type { Model } from '../../types/ollama';
 
 // ---- Capability names returned by /api/show ---------------------
 // Known values (as of Ollama 0.6+):

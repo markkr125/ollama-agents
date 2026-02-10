@@ -1,4 +1,4 @@
-import { DatabaseService } from '../services/databaseService';
+import { DatabaseService } from '../services/database/databaseService';
 import { ChatSessionStatus, MessageRecord, SessionRecord } from '../types/session';
 import { ChatMessage, WebviewMessageEmitter } from './chatTypes';
 import { getToolActionInfo, getToolSuccessInfo } from './toolUIFormatter';

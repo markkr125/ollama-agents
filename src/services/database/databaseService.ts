@@ -1,8 +1,8 @@
 import { randomUUID } from 'crypto';
 import * as vscode from 'vscode';
-import { Model } from '../types/ollama';
-import { ChatSessionStatus, MessageRecord, SessionRecord, SessionsPage } from '../types/session';
-import { OllamaClient } from './ollamaClient';
+import { Model } from '../../types/ollama';
+import { ChatSessionStatus, MessageRecord, SessionRecord, SessionsPage } from '../../types/session';
+import { OllamaClient } from '../model/ollamaClient';
 import { SessionIndexService } from './sessionIndexService';
 
 // ---------------------------------------------------------------------------

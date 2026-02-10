@@ -4,11 +4,11 @@
 >
 > | File | Scope (`applyTo`) | Content |
 > |------|-------------------|---------|
-> | `.github/instructions/database-rules.instructions.md` | `src/services/databaseService.ts,src/services/sessionIndexService.ts,src/views/settingsHandler.ts` | Dual-DB design, schema mismatch, LanceDB corruption, message ordering, clearing data |
+> | `.github/instructions/database-rules.instructions.md` | `src/services/database/**,src/views/settingsHandler.ts` | Dual-DB design, schema mismatch, LanceDB corruption, message ordering, clearing data |
 > | `.github/instructions/ui-messages.instructions.md` | `src/views/**,src/webview/**` | Backend↔frontend message protocol (full type tables), chat view structure, streaming behavior |
 > | `.github/instructions/webview-ui.instructions.md` | `src/webview/**` | Assistant thread structure, CSS theming, diff2html, Vue patterns, session UX |
 > | `.github/instructions/testing.instructions.md` | `tests/**` | Test harnesses, coverage catalogs, webview test rules |
-> | `.github/instructions/agent-tools.instructions.md` | `src/agent/**,src/services/agentChatExecutor.ts,src/utils/toolCallParser.ts` | Agent execution flow, tool registry, tool call parser, terminal execution, command safety, approval flow |
+> | `.github/instructions/agent-tools.instructions.md` | `src/agent/**,src/services/agent/**,src/utils/toolCallParser.ts` | Agent execution flow, tool registry, tool call parser, terminal execution, command safety, approval flow |
 > | `.github/instructions/extension-architecture.instructions.md` | `src/extension.ts,src/config/**,src/services/**,src/types/**` | Type system (3 message interfaces), service init order, config patterns, OllamaClient API, terminal manager, model compatibility |
 > | `.github/instructions/documentation.instructions.md` | `docs/**,README.md` | Doc index maintenance, cross-link rules, TOC requirement, content rules, when to update |
 >
@@ -171,18 +171,35 @@ src/
 │   └── planMode.ts       # Multi-step planning
 ├── providers/
 │   └── completionProvider.ts  # Inline completion provider
-├── services/             # Core services
-│   ├── contextBuilder.ts # Builds context for prompts
-│   ├── editManager.ts    # Manages edit operations
-│   ├── agentChatExecutor.ts # Agent chat execution loop + tool handling
-│   ├── modelCompatibility.ts # Model feature detection
-│   ├── modelManager.ts   # Model listing/selection
-│   ├── ollamaClient.ts   # Ollama API client
+├── services/             # Core services (organized into subfolders)
+│   ├── contextBuilder.ts      # Builds context for prompts
+│   ├── editManager.ts         # Manages edit operations
 │   ├── pendingEditDecorationProvider.ts # File explorer decoration (pending badge)
-│   ├── pendingEditReviewService.ts # Inline change review (decorations + CodeLens + hunk ops)
-│   ├── sessionIndexService.ts # SQLite-backed chat session index
-│   ├── terminalManager.ts # Terminal lifecycle + command execution
-│   └── tokenManager.ts   # Bearer token management
+│   ├── terminalManager.ts     # Terminal lifecycle + command execution
+│   ├── tokenManager.ts        # Bearer token management
+│   ├── agent/                 # Agent execution engine (decomposed — see agent-tools instructions)
+│   │   ├── agentChatExecutor.ts     # Thin orchestrator — wires sub-handlers, runs main loop
+│   │   ├── agentStreamProcessor.ts  # Owns streaming: LLM chunk loop, throttled UI, thinking
+│   │   ├── agentToolRunner.ts       # Executes tool batches: progress groups, approvals, results
+│   │   ├── agentSummaryBuilder.ts   # Post-loop: summary generation, final message, filesChanged
+│   │   ├── agentTerminalHandler.ts  # Terminal command approval + execution
+│   │   ├── agentFileEditHandler.ts  # File edit approval + execution
+│   │   ├── approvalManager.ts       # Shared approval state tracking
+│   │   └── checkpointManager.ts     # Checkpoint/snapshot lifecycle
+│   ├── database/              # Persistence layer
+│   │   ├── databaseService.ts       # LanceDB message storage + embeddings
+│   │   ├── sessionIndexService.ts   # SQLite session/model/checkpoint index
+│   │   ├── checkpointRepository.ts  # Checkpoint + file snapshot queries
+│   │   ├── messageRepository.ts     # Message CRUD queries
+│   │   ├── sessionRepository.ts     # Session CRUD queries
+│   │   └── sqliteHelpers.ts         # DB migration + schema helpers
+│   ├── model/                 # Model management
+│   │   ├── ollamaClient.ts          # Ollama/OpenWebUI HTTP client
+│   │   ├── modelManager.ts          # Model listing/selection/caching
+│   │   └── modelCompatibility.ts    # Model capability detection
+│   └── review/                # Inline change review
+│       ├── pendingEditReviewService.ts # Decorations + CodeLens + hunk ops
+│       └── reviewCodeLensProvider.ts   # CodeLens provider for Keep/Undo actions
 ├── views/
 │   ├── chatView.ts       # Webview provider (thin orchestration)
 │   ├── chatSessionController.ts # Session state + messages + list/search
@@ -261,40 +278,52 @@ User types message in webview
       ├─ Post 'addMessage' + 'generationStarted' to webview
       └─ handleAgentMode()
           ├─ Create agent session + git branch (if git available)
-          └─ agentChatExecutor.execute()
-              ├─ Detect: useNativeTools (model has 'tools' cap) / useThinking
+          └─ agentChatExecutor.execute()          ← Thin orchestrator
+              ├─ Detect: useNativeTools / useThinking
               └─ LOOP (max iterations):
-                  ├─ Build chatRequest {model, messages, tools?, think?}
-                  ├─ Stream LLM response via OllamaClient.chat()
-                  │   ├─ Accumulate thinking (chunk.message.thinking)
-                  │   ├─ Accumulate tool_calls (chunk.message.tool_calls)
-                  │   └─ Throttled 'streamChunk' to webview (first-chunk gate: ≥8 word chars)
+                  │
+                  │ ┌─── AgentStreamProcessor.streamIteration() ───┐
+                  ├─│ Build chatRequest {model, messages, tools?}   │
+                  │ │ Stream LLM response via OllamaClient.chat()   │
+                  │ │   ├─ Accumulate thinking + tool_calls          │
+                  │ │   ├─ Throttled 'streamChunk' (32ms, 8-char gate)│
+                  │ │   └─ [TASK_COMPLETE] prefix stripping          │
+                  │ │ Return StreamResult {content, thinking, ...}   │
+                  │ └────────────────────────────────────────────────┘
+                  │
                   ├─ Persist thinking block (thinkingBlock UI event)
-                  ├─ Extract tool calls:
-                  │   ├─ Native: nativeToolCalls from API
-                  │   └─ XML fallback: extractToolCalls(response)
-                  ├─ Push assistant message to history (with thinking + tool_calls)
-                  ├─ If tools found:
-                  │   ├─ Persist + post 'startProgressGroup'
-                  │   ├─ For each tool:
-                  │   │   ├─ [Terminal cmd] → commandSafety → approval flow
-                  │   │   ├─ [File edit] → fileSensitivity → approval flow
-                  │   │   ├─ [Other tool] → direct execution via ToolRegistry
-                  │   │   ├─ Persist tool result to DB
-                  │   │   ├─ Persist + post 'showToolAction' (success/error)
-                  │   │   └─ Feed result: {role:'tool', content, tool_name} (native)
-                  │   │               or accumulated user msg (XML fallback)
-                  │   └─ Persist + post 'finishProgressGroup'
+                  ├─ Parse tool calls (native or XML fallback)
+                  ├─ Push assistant message to history
+                  │
+                  │ ┌─── AgentToolRunner.executeBatch() ────────────┐
+                  ├─│ If tools found:                                │
+                  │ │   ├─ Persist + post 'startProgressGroup'       │
+                  │ │   ├─ For each tool:                            │
+                  │ │   │   ├─ [Terminal] → terminalHandler           │
+                  │ │   │   ├─ [File edit] → fileEditHandler          │
+                  │ │   │   ├─ [Other] → ToolRegistry.executeTool()   │
+                  │ │   │   ├─ computeInlineDiffStats() for badges   │
+                  │ │   │   └─ Persist + post 'showToolAction'        │
+                  │ │   └─ Persist + post 'finishProgressGroup'       │
+                  │ │ Return ToolBatchResult {results, wrote, ...}    │
+                  │ └────────────────────────────────────────────────┘
+                  │
                   ├─ If [TASK_COMPLETE] → validate writes → break loop
                   └─ Continue to next iteration
-              → Persist final assistant message to DB
-              → Post 'finalMessage' to webview
-              → Persist + post 'filesChanged' (if files were modified)
-              → Return { summary, assistantMessage, checkpointId }
+              │
+              │ ┌─── AgentSummaryBuilder.finalize() ────────────────┐
+              └─│ Persist final assistant message to DB              │
+                │ Post 'finalMessage' to webview                     │
+                │ Generate summary (LLM call or fallback)            │
+                │ Persist + post 'filesChanged' (if files modified)  │
+                │ Return SummaryResult {summary, message, checkpoint}│
+                └───────────────────────────────────────────────────┘
           ← Back in handleAgentMode()
               → Auto-start inline review (reviewService.startReviewForCheckpoint)
               → Post 'generationStopped'
 ```
+
+**Sub-handler ownership**: Each boxed section above is a separate class in `src/services/agent/`. The orchestrator (`agentChatExecutor.ts`) only wires dependencies and runs the while-loop. **Do NOT add streaming, tool execution, or summary logic directly to the orchestrator.** See `agent-tools.instructions.md` → "Agent Executor Architecture" for full decomposition rules.
 
 **Key invariant**: Every `postMessage` to the webview has a matching `persistUiEvent` to the database, in the same order. This ensures session history matches live chat exactly.
 
@@ -316,7 +345,7 @@ There are **three message interfaces**. Using the wrong one is a common mistake:
 
 See the **"Three Message Interfaces"** section in `extension-architecture.instructions.md` for field-level details and conversion rules.
 
-### OllamaClient (`src/services/ollamaClient.ts`)
+### OllamaClient (`src/services/model/ollamaClient.ts`)
 
 The HTTP client for communicating with Ollama/OpenWebUI APIs.
 
@@ -369,6 +398,23 @@ Models are managed in the **Models** settings tab (`ModelCapabilitiesSection.vue
 - **Capability detection**: On startup (and on manual refresh), the extension calls `/api/show` for each model to detect capabilities (chat, vision, FIM, tools, embedding). Results are cached in SQLite.
 - **Auto-save**: Model selection dropdowns save automatically on change — no explicit save button.
 - **Stale model cleanup**: `upsertModels()` in `sessionIndexService.ts` does `DELETE FROM models` before re-inserting, so models removed from Ollama are automatically dropped from the cache.
+
+### Agent Execution Engine (`src/services/agent/`)
+
+The agent executor is **decomposed into focused sub-handlers** — each owning a distinct phase of the agent loop. This is a deliberate architectural choice to keep each file under ~300 LOC and prevent monolithic growth.
+
+| File | Responsibility |
+|------|----------------|
+| `agentChatExecutor.ts` | **Thin orchestrator** — wires sub-handlers, runs main `while` loop, owns `persistUiEvent` and `buildAgentSystemPrompt` |
+| `agentStreamProcessor.ts` | Owns the `for await (chunk)` streaming loop — thinking accumulation, throttled UI emission, first-chunk gate |
+| `agentToolRunner.ts` | Executes a batch of tool calls per iteration — progress groups, approvals, inline diff stats |
+| `agentSummaryBuilder.ts` | Post-loop finalization — summary generation (LLM or fallback), final message, `filesChanged` event |
+| `agentTerminalHandler.ts` | Terminal command approval + execution via `TerminalManager` |
+| `agentFileEditHandler.ts` | File edit approval + execution via workspace FS |
+| `approvalManager.ts` | Shared approval state tracking |
+| `checkpointManager.ts` | Checkpoint/snapshot lifecycle |
+
+**Anti-pattern**: Do NOT add streaming, tool execution, or summary generation logic directly to `agentChatExecutor.ts`. If you need new behavior in the agent loop, add it to the appropriate sub-handler or create a new one. See `agent-tools.instructions.md` → "Agent Executor Architecture" for full decomposition rules.
 
 ---
 
@@ -462,21 +508,24 @@ vsce package
 |------|---------|-------------------|
 | Add a new VS Code setting | `package.json` + `src/config/settings.ts` + `src/views/settingsHandler.ts` + webview | `add-new-setting` skill |
 | Add a new message type | `src/views/chatView.ts` + `src/webview/scripts/core/messageHandlers/` | `add-chat-message-type` skill |
-| Add a new agent tool | `src/agent/toolRegistry.ts` + `src/views/toolUIFormatter.ts` | `add-agent-tool` skill |
+| Add a new agent tool | `src/agent/toolRegistry.ts` + `src/views/toolUIFormatter.ts` + `src/services/agent/agentToolRunner.ts` | `add-agent-tool` skill |
 | Modify chat UI | `src/webview/components/chat/` + `src/webview/scripts/core/` | `webview-ui` instructions |
-| Modify model management UI | `src/webview/components/settings/components/ModelCapabilitiesSection.vue` + `src/services/sessionIndexService.ts` | `database-rules` + `extension-architecture` instructions |
-| Change API behavior | `src/services/ollamaClient.ts` | `extension-architecture` instructions |
+| Modify model management UI | `src/webview/components/settings/components/ModelCapabilitiesSection.vue` + `src/services/database/sessionIndexService.ts` | `database-rules` + `extension-architecture` instructions |
+| Change API behavior | `src/services/model/ollamaClient.ts` | `extension-architecture` instructions |
 | Change inline completions | `src/providers/completionProvider.ts` | — |
-| Modify agent prompts | `buildAgentSystemPrompt()` in `src/services/agentChatExecutor.ts` | `agent-tools` instructions |
-| Message storage (LanceDB) | `src/services/databaseService.ts` | `database-rules` instructions |
-| Session storage (SQLite) | `src/services/sessionIndexService.ts` | `database-rules` instructions |
+| Modify agent prompts | `buildAgentSystemPrompt()` in `src/services/agent/agentChatExecutor.ts` | `agent-tools` instructions |
+| Modify agent streaming | `src/services/agent/agentStreamProcessor.ts` | `agent-tools` instructions |
+| Modify agent tool execution | `src/services/agent/agentToolRunner.ts` | `agent-tools` instructions |
+| Modify agent summary/finalization | `src/services/agent/agentSummaryBuilder.ts` | `agent-tools` instructions |
+| Message storage (LanceDB) | `src/services/database/databaseService.ts` | `database-rules` instructions |
+| Session storage (SQLite) | `src/services/database/sessionIndexService.ts` | `database-rules` instructions |
 | DB maintenance actions | `src/views/settingsHandler.ts` | `database-rules` instructions |
 | Terminal command execution | `src/services/terminalManager.ts` + `src/utils/commandSafety.ts` | `agent-tools` instructions |
-| File edit approval | `src/utils/fileSensitivity.ts` + `src/services/agentChatExecutor.ts` | `agent-tools` instructions |
-| Inline change review (CodeLens) | `src/services/pendingEditReviewService.ts` | `extension-architecture` instructions |
-| Cross-file change navigation | `src/services/pendingEditReviewService.ts` (nav logic) + `src/webview/components/chat/components/FilesChanged.vue` (nav bar UI) | `extension-architecture` + `webview-ui` instructions |
-| Session stats badge (pending +/-) | `src/services/sessionIndexService.ts` (`getSessionsPendingStats`) + `src/views/chatSessionController.ts` (`sendSessionsList`) | `database-rules` + `extension-architecture` instructions |
+| File edit approval | `src/utils/fileSensitivity.ts` + `src/services/agent/agentFileEditHandler.ts` | `agent-tools` instructions |
+| Inline change review (CodeLens) | `src/services/review/pendingEditReviewService.ts` | `extension-architecture` instructions |
+| Cross-file change navigation | `src/services/review/pendingEditReviewService.ts` (nav logic) + `src/webview/components/chat/components/FilesChanged.vue` (nav bar UI) | `extension-architecture` + `webview-ui` instructions |
+| Session stats badge (pending +/-) | `src/services/database/sessionIndexService.ts` (`getSessionsPendingStats`) + `src/views/chatSessionController.ts` (`sendSessionsList`) | `database-rules` + `extension-architecture` instructions |
 | Files changed widget | `src/webview/components/chat/components/FilesChanged.vue` + `src/webview/scripts/core/actions/filesChanged.ts` + `src/webview/scripts/core/messageHandlers/filesChanged.ts` | `webview-ui` + `ui-messages` instructions |
-| Checkpoint/snapshot management | `src/services/sessionIndexService.ts` (tables) + `src/services/agentChatExecutor.ts` (lifecycle) | `database-rules` + `agent-tools` instructions |
+| Checkpoint/snapshot management | `src/services/database/sessionIndexService.ts` (tables) + `src/services/agent/checkpointManager.ts` (lifecycle) | `database-rules` + `agent-tools` instructions |
 | Write/edit instructions | `.github/instructions/` + `.github/skills/` | `copilot-custom-instructions` skill |
 | Add a new test | `tests/extension/suite/` or `tests/webview/` | `add-test` skill |

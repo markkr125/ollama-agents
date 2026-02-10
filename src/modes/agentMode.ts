@@ -5,7 +5,7 @@ import { PRWorkflow } from '../agent/prWorkflow';
 import { SessionManager } from '../agent/sessionManager';
 import { ToolRegistry } from '../agent/toolRegistry';
 import { getModeConfig } from '../config/settings';
-import { OllamaClient } from '../services/ollamaClient';
+import { OllamaClient } from '../services/model/ollamaClient';
 
 export class AgentModeHandler {
   constructor(

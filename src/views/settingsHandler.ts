@@ -1,8 +1,8 @@
 import * as vscode from 'vscode';
 import { getConfig } from '../config/settings';
-import { DatabaseService } from '../services/databaseService';
-import { getModelCapabilities } from '../services/modelCompatibility';
-import { OllamaClient } from '../services/ollamaClient';
+import { DatabaseService } from '../services/database/databaseService';
+import { getModelCapabilities } from '../services/model/modelCompatibility';
+import { OllamaClient } from '../services/model/ollamaClient';
 import { TokenManager } from '../services/tokenManager';
 import { Model } from '../types/ollama';
 import { WebviewMessageEmitter } from './chatTypes';

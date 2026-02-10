@@ -1,5 +1,5 @@
 import * as vscode from 'vscode';
-import { OllamaClient } from '../services/ollamaClient';
+import { OllamaClient } from '../services/model/ollamaClient';
 import { ChatMessage, ToolCall } from '../types/ollama';
 import { Session, ToolExecution } from '../types/session';
 import { ToolContext, ToolRegistry } from './toolRegistry';

@@ -161,7 +161,7 @@ Widget requests diff stats
   - Test connection + token handling
   - DB maintenance actions
 
-- **`src/services/agentChatExecutor.ts`**
+- **`src/services/agent/agentChatExecutor.ts`** (orchestrator) + **`src/services/agent/agentToolRunner.ts`** (tool batch execution) + **`src/services/agent/agentStreamProcessor.ts`** (streaming) + **`src/services/agent/agentSummaryBuilder.ts`** (post-loop finalization)
   - Agent execution loop
   - Tool call parsing + execution
   - Progress group + tool UI updates (via emitter)

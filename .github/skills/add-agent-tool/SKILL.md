@@ -53,6 +53,18 @@ case 'my_tool':
   };
 ```
 
+## Step 3: Understand Execution Routing
+
+Tool execution is handled by the **decomposed agent executor** in `src/services/agent/`. The orchestrator (`agentChatExecutor.ts`) delegates tool execution to `agentToolRunner.ts`, which calls `ToolRegistry.executeTool()` for standard tools.
+
+**Where to add special execution logic:**
+- Standard tools (read/write/search): Register in `toolRegistry.ts` — `agentToolRunner.ts` calls them automatically
+- Terminal commands: Handled by `agentTerminalHandler.ts` (approval + execution)
+- File edits: Handled by `agentFileEditHandler.ts` (sensitivity check + approval)
+- New execution category: Create a new sub-handler in `src/services/agent/` — do NOT add logic to `agentChatExecutor.ts`
+
+See `agent-tools.instructions.md` → "Agent Executor Architecture" for the full decomposition rules.
+
 ## Step 3: Add to Settings UI (if toggleable)
 
 If the tool should be individually enable/disable-able, add it to the Tools section in the settings page (`src/webview/components/settings/components/ToolsSection.vue`).
