@@ -116,8 +116,7 @@ export function extractToolCalls(response: string): ParsedToolCall[] {
         // If no arguments field found, maybe the args are at the top level
         // (e.g., {"name": "read_file", "path": "package.json"})
         if (!args || Object.keys(args).length === 0) {
-          // eslint-disable-next-line @typescript-eslint/no-unused-vars
-          const { name, tool, function: fn, arguments: _a, args: _b, params: _c, parameters: _d, ...rest } = parsed;
+          const { name: _name, tool: _tool, function: _fn, arguments: _a, args: _b, params: _c, parameters: _d, ...rest } = parsed;
           if (Object.keys(rest).length > 0) {
             args = rest;
           }
@@ -131,7 +130,7 @@ export function extractToolCalls(response: string): ParsedToolCall[] {
   }
 
   // Bracket format: [TOOL_CALLS] tool_name [ARGS] {...}
-  const bracketToolCallRegex = /\[TOOL_CALLS\]\s*([^\[]+)\[ARGS\]\s*(\{[\s\S]*?)(?:\n|$)/g;
+  const bracketToolCallRegex = /\[TOOL_CALLS\]\s*([^[]+)\[ARGS\]\s*(\{[\s\S]*?)(?:\n|$)/g;
   while ((match = bracketToolCallRegex.exec(response)) !== null) {
     const name = (match[1] || '').trim();
     // Normalize smart quotes to regular quotes BEFORE extracting balanced JSON

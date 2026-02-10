@@ -11,8 +11,8 @@
         <span class="stat-del">-{{ block.totalDeletions }}</span>
       </span>
       <span class="files-changed-actions" @click.stop>
-        <button class="fc-btn fc-btn-keep" @click="handleKeepAll" title="Keep all changes">Keep All</button>
-        <button class="fc-btn fc-btn-undo" @click="handleUndoAll" title="Undo all changes">Undo All</button>
+        <button class="fc-btn fc-btn-keep" title="Keep all changes" @click="handleKeepAll">Keep All</button>
+        <button class="fc-btn fc-btn-undo" title="Undo all changes" @click="handleUndoAll">Undo All</button>
       </span>
     </div>
 
@@ -26,22 +26,22 @@
       >
         <span class="file-ext-badge" :class="fileExtClass(file.path)">{{ fileExt(file.path) }}</span>
         <span class="file-name" :title="file.path">{{ fileName(file.path) }}</span>
-        <span class="file-dir" v-if="fileDir(file.path)">{{ fileDir(file.path) }}</span>
+        <span v-if="fileDir(file.path)" class="file-dir">{{ fileDir(file.path) }}</span>
         <span v-if="file.additions != null" class="file-stats">
           <span class="stat-add">+{{ file.additions }}</span>
           <span class="stat-del">-{{ file.deletions }}</span>
         </span>
         <span class="file-actions" @click.stop>
-          <button class="fc-file-btn" @click="handleKeepFile(file.path, file.checkpointId)" title="Keep this file">✓</button>
-          <button class="fc-file-btn" @click="handleUndoFile(file.path, file.checkpointId)" title="Undo this file">↩</button>
+          <button class="fc-file-btn" title="Keep this file" @click="handleKeepFile(file.path, file.checkpointId)">✓</button>
+          <button class="fc-file-btn" title="Undo this file" @click="handleUndoFile(file.path, file.checkpointId)">↩</button>
         </span>
       </div>
     </div>
 
-    <div class="files-changed-nav" v-if="block.totalChanges" @click.stop>
+    <div v-if="block.totalChanges" class="files-changed-nav" @click.stop>
       <span class="fc-nav-label">Change {{ block.currentChange ?? 0 }} of {{ block.totalChanges }}</span>
-      <button class="fc-nav-arrow-btn" @click="handleNavPrev" title="Previous change">←</button>
-      <button class="fc-nav-arrow-btn" @click="handleNavNext" title="Next change">→</button>
+      <button class="fc-nav-arrow-btn" title="Previous change" @click="handleNavPrev">←</button>
+      <button class="fc-nav-arrow-btn" title="Next change" @click="handleNavNext">→</button>
     </div>
   </div>
 </template>

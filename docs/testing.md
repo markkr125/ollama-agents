@@ -344,6 +344,8 @@ afterEach(() => {
 | Assertions | `assert.strictEqual()`, `assert.ok()` | `expect().toBe()`, `expect().toEqual()` |
 | Async | `async` test functions | `async` test functions |
 
+Naming conventions are enforced by `npm run lint:naming`. Run `npm run lint:all` before pushing to catch violations.
+
 ---
 
 ## Existing Coverage

@@ -171,9 +171,11 @@ if (msg.sessionId && msg.sessionId !== currentSessionId.value) return;
 - [ ] Session guard (if session-scoped)
 - [ ] `persistUiEvent` + `timelineBuilder` handler (if must survive session reload)
 - [ ] Update `ui-messages.instructions.md` protocol table
+- [ ] `npm run lint:all` passes
 
 **Frontend → Backend:**
 - [ ] `vscode.postMessage()` call (in action function or component)
 - [ ] Handler in appropriate `src/views/messageHandlers/*.ts` class (add to `handledTypes` + `handle()` switch)
 - [ ] Delegate to appropriate service (keep handlers focused)
 - [ ] Update `ui-messages.instructions.md` protocol table
+- [ ] `npm run lint:all` passes

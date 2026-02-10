@@ -17,7 +17,7 @@
       <span class="detail-value">{{ item.reason }}</span>
     </div>
 
-    <div class="file-approval-diff" v-if="item.diffHtml">
+    <div v-if="item.diffHtml" class="file-approval-diff">
       <div :class="diffThemeClass" v-html="item.diffHtml"></div>
     </div>
 
@@ -42,7 +42,7 @@
 import { computed } from 'vue';
 import type { FileEditApprovalItem } from '../../../scripts/core/types';
 
-const props = defineProps<{
+defineProps<{
   item: FileEditApprovalItem;
   onApprove: (id: string) => void;
   onSkip: (id: string) => void;

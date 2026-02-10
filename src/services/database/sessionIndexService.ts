@@ -39,7 +39,6 @@ export class SessionIndexService {
 
     const dbPath = vscode.Uri.joinPath(this.storageUri, 'sessions.sqlite').fsPath;
 
-    // eslint-disable-next-line @typescript-eslint/no-var-requires
     const sqlite3 = require('@vscode/sqlite3');
     this.db = await new Promise<SqliteDb>((resolve, reject) => {
       const db = new sqlite3.Database(dbPath, (err: Error | null) => {

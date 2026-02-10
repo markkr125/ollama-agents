@@ -150,35 +150,30 @@ export class AgentExecutor {
   ): Promise<string | null> {
     let fullResponse = '';
 
-    try {
-      const stream = this.client.chat({
-        model,
-        messages,
-        options: {
-          temperature: config.temperature
-        }
-      });
+    const stream = this.client.chat({
+      model,
+      messages,
+      options: {
+        temperature: config.temperature
+      }
+    });
 
-      for await (const chunk of stream) {
-        if (token.isCancellationRequested) {
-          return null;
-        }
-
-        const content = chunk.message?.content || chunk.response || '';
-        if (content) {
-          fullResponse += content;
-        }
-
-        if (chunk.done) {
-          break;
-        }
+    for await (const chunk of stream) {
+      if (token.isCancellationRequested) {
+        return null;
       }
 
-      return fullResponse;
+      const content = chunk.message?.content || chunk.response || '';
+      if (content) {
+        fullResponse += content;
+      }
 
-    } catch (error) {
-      throw error;
+      if (chunk.done) {
+        break;
+      }
     }
+
+    return fullResponse;
   }
 
   /**
@@ -234,7 +229,7 @@ Guidelines:
             }
           });
         }
-      } catch (error) {
+      } catch (_error) {
         // Invalid JSON, skip
       }
     }

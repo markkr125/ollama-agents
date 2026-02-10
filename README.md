@@ -74,6 +74,8 @@ npm install          # Install dependencies
 npm run compile      # Build webview (Vite) + extension (Webpack)
 npm run watch        # Watch mode for development
 npm run test:all     # Run all tests (Vitest + extension host)
+npm run lint:all     # Lint: ESLint + docs structure + naming conventions
+npm run lint:fix     # ESLint auto-fix
 npm run package      # Package as .vsix
 ```
 

@@ -56,8 +56,8 @@
                 <input
                   type="checkbox"
                   :checked="model.enabled"
-                  @change="toggleModelEnabled(model.name, !model.enabled)"
                   :title="model.enabled ? 'Disable this model' : 'Enable this model'"
+                  @change="toggleModelEnabled(model.name, !model.enabled)"
                 />
               </td>
               <td class="col-name" :title="model.name">{{ model.name }}</td>
@@ -93,8 +93,8 @@
         >
           {{ capabilityCheckProgress.running ? 'Checking…' : '↻ Refresh All' }}
         </button>
-        <button class="btn btn-secondary" @click="enableAll" :disabled="allEnabled">Enable All</button>
-        <button class="btn btn-secondary" @click="disableAll" :disabled="noneEnabled">Disable All</button>
+        <button class="btn btn-secondary" :disabled="allEnabled" @click="enableAll">Enable All</button>
+        <button class="btn btn-secondary" :disabled="noneEnabled" @click="disableAll">Disable All</button>
       </div>
 
       <!-- Model Selection -->

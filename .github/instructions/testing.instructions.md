@@ -9,6 +9,7 @@ description: "Testing guidelines, test harness setup, existing test coverage cat
 
 - After making code changes, ensure the project still compiles successfully.
 - Use `npm run compile` to verify the extension and webview build.
+- Run `npm run lint:all` to check ESLint, docs structure, and naming conventions.
 
 ## Automated Testing (Required)
 

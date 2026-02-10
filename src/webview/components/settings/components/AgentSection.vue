@@ -4,11 +4,11 @@
       <h3>Agent Settings</h3>
       <div class="settings-item">
         <label class="settings-label">Max Iterations</label>
-        <input type="number" v-model.number="settings.maxIterations" />
+        <input v-model.number="settings.maxIterations" type="number" />
       </div>
       <div class="settings-item">
         <label class="settings-label">Max Active Sessions</label>
-        <input type="number" min="1" max="5" v-model.number="settings.maxActiveSessions" />
+        <input v-model.number="settings.maxActiveSessions" type="number" min="1" max="5" />
       </div>
       <div class="settings-item">
         <label class="settings-label">Tool Timeout (seconds)</label>
@@ -17,9 +17,9 @@
       <div class="settings-item">
         <label class="settings-label">Sensitive File Patterns (JSON)</label>
         <textarea
+          v-model="settings.sensitiveFilePatterns"
           class="settings-textarea"
           rows="8"
-          v-model="settings.sensitiveFilePatterns"
           spellcheck="false"
         ></textarea>
         <div class="settings-desc">
@@ -32,9 +32,9 @@
           class="settings-textarea"
           rows="4"
           :value="localSessionPatterns"
-          @input="$emit('update:localSessionPatterns', ($event.target as HTMLTextAreaElement).value)"
           spellcheck="false"
-          placeholder='{"**/*": true, "**/.env*": false}'
+          placeholder="{&quot;**/*&quot;: true, &quot;**/.env*&quot;: false}"
+          @input="$emit('update:localSessionPatterns', ($event.target as HTMLTextAreaElement).value)"
         ></textarea>
         <div class="settings-desc">
           Override sensitive file patterns for the current session only.

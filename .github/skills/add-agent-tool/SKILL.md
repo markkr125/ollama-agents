@@ -118,5 +118,6 @@ If the tool introduces new conventions or critical rules, update the relevant `.
 - [ ] Tool added to `builtInTools` array in `src/agent/tools/index.ts`
 - [ ] UI representation in `toolUIFormatter.ts`
 - [ ] Tests covering happy path and argument flexibility
+- [ ] `npm run lint:all` passes (ESLint + docs + naming)
 - [ ] Settings toggle (if applicable)
 - [ ] Instructions updated (if new conventions introduced)

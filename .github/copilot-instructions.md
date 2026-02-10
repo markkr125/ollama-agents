@@ -116,7 +116,7 @@ These are the mistakes most frequently made when editing this codebase. **Check 
 
 | # | Pitfall | Why It Breaks | Correct Approach |
 |---|---------|---------------|------------------|
-| 1 | Importing `vscode` in webview code (`src/webview/**`) | Webview runs in a sandboxed iframe — `vscode` module does not exist there. Build will succeed but runtime crashes. | Use `acquireVsCodeApi()` (already called in `state.ts`). Communicate with the extension via `postMessage`. |
+| 1 | Importing `vscode` in webview code (`src/webview/**`) | Webview runs in a sandboxed iframe — `vscode` module does not exist there. Build will succeed but runtime crashes. | Use `acquireVsCodeApi()` (already called in `state.ts`). Communicate with the extension via `postMessage`. **Enforced by ESLint `no-restricted-imports` rule.** |
 | 2 | Editing files in `media/`, `dist/`, or `out/` | These are **build outputs**, not source. Changes are overwritten on next build. | Edit source in `src/` and `src/webview/`. See **Build Output Directories** in `extension-architecture.instructions.md`. |
 | 3 | Treating `streamChunk` content as a delta | `streamChunk` sends **accumulated** content ("Hello World"), not incremental (" World"). The handler **replaces** the text block, not appends. | Always replace the entire text block content with the received `content` string. |
 | 4 | Using `isPathSafe()` result without inverting | `isPathSafe()` returns `true` = path IS safe (no approval needed), `false` = requires approval. The name is intuitive but the usage often gets flipped. | `if (!isPathSafe(path)) { /* require approval */ }` — see `⚠️ INVERTED BOOLEAN` in `agent-tools.instructions.md`. |
@@ -471,13 +471,26 @@ After **any** code change, run through this checklist:
 
 1. **Compile check**: `npm run compile` — must exit 0 (builds both webview via Vite and extension via webpack)
 2. **Type check tests**: `npx tsc -p tsconfig.test.json --noEmit` — ensures test files still compile against changed source
-3. **Run relevant tests**:
+3. **Lint check**: `npm run lint:all` — must exit 0 (ESLint + docs structure + naming conventions)
+4. **Run relevant tests**:
    - Changed `src/webview/**` → `npm run test:webview`
    - Changed `src/**` (non-webview) → `npm test`
    - Changed both or unsure → `npm run test:all`
-4. **Check for regressions**: If you modified a message type, verify both the live handler (in `messageHandlers/`) and `timelineBuilder.ts` still agree
-5. **Verify no stale imports**: If you moved or renamed a file, search for old import paths across the codebase
-6. **Docs structure check**: If you touched `docs/`, `.github/instructions/`, or `.github/skills/`, run `npm run lint:docs`
+5. **Check for regressions**: If you modified a message type, verify both the live handler (in `messageHandlers/`) and `timelineBuilder.ts` still agree
+6. **Verify no stale imports**: If you moved or renamed a file, search for old import paths across the codebase
+
+### Naming Conventions (Enforced by `npm run lint:naming`)
+
+| Target | Convention | Example |
+|--------|------------|---------|
+| Folders | camelCase | `messageHandlers/`, `core/` |
+| `.ts` files | camelCase | `chatView.ts`, `toolCallParser.ts` |
+| `.vue` files | PascalCase | `ChatPage.vue`, `HeaderBar.vue` |
+| `.test.ts` files | mirrors source | `chatView.test.ts`, `MarkdownBlock.test.ts` |
+| `.scss` partials | `_kebab-case` | `_chat-input.scss`, `_variables.scss` |
+| Special exemptions | — | `index.ts`, `main.ts`, `setup.ts`, `App.ts`, `App.vue`, `styles.scss` |
+
+The naming linter (`scripts/lint-naming.js`) walks `src/` and `tests/` and exits non-zero on any violation. It runs as part of `npm run lint:all`.
 
 ### Adding a New Mode
 
@@ -506,6 +519,18 @@ npm run build:webview
 
 # Watch mode (development)
 npm run watch
+
+# Lint — all checks (ESLint + docs structure + naming conventions)
+npm run lint:all
+
+# Lint — ESLint only (with auto-fix)
+npm run lint:fix
+
+# Lint — naming conventions only
+npm run lint:naming
+
+# Lint — docs structure only
+npm run lint:docs
 
 # Package extension
 vsce package

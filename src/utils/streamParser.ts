@@ -13,7 +13,7 @@ export async function* parseNDJSON(reader: ReadableStreamDefaultReader<Uint8Arra
         if (buffer.trim()) {
           try {
             yield JSON.parse(buffer);
-          } catch (e) {
+          } catch (_e) {
             // Ignore parse errors for incomplete data
           }
         }
