@@ -1,4 +1,72 @@
 /* Tool Actions - Copilot Style */
+
+/* Flat file-edit actions (no collapsible group wrapper) */
+.flat-file-actions {
+  margin: 4px 0;
+
+  .flat-action {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 3px 12px;
+    font-size: 12.5px;
+    color: var(--fg);
+
+    .action-status {
+      width: 14px;
+      height: 14px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 11px;
+
+      &.done {
+        color: var(--success);
+      }
+
+      &.error {
+        color: var(--error);
+      }
+
+      &.pending {
+        color: var(--muted);
+      }
+    }
+
+    .flat-verb {
+      color: var(--muted);
+    }
+
+    .flat-chevron {
+      color: var(--muted);
+      font-size: 9px;
+      opacity: 0.7;
+    }
+
+    .flat-filename {
+      color: var(--fg);
+      cursor: pointer;
+
+      &:hover {
+        text-decoration: underline;
+        color: var(--accent);
+      }
+    }
+
+    .flat-stat-add {
+      color: var(--success);
+      margin-left: 4px;
+      font-size: 11.5px;
+    }
+
+    .flat-stat-del {
+      color: var(--error);
+      margin-left: 3px;
+      font-size: 11.5px;
+    }
+  }
+}
+
 .progress-group {
   margin: 10px 0;
   /*border-radius: 8px;*/
@@ -120,11 +188,25 @@
 
     .filename {
       color: var(--fg);
+
+      &.clickable {
+        cursor: pointer;
+
+        &:hover {
+          text-decoration: underline;
+          color: var(--accent);
+        }
+      }
     }
 
     .detail {
       color: var(--muted);
       opacity: 0.8;
+
+      &.diff-stats {
+        opacity: 1;
+        margin-left: 6px;
+      }
     }
   }
 }

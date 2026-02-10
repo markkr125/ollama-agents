@@ -79,7 +79,7 @@ export function getToolSuccessInfo(
   toolName: string,
   args: any,
   output: string
-): { actionText: string; actionDetail: string } {
+): { actionText: string; actionDetail: string; filePath?: string } {
   const path = args?.path || args?.file || '';
   const fileName = path ? path.split('/').pop() : 'file';
 
@@ -93,10 +93,16 @@ export function getToolSuccessInfo(
       };
     }
     case 'write_file':
+      return {
+        actionText: `Edited ${fileName}`,
+        actionDetail: '',
+        filePath: path
+      };
     case 'create_file':
       return {
-        actionText: `Wrote ${fileName}`,
-        actionDetail: ''
+        actionText: `Added ${fileName}`,
+        actionDetail: '',
+        filePath: path
       };
     case 'list_files': {
       const items = output?.split('\n').filter(Boolean).length || 0;

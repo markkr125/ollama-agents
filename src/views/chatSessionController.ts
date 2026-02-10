@@ -48,13 +48,23 @@ export class ChatSessionController {
 
   async sendSessionsList(offset = 0, append = false) {
     const sessionsPage = await this.databaseService.listSessions(50, offset);
-    const sessionsList = sessionsPage.sessions.map(s => ({
-      id: s.id,
-      title: s.title,
-      timestamp: s.updated_at,
-      active: s.id === this.currentSessionId,
-      status: s.status
-    }));
+    const pendingStats = await this.databaseService.getSessionsPendingStats();
+
+    const sessionsList = sessionsPage.sessions.map(s => {
+      const stats = pendingStats.get(s.id);
+      return {
+        id: s.id,
+        title: s.title,
+        timestamp: s.updated_at,
+        active: s.id === this.currentSessionId,
+        status: s.status,
+        ...(stats && stats.fileCount > 0 ? {
+          pendingAdditions: stats.additions,
+          pendingDeletions: stats.deletions,
+          pendingFileCount: stats.fileCount
+        } : {})
+      };
+    });
 
     this.emitter.postMessage({
       type: append ? 'appendSessions' : 'loadSessions',

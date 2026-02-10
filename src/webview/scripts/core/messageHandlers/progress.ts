@@ -64,12 +64,14 @@ export const handleShowToolAction = (msg: ShowToolActionMessage) => {
   const resolvedIndex = lastRunningIndex >= 0
     ? group.actions.length - 1 - lastRunningIndex
     : -1;
-  const action = {
+  const action: ActionItem = {
     id: `action_${Date.now()}_${Math.random()}`,
     status: msg.status || 'running',
     icon: msg.icon || '•',
     text: actionText,
-    detail: msg.detail || null
+    detail: msg.detail || null,
+    ...(msg.filePath ? { filePath: msg.filePath } : {}),
+    ...(msg.checkpointId ? { checkpointId: msg.checkpointId } : {})
   };
   if (action.status !== 'running' && action.status !== 'pending') {
     // Final state (success/error) - update existing or push

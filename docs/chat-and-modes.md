@@ -11,6 +11,8 @@
 - [Session Management](#session-management)
 - [Command Approval](#command-approval)
 - [File Edit Approval](#file-edit-approval)
+- [Files Changed Widget](#files-changed-widget)
+- [Inline Change Review](#inline-change-review)
 
 ---
 
@@ -134,3 +136,32 @@ When the agent edits a file matching a sensitive pattern, it shows:
 - An "Open Diff" button to view in VS Code's native diff editor
 
 Sensitivity is controlled by `ollamaCopilot.agent.sensitiveFilePatterns`. See [Configuration](configuration.md#sensitive-file-patterns).
+
+## Files Changed Widget
+
+After the agent modifies files, a **Files Changed** widget appears at the bottom of the chat. It shows all files the agent wrote or created, grouped across agent iterations.
+
+**Widget features:**
+- **Per-file rows**: Each file shows its relative path, `+N -N` diff stats (additions/deletions), and action buttons
+- **Keep / Undo per file**: Click ✓ to accept a file's changes permanently, or ↩ to revert to the original content
+- **Keep All / Undo All**: Bulk actions in the header to accept or revert all changes at once
+- **Diff view**: Click the diff icon on a file row to open VS Code's native side-by-side diff editor
+- **Inline review**: Click the review icon to open the file with inline decorations and CodeLens (see [Inline Change Review](#inline-change-review))
+- **Change navigation**: A nav bar shows "Change X of Y" with ◀ / ▶ buttons to step through individual hunks (changed regions) across all files. The currently navigated file is highlighted with a blue left border.
+- **Session stats badge**: The sessions panel shows `+N -N` badges reflecting the total pending additions/deletions for each session. These update in real time as you keep or undo files.
+
+**Multi-iteration support:** When the agent runs multiple tool iterations (each generating changes), all files accumulate into a single widget. Navigation covers all hunks across all iterations in chronological order.
+
+## Inline Change Review
+
+Inline change review provides a GitHub-style code review experience directly in the editor:
+
+**How it works:**
+1. After the agent finishes, green (added) and red (deleted) line decorations automatically appear on any open files that were modified
+2. Each changed region ("hunk") has CodeLens actions above it:
+   - **Keep** (✓) — Accept the change and remove the decoration
+   - **Undo** (↩) — Revert the hunk to the original text
+   - **↑ / ↓** — Navigate to the previous/next hunk (works across files)
+3. After all hunks in a file are resolved (kept or undone), the file is automatically marked as resolved in the widget
+
+**Cross-file navigation:** The ↑ / ↓ CodeLens buttons and the widget's ◀ / ▶ nav buttons both navigate through ALL hunks across ALL modified files in chronological order. When navigating to a hunk in a different file, the editor automatically opens and scrolls to that file.

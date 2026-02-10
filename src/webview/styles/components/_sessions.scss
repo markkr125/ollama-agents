@@ -384,6 +384,23 @@
   }
 }
 
+.session-pending-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  margin-left: 6px;
+  font-size: 10px;
+  font-family: var(--vscode-editor-font-family, monospace);
+
+  .pending-additions {
+    color: var(--vscode-charts-green, #89d185);
+  }
+
+  .pending-deletions {
+    color: var(--vscode-charts-red, #f14c4c);
+  }
+}
+
 .status-spinner {
   animation: spin 1s linear infinite;
 }

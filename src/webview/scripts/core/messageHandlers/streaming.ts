@@ -68,8 +68,9 @@ export const handleFinalMessage = (msg: StreamChunkMessage) => {
   currentAssistantThreadId.value = thread.id;
 
   // finalMessage carries ONLY new content (e.g., summary prefix "N files modified").
-  // Per-iteration text blocks already exist — append to last text block if possible
-  // (matches appendText behavior in timelineBuilder for parity).
+  // Per-iteration text blocks already exist — append to last text block ONLY if it's
+  // the last block in the thread (matching timelineBuilder appendText behavior for parity).
+  // If tools/thinking blocks follow the last text, create a new text block.
   if (msg.content) {
     const lastBlock = thread.blocks[thread.blocks.length - 1];
     if (lastBlock && lastBlock.type === 'text') {

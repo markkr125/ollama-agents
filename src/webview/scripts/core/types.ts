@@ -39,6 +39,29 @@ export type AssistantThreadToolsBlock = {
   tools: Array<ProgressItem | CommandApprovalItem | FileEditApprovalItem>;
 };
 
+export type FileChangeFileItem = {
+  path: string;
+  action: string;
+  additions?: number;
+  deletions?: number;
+  status: 'pending' | 'kept' | 'undone';
+  checkpointId: string;
+};
+
+export type AssistantThreadFilesChangedBlock = {
+  type: 'filesChanged';
+  checkpointIds: string[];
+  files: FileChangeFileItem[];
+  totalAdditions?: number;
+  totalDeletions?: number;
+  status: 'pending' | 'kept' | 'undone' | 'partial';
+  collapsed: boolean;
+  statsLoading: boolean;
+  currentChange?: number;
+  totalChanges?: number;
+  activeFilePath?: string;
+};
+
 export type AssistantThreadItem = {
   id: string;
   type: 'assistantThread';
@@ -53,6 +76,8 @@ export type ActionItem = {
   icon: string;
   text: string;
   detail?: string | null;
+  filePath?: string;
+  checkpointId?: string;
 };
 
 export type ProgressItem = {
@@ -99,6 +124,9 @@ export type SessionItem = {
   timestamp: number;
   active: boolean;
   status: 'idle' | 'generating' | 'completed' | 'error';
+  pendingAdditions?: number;
+  pendingDeletions?: number;
+  pendingFileCount?: number;
 };
 
 export type StatusMessage = {
@@ -160,6 +188,8 @@ export type ShowToolActionMessage = {
   icon?: string;
   text?: string;
   detail?: string | null;
+  filePath?: string;
+  checkpointId?: string;
 };
 
 export type ToolApprovalResultMessage = {

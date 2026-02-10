@@ -31,3 +31,19 @@ export interface ContextItem {
 export interface WebviewMessageEmitter {
   postMessage(message: any): void;
 }
+
+// ---------------------------------------------------------------------------
+// Files Changed types (B→F and F→B messages for the files-changed widget)
+// ---------------------------------------------------------------------------
+
+export interface FileChangeInfo {
+  path: string;
+  action: string; // 'created' | 'modified'
+}
+
+export interface FileDiffStats {
+  path: string;
+  additions: number;
+  deletions: number;
+  action: string;
+}

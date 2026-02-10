@@ -125,6 +125,9 @@ UI events (progress groups, tool actions, approvals) are persisted as `__ui__` t
 - `requestFileEditApproval` - Creates pending file edit approval card with diff + "Awaiting approval" action
 - `fileEditApprovalResult` - Updates file edit approval status and action status
 - `thinkingBlock` - Stores collapsed thinking content for history rebuild
+- `filesChanged` - Creates/merges standalone files-changed widget block
+- `fileChangeResult` - Removes a single file from widget (after keep/undo)
+- `keepUndoResult` - Removes entire widget block (after Keep All / Undo All)
 
 **Not persisted** (transient UI states):
 - "Running" status updates that will be replaced by final status
@@ -273,6 +276,91 @@ components/
 - ✅ `App.ts` should only route messages and export barrels.
 
 If you add new functionality, place it in the appropriate folder above and keep files small and single-purpose. Avoid creating new "catch-all" files.
+
+## Files Changed Widget (Standalone State)
+
+The files-changed widget shows which files the agent modified and lets users Keep/Undo changes. It is **NOT** part of the assistant thread blocks — it uses standalone reactive state:
+
+```typescript
+// src/webview/scripts/core/state.ts
+export const filesChangedBlocks = ref<AssistantThreadFilesChangedBlock[]>([]);
+```
+
+### Why Standalone?
+
+The widget is pinned to the bottom of the chat (below the input area), not embedded in the message timeline. This means:
+- It is NOT an `AssistantThreadItem.blocks` entry
+- `AssistantThreadFilesChangedBlock` is NOT in the thread block union type
+- `ChatPage.vue` renders it from `filesChangedBlocks` state, not from timeline items
+
+### Widget Data Flow
+
+| Action | Handler | Effect |
+|--------|---------|--------|
+| Agent writes files | `handleFilesChanged()` | Creates/merges block in `filesChangedBlocks` by `checkpointId` |
+| Stats arrive | `handleFilesDiffStats()` | Populates `additions`/`deletions` on matching files |
+| Single keep/undo | `handleFileChangeResult()` | Splices file out of block; removes block if empty |
+| Keep All / Undo All | `handleKeepUndoResult()` | Removes entire block |
+| Session cleared | `handleClearMessages()` | Sets `filesChangedBlocks.value = []` |
+
+### History Restoration
+
+`timelineBuilder.ts` rebuilds `filesChangedBlocks` into a local `restoredFcBlocks` array, then assigns it to `filesChangedBlocks.value` at the end. Key rules:
+
+1. **Merge by checkpointId**: Multiple incremental `filesChanged` events with the same `checkpointId` must merge into one block (add only files not already present)
+2. **fileChangeResult removes files**: Splice the resolved file out; remove the block if it's now empty
+3. **keepUndoResult removes ALL blocks**: Use a backward loop to remove ALL blocks with matching `checkpointId` (not just the first)
+
+### Component: `FilesChanged.vue`
+
+- Renders from `filesChangedBlocks` (standalone state, not thread blocks)
+- Per-file row shows: file icon, relative path, `+N -N` diff stats columns, ✓ (keep) and ↩ (undo) buttons, review icon
+- Header shows total file count, total `+N -N`, Keep All and Undo All buttons
+- **Nav bar**: Shows "Change X of Y" counter with ◀ / ▶ buttons for cross-file hunk navigation (hunk-level, not file-level). Hidden until `currentChange` and `totalChanges` are set (populated by `reviewChangePosition` message).
+- **Active file indicator**: File rows have `files-changed-file--active` class when `block.activeFilePath === file.path`. Styled with a blue left border (`--vscode-focusBorder`) and selection background (`--vscode-list-activeSelectionBackground`).
+- Actions are in `src/webview/scripts/core/actions/filesChanged.ts`
+- Handlers are in `src/webview/scripts/core/messageHandlers/filesChanged.ts`
+
+### ⚠️ DataCloneError Prevention
+
+Vue reactive `Proxy` arrays cannot be cloned by `postMessage()`. This causes `DataCloneError` at runtime. When passing `checkpointIds` (or any reactive array) to `postMessage`, **always spread into a plain array first**:
+
+```typescript
+// ✅ CORRECT: spread to unwrap the Proxy
+navigatePrevChange([...props.block.checkpointIds]);
+
+// ❌ WRONG: passes the Proxy directly → DataCloneError
+navigatePrevChange(props.block.checkpointIds);
+```
+
+This applies to any Vue reactive array passed through `vscodeApi.postMessage()`.
+
+### Nav & Review Actions
+
+| Action | Function | Payload |
+|--------|----------|--------|
+| Navigate prev | `navigatePrevChange(checkpointIds)` | `{ type: 'navigateReviewPrev', checkpointIds: string[] }` |
+| Navigate next | `navigateNextChange(checkpointIds)` | `{ type: 'navigateReviewNext', checkpointIds: string[] }` |
+| Open file review | `openFileChangeReview(id, path)` | `{ type: 'openFileChangeReview', checkpointId, filePath }` |
+| Open file diff | `openFileChangeDiff(id, path)` | `{ type: 'openFileChangeDiff', checkpointId, filePath }` |
+
+### `AssistantThreadFilesChangedBlock` Fields
+
+```typescript
+interface AssistantThreadFilesChangedBlock {
+  type: 'filesChanged';
+  checkpointIds: string[];          // All checkpoint IDs across agent iterations
+  files: FileChangeFileItem[];       // Per-file items with path, action, +/- stats
+  totalAdditions?: number;           // Sum across all files
+  totalDeletions?: number;
+  status: 'pending' | 'kept' | 'undone' | 'partial';
+  collapsed: boolean;
+  statsLoading: boolean;             // True while waiting for filesDiffStats
+  currentChange?: number;            // Current hunk position (1-based)
+  totalChanges?: number;             // Total hunks across all files
+  activeFilePath?: string;           // Currently navigated file (for highlight)
+}
+```
 
 ## Modifying the Chat UI
 

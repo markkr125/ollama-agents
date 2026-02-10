@@ -1,4 +1,7 @@
+import { recalcBlockTotals } from './messageHandlers/filesChanged';
+import { filesChangedBlocks } from './state';
 import type {
+    AssistantThreadFilesChangedBlock,
     AssistantThreadItem,
     AssistantThreadToolsBlock,
     CommandApprovalItem,
@@ -13,6 +16,7 @@ import type {
  */
 export const buildTimelineFromMessages = (messages: any[]): TimelineItem[] => {
   const items: TimelineItem[] = [];
+  const restoredFcBlocks: AssistantThreadFilesChangedBlock[] = [];
   let currentThread: AssistantThreadItem | null = null;
   let currentGroup: ProgressItem | null = null;
 
@@ -49,6 +53,9 @@ export const buildTimelineFromMessages = (messages: any[]): TimelineItem[] => {
   const appendText = (content: string, model?: string) => {
     if (!content) return;
     const thread = ensureThread(model);
+
+    // Only append to existing text block if it's the LAST block in thread.
+    // If tools/thinking blocks have been added since, create a new text block.
     const lastBlock = thread.blocks[thread.blocks.length - 1];
     if (lastBlock && lastBlock.type === 'text') {
       lastBlock.content = lastBlock.content ? `${lastBlock.content}\n\n${content}` : content;
@@ -139,7 +146,9 @@ export const buildTimelineFromMessages = (messages: any[]): TimelineItem[] => {
               status,
               icon: uiEvent.payload?.icon || '•',
               text: actionText,
-              detail: uiEvent.payload?.detail || null
+              detail: uiEvent.payload?.detail || null,
+              filePath: uiEvent.payload?.filePath || undefined,
+              checkpointId: uiEvent.payload?.checkpointId || undefined
             };
 
             // Match live handler: update existing pending/running action with same text, or push new
@@ -342,6 +351,94 @@ export const buildTimelineFromMessages = (messages: any[]): TimelineItem[] => {
             currentGroup = null;
             break;
           }
+          case 'filesChanged': {
+            const payload = uiEvent.payload || {};
+            const checkpointId = payload.checkpointId || '';
+            const isPending = !payload.status || payload.status === 'pending';
+
+            // ONE block — merge all filesChanged events into a single block
+            let theBlock = restoredFcBlocks.length > 0 ? restoredFcBlocks[0] : null;
+
+            if (!theBlock) {
+              theBlock = {
+                type: 'filesChanged',
+                checkpointIds: checkpointId ? [checkpointId] : [],
+                files: [],
+                totalAdditions: undefined,
+                totalDeletions: undefined,
+                status: payload.status || 'pending',
+                collapsed: !isPending,
+                statsLoading: isPending
+              };
+              restoredFcBlocks.push(theBlock);
+            } else {
+              // Track this checkpoint
+              if (checkpointId && !theBlock.checkpointIds.includes(checkpointId)) {
+                theBlock.checkpointIds.push(checkpointId);
+              }
+              // If new event is pending, ensure block is visible
+              if (isPending) {
+                theBlock.collapsed = false;
+                theBlock.statsLoading = true;
+              }
+            }
+
+            // Add files not already present
+            for (const f of payload.files || []) {
+              if (!theBlock.files.some((ef: any) => ef.path === f.path)) {
+                theBlock.files.push({
+                  path: f.path,
+                  action: f.action || 'modified',
+                  additions: undefined,
+                  deletions: undefined,
+                  status: payload.status === 'kept' ? 'kept' as const
+                    : payload.status === 'undone' ? 'undone' as const
+                    : 'pending' as const,
+                  checkpointId
+                });
+              }
+            }
+            break;
+          }
+          case 'fileChangeResult': {
+            // Remove a resolved file from the ONE block
+            const payload = uiEvent.payload || {};
+            if (payload.success && payload.checkpointId && restoredFcBlocks.length > 0) {
+              const fcBlock = restoredFcBlocks[0];
+              const idx = fcBlock.files.findIndex((f: any) => f.path === payload.filePath && f.checkpointId === payload.checkpointId);
+              if (idx >= 0) {
+                fcBlock.files.splice(idx, 1);
+              }
+              // Clean up checkpointId if no files reference it
+              if (!fcBlock.files.some(f => f.checkpointId === payload.checkpointId)) {
+                const cidx = fcBlock.checkpointIds.indexOf(payload.checkpointId);
+                if (cidx >= 0) fcBlock.checkpointIds.splice(cidx, 1);
+              }
+              // If no files left, remove the block
+              if (fcBlock.files.length === 0) {
+                restoredFcBlocks.splice(0, 1);
+              } else {
+                recalcBlockTotals(fcBlock);
+              }
+            }
+            break;
+          }
+          case 'keepUndoResult': {
+            // Remove all files for this checkpoint from the ONE block
+            const payload = uiEvent.payload || {};
+            if (payload.success && payload.checkpointId && restoredFcBlocks.length > 0) {
+              const fcBlock = restoredFcBlocks[0];
+              fcBlock.files = fcBlock.files.filter(f => f.checkpointId !== payload.checkpointId);
+              const cidx = fcBlock.checkpointIds.indexOf(payload.checkpointId);
+              if (cidx >= 0) fcBlock.checkpointIds.splice(cidx, 1);
+              if (fcBlock.files.length === 0) {
+                restoredFcBlocks.splice(0, 1);
+              } else {
+                recalcBlockTotals(fcBlock);
+              }
+            }
+            break;
+          }
           default:
             break;
         }
@@ -352,6 +449,9 @@ export const buildTimelineFromMessages = (messages: any[]): TimelineItem[] => {
       // They're only here for backwards compatibility with old sessions
     }
   }
+
+  // Push restored filesChanged blocks to the standalone state
+  filesChangedBlocks.value = restoredFcBlocks;
 
   return items;
 };

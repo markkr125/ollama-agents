@@ -1,3 +1,4 @@
+import { structuredPatch } from 'diff';
 import * as path from 'path';
 import * as vscode from 'vscode';
 import { ExecutorConfig } from '../agent/executor';
@@ -18,11 +19,12 @@ import { detectPartialToolCall, extractToolCalls, removeToolCalls } from '../uti
 import { WebviewMessageEmitter } from '../views/chatTypes';
 import { getProgressGroupTitle, getToolActionInfo, getToolSuccessInfo } from '../views/toolUIFormatter';
 import { EditManager } from './editManager';
+import { PendingEditDecorationProvider } from './pendingEditDecorationProvider';
 
 export class AgentChatExecutor {
   private pendingApprovals = new Map<string, { resolve: (result: { approved: boolean; command?: string }) => void }>();
 
-  private async persistUiEvent(
+  async persistUiEvent(
     sessionId: string | undefined,
     eventType: string,
     payload: Record<string, any>
@@ -48,7 +50,8 @@ export class AgentChatExecutor {
     private readonly outputChannel: vscode.OutputChannel,
     private readonly emitter: WebviewMessageEmitter,
     private readonly refreshExplorer: () => void,
-    private readonly terminalManager: TerminalManager
+    private readonly terminalManager: TerminalManager,
+    private readonly decorationProvider: PendingEditDecorationProvider
   ) {
     this.editManager = new EditManager(this.client);
   }
@@ -84,7 +87,7 @@ export class AgentChatExecutor {
     sessionId: string,
     model: string,
     capabilities?: ModelCapabilities
-  ): Promise<{ summary: string; assistantMessage: MessageRecord }> {
+  ): Promise<{ summary: string; assistantMessage: MessageRecord; checkpointId?: string }> {
     const context = {
       workspace: agentSession.workspace,
       token,
@@ -121,6 +124,14 @@ export class AgentChatExecutor {
     let accumulatedExplanation = '';
     let hasWrittenFiles = false;
     let hasPersistedIterationText = false;
+
+    // Create a checkpoint for this agent request (for undo/redo file tracking)
+    let currentCheckpointId: string | undefined;
+    try {
+      currentCheckpointId = await this.databaseService.createCheckpoint(sessionId);
+    } catch (err) {
+      console.warn('[AgentChatExecutor] Failed to create checkpoint:', err);
+    }
 
     // Check if task likely requires file modifications
     const taskLower = agentSession.task.toLowerCase();
@@ -332,7 +343,16 @@ export class AgentChatExecutor {
             });
             continue;
           }
-          accumulatedExplanation = cleanedText.replace('[TASK_COMPLETE]', '').trim() || accumulatedExplanation;
+          const completionText = cleanedText.replace(/\[TASK_COMPLETE\]/gi, '').trim();
+          accumulatedExplanation = completionText || accumulatedExplanation;
+
+          // Persist this iteration's text — the throttled stream already showed it,
+          // but the DB needs it so hasPersistedIterationText is correct and
+          // finalMessage doesn't duplicate the full explanation.
+          if (completionText && sessionId) {
+            await this.databaseService.addMessage(sessionId, 'assistant', completionText, { model });
+            hasPersistedIterationText = true;
+          }
           break;
         }
 
@@ -419,6 +439,11 @@ export class AgentChatExecutor {
           }
 
           try {
+            // Snapshot file before write_file/create_file for undo support
+            if (isFileEdit && currentCheckpointId) {
+              await this.snapshotFileBeforeEdit(toolCall.args, context, currentCheckpointId);
+            }
+
             const result: ToolExecution = isTerminalCommand
               ? await this.executeTerminalCommand(toolCall.name, toolCall.args, context, sessionId, actionText, actionIcon, token)
               : isFileEdit
@@ -437,6 +462,27 @@ export class AgentChatExecutor {
                 agentSession.filesChanged.push(toolCall.args?.path || toolCall.args?.file);
                 hasWrittenFiles = true;
                 this.refreshExplorer();
+
+                // Mark file as pending in Explorer/tab decorations
+                const relPath = String(toolCall.args?.path || toolCall.args?.file || '');
+                if (relPath) {
+                  const absPath = path.join(context.workspace?.uri?.fsPath || '', relPath);
+                  this.decorationProvider.markPending(vscode.Uri.file(absPath));
+                }
+
+                // Emit incremental filesChanged so the widget updates in real-time
+                // (not persisted — only the final batch is persisted after the loop)
+                if (currentCheckpointId) {
+                  const uniqueFiles = [...new Set(agentSession.filesChanged)] as string[];
+                  const fileInfos = uniqueFiles.map(fp => ({ path: fp, action: 'modified' }));
+                  this.emitter.postMessage({
+                    type: 'filesChanged',
+                    checkpointId: currentCheckpointId,
+                    files: fileInfos,
+                    status: 'pending',
+                    sessionId
+                  });
+                }
               }
             }
 
@@ -479,22 +525,52 @@ export class AgentChatExecutor {
                 detail: 'Skipped by user'
               });
             } else {
-              const { actionText: successText, actionDetail: successDetail } =
+              const { actionText: successText, actionDetail: successDetail, filePath: successFilePath } =
                 getToolSuccessInfo(toolCall.name, toolCall.args, result.output);
+
+              // Compute quick diff stats for file writes
+              let diffDetail = successDetail;
+              if (isFileEdit && currentCheckpointId) {
+                try {
+                  const relPath = String(toolCall.args?.path || toolCall.args?.file || '').trim();
+                  const snapshot = await this.databaseService.getSnapshotForFile(currentCheckpointId, relPath);
+                  if (snapshot) {
+                    const absPath = path.join(context.workspace?.uri?.fsPath || '', relPath);
+                    const currentData = await vscode.workspace.fs.readFile(vscode.Uri.file(absPath));
+                    const currentContent = new TextDecoder().decode(currentData);
+                    const original = snapshot.original_content ?? '';
+                    if (snapshot.action === 'created') {
+                      const lines = currentContent.split('\n').length;
+                      diffDetail = `+${lines}`;
+                    } else {
+                      const patch = structuredPatch('a', 'b', original, currentContent, '', '', { context: 0 });
+                      let adds = 0, dels = 0;
+                      for (const hunk of patch.hunks) {
+                        for (const line of hunk.lines) {
+                          if (line.startsWith('+')) adds++;
+                          else if (line.startsWith('-')) dels++;
+                        }
+                      }
+                      diffDetail = `+${adds} -${dels}`;
+                    }
+                  }
+                } catch { /* diff stats are optional */ }
+              }
+
+              const actionPayload: any = {
+                status: 'success',
+                icon: actionIcon,
+                text: successText,
+                detail: diffDetail,
+                ...(successFilePath ? { filePath: successFilePath } : {}),
+                ...(successFilePath && currentCheckpointId ? { checkpointId: currentCheckpointId } : {})
+              };
               this.emitter.postMessage({
                 type: 'showToolAction',
-                status: 'success',
-                icon: actionIcon,
-                text: successText,
-                detail: successDetail,
+                ...actionPayload,
                 sessionId
               });
-              await this.persistUiEvent(sessionId, 'showToolAction', {
-                status: 'success',
-                icon: actionIcon,
-                text: successText,
-                detail: successDetail
-              });
+              await this.persistUiEvent(sessionId, 'showToolAction', actionPayload);
             }
 
             // Feed tool result back to LLM
@@ -568,7 +644,23 @@ export class AgentChatExecutor {
 
     this.sessionManager.updateSession(agentSession.id, { status: 'completed' });
 
+    // Count changed files (payload will be emitted AFTER finalMessage so the
+    // widget is always the last block in the assistant thread).
     const filesChanged = agentSession.filesChanged?.length || 0;
+    let filesChangedPayload: { checkpointId: string; files: { path: string; action: string }[]; status: string } | null = null;
+    if (filesChanged > 0 && currentCheckpointId) {
+      const uniqueFiles = [...new Set(agentSession.filesChanged)] as string[];
+      const fileInfos = uniqueFiles.map(fp => {
+        // Determine action: 'created' if the file didn't exist before, 'modified' otherwise
+        return { path: fp, action: 'modified' };
+      });
+      filesChangedPayload = {
+        checkpointId: currentCheckpointId,
+        files: fileInfos,
+        status: 'pending'
+      };
+    }
+
     let summary = filesChanged > 0 ? `**${filesChanged} file${filesChanged > 1 ? 's' : ''} modified**\n\n` : '';
     const toolSummaryLines = (agentSession.toolCalls || [])
       .slice(-6)
@@ -661,9 +753,52 @@ export class AgentChatExecutor {
     if (finalMessageContent) {
       this.emitter.postMessage({ type: 'finalMessage', content: finalMessageContent, model, sessionId });
     }
+
+    // Emit filesChanged AFTER finalMessage so the widget is the last block
+    // in the assistant thread (not sandwiched between text blocks).
+    if (filesChangedPayload) {
+      await this.persistUiEvent(sessionId, 'filesChanged', filesChangedPayload);
+      this.emitter.postMessage({ type: 'filesChanged', ...filesChangedPayload, sessionId });
+    }
+
     this.emitter.postMessage({ type: 'hideThinking', sessionId });
 
-    return { summary, assistantMessage };
+    return { summary, assistantMessage, checkpointId: currentCheckpointId || undefined };
+  }
+
+  /**
+   * Snapshot a file's content BEFORE a write_file/create_file tool edits it.
+   * Uses INSERT OR IGNORE so only the first (true original) snapshot is kept per checkpoint.
+   */
+  private async snapshotFileBeforeEdit(
+    args: any,
+    context: any,
+    checkpointId: string
+  ): Promise<void> {
+    try {
+      const relPath = String(args?.path || args?.file || '').trim();
+      if (!relPath) return;
+
+      const workspaceRoot = context.workspace?.uri?.fsPath || '';
+      const absPath = path.join(workspaceRoot, relPath);
+      const uri = vscode.Uri.file(absPath);
+
+      let originalContent: string | null = null;
+      let action = 'modified';
+
+      try {
+        const existing = await vscode.workspace.fs.readFile(uri);
+        originalContent = new TextDecoder().decode(existing);
+      } catch {
+        // File doesn't exist yet — this is a creation
+        originalContent = null;
+        action = 'created';
+      }
+
+      await this.databaseService.insertFileSnapshot(checkpointId, relPath, originalContent, action);
+    } catch (err) {
+      console.warn('[AgentChatExecutor] Failed to snapshot file before edit:', err);
+    }
   }
 
   private async executeTerminalCommand(
@@ -1053,6 +1188,319 @@ export class AgentChatExecutor {
       newContent,
       `Sensitive edit: ${displayPath}`
     );
+  }
+
+  // ---------------------------------------------------------------------------
+  // Files Changed — Keep / Undo / Diff
+  // ---------------------------------------------------------------------------
+
+  /**
+   * Open a diff view for a file from a checkpoint snapshot.
+   */
+  async openFileChangeDiff(checkpointId: string, filePath: string): Promise<void> {
+    const snapshot = await this.databaseService.getSnapshotForFile(checkpointId, filePath);
+    if (!snapshot) {
+      vscode.window.showWarningMessage(`No snapshot found for ${filePath}`);
+      return;
+    }
+
+    const workspaceFolders = vscode.workspace.workspaceFolders;
+    const workspaceRoot = workspaceFolders?.[0]?.uri.fsPath || '';
+    const absPath = path.join(workspaceRoot, filePath);
+    const fileUri = vscode.Uri.file(absPath);
+
+    const originalContent = snapshot.original_content ?? '';
+    await this.editManager.showDiff(
+      fileUri,
+      originalContent,
+      undefined as any, // Will read current file content
+      `AI changes: ${filePath}`
+    );
+  }
+
+  /**
+   * Open a diff between the snapshot's original_content and the current file on disk.
+   * Uses a custom content provider to serve the original content.
+   */
+  async openSnapshotDiff(checkpointId: string | undefined, filePath: string, sessionId?: string): Promise<void> {
+    let snapshot = checkpointId
+      ? await this.databaseService.getSnapshotForFile(checkpointId, filePath)
+      : null;
+
+    // Fallback: search session checkpoints for this file if direct lookup failed
+    if (!snapshot && sessionId) {
+      const checkpoints = await this.databaseService.getCheckpoints(sessionId);
+      for (const cp of checkpoints) {
+        snapshot = await this.databaseService.getSnapshotForFile(cp.id, filePath);
+        if (snapshot) break;
+      }
+    }
+
+    if (!snapshot) {
+      vscode.window.showWarningMessage(`No snapshot found for ${filePath}`);
+      return;
+    }
+
+    const workspaceFolders = vscode.workspace.workspaceFolders;
+    const workspaceRoot = workspaceFolders?.[0]?.uri.fsPath || '';
+    const absPath = path.join(workspaceRoot, filePath);
+    const currentUri = vscode.Uri.file(absPath);
+
+    const originalContent = snapshot.original_content ?? '';
+    let currentContent = '';
+    try {
+      const data = await vscode.workspace.fs.readFile(currentUri);
+      currentContent = new TextDecoder().decode(data);
+    } catch {
+      currentContent = '';
+    }
+
+    await this.editManager.showDiff(
+      currentUri,
+      originalContent,
+      currentContent,
+      `AI changes: ${filePath}`
+    );
+  }
+
+  /**
+   * Keep a single file's changes (mark as accepted).
+   */
+  async keepFile(checkpointId: string, filePath: string): Promise<{ success: boolean }> {
+    await this.databaseService.updateFileSnapshotStatus(checkpointId, filePath, 'kept');
+
+    // Clear decoration for this file
+    const workspaceFolders = vscode.workspace.workspaceFolders;
+    const workspaceRoot = workspaceFolders?.[0]?.uri.fsPath || '';
+    const absPath = path.join(workspaceRoot, filePath);
+    this.decorationProvider.clearPending(vscode.Uri.file(absPath));
+
+    // Update checkpoint status based on remaining file statuses
+    await this.updateCheckpointStatusFromFiles(checkpointId);
+    return { success: true };
+  }
+
+  /**
+   * Undo a single file's changes (revert to original).
+   */
+  async undoFile(checkpointId: string, filePath: string): Promise<{ success: boolean }> {
+    const snapshot = await this.databaseService.getSnapshotForFile(checkpointId, filePath);
+    if (!snapshot || snapshot.original_content === null) {
+      return { success: false };
+    }
+
+    const workspaceFolders = vscode.workspace.workspaceFolders;
+    const workspaceRoot = workspaceFolders?.[0]?.uri.fsPath || '';
+    const absPath = path.join(workspaceRoot, filePath);
+    const uri = vscode.Uri.file(absPath);
+
+    try {
+      if (snapshot.action === 'created') {
+        // File was created by the agent — delete it
+        await vscode.workspace.fs.delete(uri, { useTrash: false });
+      } else {
+        // File was modified — restore original content
+        const edit = new vscode.WorkspaceEdit();
+        const doc = await vscode.workspace.openTextDocument(uri);
+        const fullRange = new vscode.Range(
+          doc.positionAt(0),
+          doc.positionAt(doc.getText().length)
+        );
+        edit.replace(uri, fullRange, snapshot.original_content);
+        await vscode.workspace.applyEdit(edit);
+        await doc.save();
+      }
+    } catch (err: any) {
+      console.warn(`[undoFile] Failed to revert ${filePath}:`, err);
+      return { success: false };
+    }
+
+    await this.databaseService.updateFileSnapshotStatus(checkpointId, filePath, 'undone');
+    this.decorationProvider.clearPending(uri);
+    this.refreshExplorer();
+
+    await this.updateCheckpointStatusFromFiles(checkpointId);
+    return { success: true };
+  }
+
+  /**
+   * Mark a file as undone in the DB + clear decoration, WITHOUT reverting file content.
+   * Used by the inline review service which already reverted the file on disk.
+   */
+  async markFileUndone(checkpointId: string, filePath: string): Promise<void> {
+    await this.databaseService.updateFileSnapshotStatus(checkpointId, filePath, 'undone');
+
+    const workspaceFolders = vscode.workspace.workspaceFolders;
+    const workspaceRoot = workspaceFolders?.[0]?.uri.fsPath || '';
+    const absPath = path.join(workspaceRoot, filePath);
+    this.decorationProvider.clearPending(vscode.Uri.file(absPath));
+
+    await this.updateCheckpointStatusFromFiles(checkpointId);
+  }
+
+  /**
+   * Keep all file changes in a checkpoint.
+   */
+  async keepAllChanges(checkpointId: string): Promise<{ success: boolean }> {
+    const snapshots = await this.databaseService.getFileSnapshots(checkpointId);
+    for (const snap of snapshots) {
+      if (snap.file_status === 'pending') {
+        await this.databaseService.updateFileSnapshotStatus(checkpointId, snap.file_path, 'kept');
+        const workspaceFolders = vscode.workspace.workspaceFolders;
+        const workspaceRoot = workspaceFolders?.[0]?.uri.fsPath || '';
+        const absPath = path.join(workspaceRoot, snap.file_path);
+        this.decorationProvider.clearPending(vscode.Uri.file(absPath));
+      }
+    }
+    await this.databaseService.updateCheckpointStatus(checkpointId, 'kept');
+    // Prune original_content blobs to free storage
+    await this.databaseService.pruneKeptCheckpointContent(checkpointId);
+    return { success: true };
+  }
+
+  /**
+   * Undo all file changes in a checkpoint.
+   */
+  async undoAllChanges(checkpointId: string): Promise<{ success: boolean; errors: string[] }> {
+    const snapshots = await this.databaseService.getFileSnapshots(checkpointId);
+    const workspaceFolders = vscode.workspace.workspaceFolders;
+    const workspaceRoot = workspaceFolders?.[0]?.uri.fsPath || '';
+    const errors: string[] = [];
+
+    const edit = new vscode.WorkspaceEdit();
+    const filesToDelete: vscode.Uri[] = [];
+
+    for (const snap of snapshots) {
+      if (snap.file_status !== 'pending') continue;
+      if (snap.original_content === null) continue;
+
+      const absPath = path.join(workspaceRoot, snap.file_path);
+      const uri = vscode.Uri.file(absPath);
+
+      try {
+        if (snap.action === 'created') {
+          filesToDelete.push(uri);
+        } else {
+          const doc = await vscode.workspace.openTextDocument(uri);
+          const fullRange = new vscode.Range(
+            doc.positionAt(0),
+            doc.positionAt(doc.getText().length)
+          );
+          edit.replace(uri, fullRange, snap.original_content);
+        }
+      } catch (err: any) {
+        errors.push(`${snap.file_path}: ${err.message}`);
+      }
+    }
+
+    // Apply all text replacements atomically
+    const editSuccess = await vscode.workspace.applyEdit(edit);
+    if (!editSuccess) {
+      errors.push('WorkspaceEdit.applyEdit failed');
+    }
+
+    // Delete created files
+    for (const uri of filesToDelete) {
+      try {
+        await vscode.workspace.fs.delete(uri, { useTrash: false });
+      } catch (err: any) {
+        errors.push(`Delete ${uri.fsPath}: ${err.message}`);
+      }
+    }
+
+    // Save all modified documents
+    for (const snap of snapshots) {
+      if (snap.file_status !== 'pending' || snap.action === 'created') continue;
+      try {
+        const absPath = path.join(workspaceRoot, snap.file_path);
+        const doc = vscode.workspace.textDocuments.find(d => d.uri.fsPath === absPath);
+        if (doc?.isDirty) await doc.save();
+      } catch { /* best effort */ }
+    }
+
+    // Update all statuses
+    for (const snap of snapshots) {
+      if (snap.file_status === 'pending') {
+        await this.databaseService.updateFileSnapshotStatus(checkpointId, snap.file_path, 'undone');
+        const absPath = path.join(workspaceRoot, snap.file_path);
+        this.decorationProvider.clearPending(vscode.Uri.file(absPath));
+      }
+    }
+
+    await this.databaseService.updateCheckpointStatus(checkpointId, 'undone');
+    this.refreshExplorer();
+    return { success: errors.length === 0, errors };
+  }
+
+  /**
+   * Compute diff stats for all files in a checkpoint (original vs current on disk).
+   */
+  async computeFilesDiffStats(checkpointId: string): Promise<Array<{ path: string; additions: number; deletions: number; action: string }>> {
+    const snapshots = await this.databaseService.getFileSnapshots(checkpointId);
+    const workspaceFolders = vscode.workspace.workspaceFolders;
+    const workspaceRoot = workspaceFolders?.[0]?.uri.fsPath || '';
+    const results: Array<{ path: string; additions: number; deletions: number; action: string }> = [];
+
+    for (const snap of snapshots) {
+      const absPath = path.join(workspaceRoot, snap.file_path);
+      let currentContent = '';
+      try {
+        const data = await vscode.workspace.fs.readFile(vscode.Uri.file(absPath));
+        currentContent = new TextDecoder().decode(data);
+      } catch {
+        currentContent = '';
+      }
+
+      const original = snap.original_content ?? '';
+
+      // Use proper diff algorithm for accurate line-level stats
+      let additions = 0;
+      let deletions = 0;
+
+      const patch = structuredPatch('a', 'b', original, currentContent, '', '', { context: 0 });
+      for (const hunk of patch.hunks) {
+        for (const line of hunk.lines) {
+          if (line.startsWith('+')) additions++;
+          else if (line.startsWith('-')) deletions++;
+        }
+      }
+
+      results.push({
+        path: snap.file_path,
+        additions,
+        deletions,
+        action: snap.action
+      });
+    }
+
+    // Persist per-file diff stats for accurate session-level totals
+    await this.databaseService.updateFileSnapshotsDiffStats(checkpointId, results);
+
+    // Cache aggregate stats on the checkpoint for fast session list queries
+    const totalAdd = results.reduce((s, r) => s + r.additions, 0);
+    const totalDel = results.reduce((s, r) => s + r.deletions, 0);
+    await this.databaseService.updateCheckpointDiffStats(checkpointId, totalAdd, totalDel);
+
+    return results;
+  }
+
+  /**
+   * Update the checkpoint status based on the aggregate file statuses.
+   */
+  private async updateCheckpointStatusFromFiles(checkpointId: string): Promise<void> {
+    const snapshots = await this.databaseService.getFileSnapshots(checkpointId);
+    const statuses = new Set(snapshots.map(s => s.file_status));
+
+    let newStatus: string;
+    if (statuses.size === 1) {
+      newStatus = statuses.has('kept') ? 'kept' : statuses.has('undone') ? 'undone' : 'pending';
+    } else if (statuses.has('pending')) {
+      newStatus = 'partial';
+    } else {
+      newStatus = 'partial';
+    }
+
+    await this.databaseService.updateCheckpointStatus(checkpointId, newStatus);
   }
 
   private getSettingsPatterns(): Record<string, boolean> {

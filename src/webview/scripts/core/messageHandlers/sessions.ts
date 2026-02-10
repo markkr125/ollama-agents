@@ -1,49 +1,51 @@
 import {
-  applySearchResults,
-  applySettings,
-  clearToken,
-  scrollToBottom,
-  setGenerating,
-  showStatus,
-  updateInitState,
-  updateThinking
+    applySearchResults,
+    applySettings,
+    clearToken,
+    scrollToBottom,
+    setGenerating,
+    showStatus,
+    updateInitState,
+    updateThinking
 } from '../actions/index';
 import {
-  autoApproveCommands,
-  autoApproveConfirmVisible,
-  autoApproveSensitiveEdits,
-  capabilityCheckProgress,
-  connectionStatus,
-  contextList,
-  currentAssistantThreadId,
-  currentMode,
-  currentModel,
-  currentPage,
-  currentProgressIndex,
-  currentSessionId,
-  currentStreamIndex,
-  dbMaintenanceStatus,
-  deletingSessionIds,
-  deletionProgress,
-  hasToken,
-  isFirstRun,
-  isSearching,
-  modelInfo,
-  modelOptions,
-  recreateMessagesStatus,
-  scrollTargetMessageId,
-  selectedSessionIds,
-  selectionMode,
-  sessions,
-  sessionsCursor,
-  sessionSensitiveFilePatterns,
-  sessionsHasMore,
-  sessionsInitialLoaded,
-  sessionsLoading,
-  settings,
-  temperatureSlider,
-  timeline,
-  warningBanner
+    autoApproveCommands,
+    autoApproveConfirmVisible,
+    autoApproveSensitiveEdits,
+    capabilityCheckProgress,
+    connectionStatus,
+    contextList,
+    currentAssistantThreadId,
+    currentMode,
+    currentModel,
+    currentPage,
+    currentProgressIndex,
+    currentSessionId,
+    currentStreamIndex,
+    dbMaintenanceStatus,
+    deletingSessionIds,
+    deletionProgress,
+    filesChangedBlocks,
+    hasToken,
+    isFirstRun,
+    isSearching,
+    modelInfo,
+    modelOptions,
+    recreateMessagesStatus,
+    scrollTargetMessageId,
+    selectedSessionIds,
+    selectionMode,
+    sessions,
+    sessionsCursor,
+    sessionSensitiveFilePatterns,
+    sessionsHasMore,
+    sessionsInitialLoaded,
+    sessionsLoading,
+    settings,
+    temperatureSlider,
+    timeline,
+    vscode,
+    warningBanner
 } from '../state';
 import { buildTimelineFromMessages } from '../timelineBuilder';
 import type { InitMessage, LoadSessionMessagesMessage, SearchResultGroup } from '../types';
@@ -125,6 +127,15 @@ export const handleLoadSessionMessages = (msg: LoadSessionMessagesMessage) => {
   currentAssistantThreadId.value = null;
   if (!scrollTargetMessageId.value) {
     scrollToBottom();
+  }
+
+  // Request diff stats for any pending filesChanged blocks restored from history
+  for (const block of filesChangedBlocks.value) {
+    if (block.statsLoading && block.checkpointIds?.length) {
+      for (const checkpointId of block.checkpointIds) {
+        vscode.postMessage({ type: 'requestFilesDiffStats', checkpointId });
+      }
+    }
   }
 };
 
@@ -221,6 +232,7 @@ export const handleAddContextItem = (msg: any) => {
 
 export const handleClearMessages = (msg: any) => {
   timeline.value = [];
+  filesChangedBlocks.value = [];
   currentStreamIndex.value = null;
   currentProgressIndex.value = null;
   currentAssistantThreadId.value = null;

@@ -15,6 +15,17 @@ export {
     toggleAutoApproveCommands,
     toggleAutoApproveSensitiveEdits
 } from './approvals';
+export {
+    keepAllChanges,
+    keepFile,
+    navigateNextChange,
+    navigatePrevChange,
+    openFileChangeDiff,
+    openFileChangeReview,
+    requestFilesDiffStats,
+    undoAllChanges,
+    undoFile
+} from './filesChanged';
 export { handleEnter, handleSend, removeContext, resizeInputField } from './input';
 export { formatMarkdown, statusClass } from './markdown';
 export { clearScrollTarget, resizeInput, scrollToBottom } from './scroll';
