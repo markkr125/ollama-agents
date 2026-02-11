@@ -41,10 +41,12 @@
               <details
                 v-else-if="block.type === 'thinking'"
                 class="thinking-block"
+                :class="{ 'is-streaming': !block.collapsed }"
                 :open="!block.collapsed"
               >
                 <summary>
-                  <span class="thinking-icon">💭</span>
+                  <span v-if="!block.collapsed" class="thinking-spinner"></span>
+                  <span v-else class="thinking-check">✓</span>
                   Thought
                 </summary>
                 <div class="thinking-block-content">
