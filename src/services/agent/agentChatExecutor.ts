@@ -3,6 +3,7 @@ import { SessionManager } from '../../agent/sessionManager';
 import { ToolRegistry } from '../../agent/toolRegistry';
 import { getConfig } from '../../config/settings';
 import { ExecutorConfig } from '../../types/agent';
+import { OllamaError } from '../../types/ollama';
 import { MessageRecord } from '../../types/session';
 import { extractToolCalls, removeToolCalls } from '../../utils/toolCallParser';
 import { WebviewMessageEmitter } from '../../views/chatTypes';
@@ -203,7 +204,7 @@ export class AgentChatExecutor {
 
     const useNativeTools = !!capabilities?.tools;
     const { agent: agentConfig } = getConfig();
-    const useThinking = agentConfig.enableThinking && useNativeTools;
+    let useThinking = agentConfig.enableThinking && useNativeTools;
 
     const workspacePath = agentSession.workspace?.uri?.fsPath || '';
     const systemContent = useNativeTools
@@ -227,6 +228,7 @@ export class AgentChatExecutor {
     let accumulatedExplanation = '';
     let hasWrittenFiles = false;
     let hasPersistedIterationText = false;
+    let consecutiveNoToolIterations = 0;
 
     let currentCheckpointId: string | undefined;
     try {
@@ -252,9 +254,25 @@ export class AgentChatExecutor {
         }
 
         const thinkingStartTime = Date.now();
-        const streamResult = await this.streamProcessor.streamIteration(
-          chatRequest, sessionId, model, iteration, useNativeTools, token
-        );
+        let streamResult;
+        try {
+          streamResult = await this.streamProcessor.streamIteration(
+            chatRequest, sessionId, model, iteration, useNativeTools, token
+          );
+        } catch (thinkErr: any) {
+          // Ollama returns 400 when `think: true` is sent to models that don't
+          // support thinking. Detect this, disable thinking, and retry.
+          if (useThinking && thinkErr instanceof OllamaError && thinkErr.statusCode === 400) {
+            useThinking = false;
+            delete chatRequest.think;
+            this.outputChannel?.appendLine(`[Iteration ${iteration}] Model does not support thinking — retrying without think:true`);
+            streamResult = await this.streamProcessor.streamIteration(
+              chatRequest, sessionId, model, iteration, useNativeTools, token
+            );
+          } else {
+            throw thinkErr;
+          }
+        }
 
         let { response } = streamResult;
         const { thinkingContent, nativeToolCalls } = streamResult;
@@ -288,9 +306,9 @@ export class AgentChatExecutor {
 
         // --- 4. Process per-iteration delta text ---
         const cleanedText = useNativeTools ? response.trim() : removeToolCalls(response);
-        const iterationDelta = cleanedText.trim();
+        const iterationDelta = cleanedText.replace(/\[TASK_COMPLETE\]/gi, '').trim();
 
-        if (iterationDelta && !iterationDelta.includes('[TASK_COMPLETE]')) {
+        if (iterationDelta) {
           if (accumulatedExplanation) {
             accumulatedExplanation += '\n\n';
           }
@@ -337,9 +355,20 @@ export class AgentChatExecutor {
         this.outputChannel.appendLine('---');
 
         if (toolCalls.length === 0) {
+          consecutiveNoToolIterations++;
           const noToolMsg: any = { role: 'assistant', content: response };
           if (thinkingContent) noToolMsg.thinking = thinkingContent;
           messages.push(noToolMsg);
+
+          // If the model responds with text but no tools for 2+ consecutive
+          // iterations, treat it as done — the model has answered and isn't
+          // going to use tools. Without this, the loop sends "Continue with
+          // the task" forever.
+          if (consecutiveNoToolIterations >= 2) {
+            this.outputChannel.appendLine(`[Iteration ${iteration}] Breaking: ${consecutiveNoToolIterations} consecutive no-tool iterations`);
+            break;
+          }
+
           if (iteration < config.maxIterations - 1) {
             messages.push({
               role: 'user',
@@ -348,6 +377,9 @@ export class AgentChatExecutor {
           }
           continue;
         }
+
+        // Tools found — reset the no-tool counter
+        consecutiveNoToolIterations = 0;
 
         // --- 7. Execute tool batch ---
         const groupTitle = getProgressGroupTitle(toolCalls);

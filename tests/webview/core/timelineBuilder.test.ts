@@ -739,7 +739,7 @@ describe('buildTimelineFromMessages - thinking blocks', () => {
     toolOutput: JSON.stringify({ eventType, payload })
   });
 
-  test('thinkingBlock event creates thinking block in thread', async () => {
+  test('thinkingBlock event creates thinkingGroup with thinkingContent section', async () => {
     const builder = await import('../../../src/webview/scripts/core/timelineBuilder');
     const messages = [
       { id: 'u1', role: 'user', content: 'explain this' },
@@ -751,14 +751,16 @@ describe('buildTimelineFromMessages - thinking blocks', () => {
     expect(timeline.length).toBe(2);
 
     const thread = timeline[1] as any;
-    // Should have: empty text block + thinking block
+    // Should have: empty text block + thinkingGroup
     expect(thread.blocks.length).toBe(2);
-    expect(thread.blocks[1].type).toBe('thinking');
-    expect(thread.blocks[1].content).toBe('Let me reason about this...');
+    expect(thread.blocks[1].type).toBe('thinkingGroup');
     expect(thread.blocks[1].collapsed).toBe(true);
+    expect(thread.blocks[1].sections.length).toBe(1);
+    expect(thread.blocks[1].sections[0].type).toBe('thinkingContent');
+    expect(thread.blocks[1].sections[0].content).toBe('Let me reason about this...');
   });
 
-  test('multiple thinkingBlock events create separate blocks', async () => {
+  test('multiple thinkingBlock events with text between: separate groups', async () => {
     const builder = await import('../../../src/webview/scripts/core/timelineBuilder');
     const messages = [
       { id: 'u1', role: 'user', content: 'complex task' },
@@ -771,17 +773,24 @@ describe('buildTimelineFromMessages - thinking blocks', () => {
     const timeline = builder.buildTimelineFromMessages(messages);
     const thread = timeline[1] as any;
 
-    // text → thinking → text → thinking
-    const thinkingBlocks = thread.blocks.filter((b: any) => b.type === 'thinking');
-    expect(thinkingBlocks.length).toBe(2);
-    expect(thinkingBlocks[0].content).toBe('First reasoning step');
-    expect(thinkingBlocks[1].content).toBe('Second reasoning step');
-    // All thinking blocks are collapsed in history
-    expect(thinkingBlocks[0].collapsed).toBe(true);
-    expect(thinkingBlocks[1].collapsed).toBe(true);
+    // text("Starting...") → group1{T1} → text("Intermediate result") → group2{T2}
+    // Text between thinking blocks closes group1, then T2 starts group2.
+    expect(thread.blocks.length).toBe(4);
+    expect(thread.blocks[0].type).toBe('text');
+    expect(thread.blocks[0].content).toBe('Starting...');
+    expect(thread.blocks[1].type).toBe('thinkingGroup');
+    expect(thread.blocks[1].collapsed).toBe(true);
+    expect(thread.blocks[1].sections.length).toBe(1);
+    expect(thread.blocks[1].sections[0].content).toBe('First reasoning step');
+    expect(thread.blocks[2].type).toBe('text');
+    expect(thread.blocks[2].content).toBe('Intermediate result');
+    expect(thread.blocks[3].type).toBe('thinkingGroup');
+    expect(thread.blocks[3].collapsed).toBe(true);
+    expect(thread.blocks[3].sections.length).toBe(1);
+    expect(thread.blocks[3].sections[0].content).toBe('Second reasoning step');
   });
 
-  test('thinkingBlock with empty content still creates block', async () => {
+  test('thinkingBlock with empty content still creates group', async () => {
     const builder = await import('../../../src/webview/scripts/core/timelineBuilder');
     const messages = [
       { id: 'a1', role: 'assistant', content: 'hi' },
@@ -790,10 +799,12 @@ describe('buildTimelineFromMessages - thinking blocks', () => {
 
     const timeline = builder.buildTimelineFromMessages(messages);
     const thread = timeline[0] as any;
-    const thinkingBlocks = thread.blocks.filter((b: any) => b.type === 'thinking');
-    expect(thinkingBlocks.length).toBe(1);
-    expect(thinkingBlocks[0].content).toBe('');
-    expect(thinkingBlocks[0].collapsed).toBe(true);
+    // text("hi") + thinkingGroup{thinkingContent("")}
+    expect(thread.blocks.length).toBe(2);
+    expect(thread.blocks[0].type).toBe('text');
+    expect(thread.blocks[1].type).toBe('thinkingGroup');
+    expect(thread.blocks[1].sections[0].content).toBe('');
+    expect(thread.blocks[1].collapsed).toBe(true);
   });
 });
 

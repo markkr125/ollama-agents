@@ -48,5 +48,10 @@ export const statusClass = (status: StatusMessage) => {
 
 export const formatMarkdown = (text: string) => {
   if (!text) return '';
-  return markdown.render(text);
+  // Strip agent loop termination signal — should never be visible to users.
+  // This is the final rendering gate; earlier layers also strip it, but
+  // this catches any path that slips through (history, stale streams, etc.).
+  const cleaned = text.replace(/\[TASK_COMPLETE\]/gi, '').trimEnd();
+  if (!cleaned) return '';
+  return markdown.render(cleaned);
 };

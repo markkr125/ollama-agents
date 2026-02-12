@@ -41,6 +41,28 @@ export type AssistantThreadToolsBlock = {
   tools: Array<ProgressItem | CommandApprovalItem | FileEditApprovalItem>;
 };
 
+/**
+ * A section inside a ThinkingGroupBlock. Contains only thinking content
+ * and tool progress — text content is always at thread level.
+ */
+export type ThinkingGroupSection =
+  | { type: 'thinkingContent'; content: string; durationSeconds?: number; startTime?: number }
+  | AssistantThreadToolsBlock;
+
+/**
+ * Groups consecutive thinking rounds and tool progress groups into a single
+ * collapsible block. Only created for thinking models.
+ * Text content is never placed inside — it streams directly to thread-level blocks.
+ * Approval cards intentionally break out to thread-level blocks.
+ */
+export type AssistantThreadThinkingGroupBlock = {
+  type: 'thinkingGroup';
+  sections: ThinkingGroupSection[];
+  collapsed: boolean;
+  streaming: boolean;
+  totalDurationSeconds?: number;
+};
+
 export type FileChangeFileItem = {
   path: string;
   action: string;
@@ -68,7 +90,7 @@ export type AssistantThreadItem = {
   id: string;
   type: 'assistantThread';
   role: 'assistant';
-  blocks: Array<AssistantThreadTextBlock | AssistantThreadThinkingBlock | AssistantThreadToolsBlock>;
+  blocks: Array<AssistantThreadTextBlock | AssistantThreadThinkingBlock | AssistantThreadToolsBlock | AssistantThreadThinkingGroupBlock>;
   model?: string;
 };
 

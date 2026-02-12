@@ -2,7 +2,8 @@ import * as http from 'http';
 
 export type OllamaMockScenario =
   | { type: 'static' }
-  | { type: 'chatEcho' };
+  | { type: 'chatEcho' }
+  | { type: 'chatMultiChunk'; chunks: string[] };
 
 export interface OllamaMockServer {
   baseUrl: string;
@@ -79,6 +80,16 @@ export async function startOllamaMockServer(
             { model: parsed.model, message: { role: 'assistant', content: content.slice(0, 4) }, done: false },
             { model: parsed.model, message: { role: 'assistant', content: content.slice(4) }, done: true }
           ]);
+          return;
+        }
+
+        if (scenario.type === 'chatMultiChunk') {
+          const objs = scenario.chunks.map((c, i) => ({
+            model: parsed.model,
+            message: { role: 'assistant', content: c },
+            done: i === scenario.chunks.length - 1
+          }));
+          writeNDJSON(res, objs);
           return;
         }
 

@@ -75,4 +75,38 @@ suite('OllamaClient (mocked API)', () => {
       await server.close();
     }
   });
+
+  // Regression: verify that many small NDJSON chunks are all delivered individually
+  // by the streaming pipeline. This tests the backend side of the streaming fix
+  // (parseNDJSON + async generator). If chunks were silently merged or dropped,
+  // the webview would receive fewer streamChunk messages than expected.
+  test('chat() delivers all chunks from a multi-chunk stream without merging or dropping', async () => {
+    const words = ['The ', 'quick ', 'brown ', 'fox ', 'jumps ', 'over ', 'the ', 'lazy ', 'dog', '.'];
+    const server = await startOllamaMockServer({ type: 'chatMultiChunk', chunks: words });
+    try {
+      const client = new OllamaClient(server.baseUrl);
+
+      const received: string[] = [];
+      for await (const chunk of client.chat({
+        model: 'test-model',
+        messages: [{ role: 'user', content: 'test' }]
+      })) {
+        if (chunk.message?.content) {
+          received.push(chunk.message.content);
+        }
+        if (chunk.done) {
+          break;
+        }
+      }
+
+      // Every chunk should arrive as a separate yield from the async generator
+      assert.strictEqual(received.length, words.length);
+      for (let i = 0; i < words.length; i++) {
+        assert.strictEqual(received[i], words[i], `chunk ${i} mismatch`);
+      }
+      assert.strictEqual(received.join(''), 'The quick brown fox jumps over the lazy dog.');
+    } finally {
+      await server.close();
+    }
+  });
 });

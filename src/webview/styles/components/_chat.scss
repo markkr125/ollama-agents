@@ -545,6 +545,27 @@
     max-height: 300px;
     overflow-y: auto;
     line-height: 1.5;
+    border: 1px solid var(--surface-border);
+  }
+}
+
+/* Thinking Group — extends thinking-block for grouped thinking + tools */
+.thinking-group {
+  .thinking-group-content {
+    padding: 6px 12px 8px;
+    font-size: 12px;
+    color: var(--muted);
+    max-height: 500px;
+    overflow-y: auto;
+    line-height: 1.5;
+  }
+
+  .thinking-group-thinking {
+    margin-bottom: 8px;
+  }
+
+  .assistant-tools {
+    margin: 6px 0;
   }
 }
 

@@ -49,7 +49,7 @@ import {
 } from '../state';
 import { buildTimelineFromMessages } from '../timelineBuilder';
 import type { InitMessage, LoadSessionMessagesMessage, SearchResultGroup } from '../types';
-import { resetActiveStreamBlock } from './streaming';
+import { closeActiveThinkingGroup, resetActiveStreamBlock } from './streaming';
 import { ensureAssistantThread, getLastTextBlock, syncModelSelection } from './threadUtils';
 
 export const handleInit = (msg: InitMessage) => {
@@ -219,7 +219,8 @@ export const handleGenerationStopped = (msg: any) => {
   if (!msg.sessionId || msg.sessionId === currentSessionId.value) {
     setGenerating(false);
     currentAssistantThreadId.value = null;
-    // Reset the per-iteration stream target so the next generation starts fresh
+    // Close any open thinking group and reset stream state
+    closeActiveThinkingGroup();
     resetActiveStreamBlock();
   }
 };
@@ -236,6 +237,7 @@ export const handleClearMessages = (msg: any) => {
   currentStreamIndex.value = null;
   currentProgressIndex.value = null;
   currentAssistantThreadId.value = null;
+  closeActiveThinkingGroup();
   resetActiveStreamBlock();
   if (msg.sessionId) {
     currentSessionId.value = msg.sessionId;

@@ -5,7 +5,7 @@
  * - Never import 'vscode' here — this runs in a sandboxed iframe.
  */
 import { reactive, ref, watch } from 'vue';
-import type { AssistantThreadFilesChangedBlock, ModelInfo, SearchResultGroup, SessionItem, StatusMessage, TimelineItem } from './types';
+import type { AssistantThreadFilesChangedBlock, AssistantThreadThinkingGroupBlock, ModelInfo, SearchResultGroup, SessionItem, StatusMessage, TimelineItem } from './types';
 
 declare const acquireVsCodeApi: () => {
   postMessage: (message: any) => void;
@@ -114,6 +114,13 @@ export const temperatureSlider = ref(70);
 export const currentProgressIndex = ref<number | null>(null);
 export const currentStreamIndex = ref<number | null>(null);
 export const currentAssistantThreadId = ref<string | null>(null);
+
+/**
+ * Tracks the currently-open thinking group during live streaming.
+ * Set when `streamThinking` creates a new ThinkingGroupBlock, cleared on
+ * `finalMessage`, `generationStopped`, or session load.
+ */
+export const activeThinkingGroup = ref<AssistantThreadThinkingGroupBlock | null>(null);
 
 // Session search state
 export const searchQuery = ref('');

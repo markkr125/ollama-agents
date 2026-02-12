@@ -112,8 +112,8 @@ export class AgentToolRunner {
         continue;
       }
 
-      // Show "running" status for generic tools (terminal/file handlers show their own)
-      if (!isTerminalCommand && !isFileEdit) {
+      // Show "running" status for generic tools and file edits (terminal handler shows its own)
+      if (!isTerminalCommand) {
         this.emitter.postMessage({
           type: 'showToolAction',
           status: 'running',
