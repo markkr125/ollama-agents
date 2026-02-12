@@ -71,7 +71,8 @@ export const handleShowToolAction = (msg: ShowToolActionMessage) => {
     text: actionText,
     detail: msg.detail || null,
     ...(msg.filePath ? { filePath: msg.filePath } : {}),
-    ...(msg.checkpointId ? { checkpointId: msg.checkpointId } : {})
+    ...(msg.checkpointId ? { checkpointId: msg.checkpointId } : {}),
+    ...(msg.startLine != null ? { startLine: msg.startLine } : {})
   };
   if (action.status !== 'running' && action.status !== 'pending') {
     // Final state (success/error) - update existing or push

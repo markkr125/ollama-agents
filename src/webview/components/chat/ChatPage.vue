@@ -45,11 +45,16 @@
                 :open="!block.collapsed"
               >
                 <summary>
+                  <span class="thinking-chevron">▼</span>
                   <span v-if="!block.collapsed" class="thinking-spinner"></span>
                   <span v-else class="thinking-check">✓</span>
-                  Thought
+                  <span class="thinking-title">
+                    <template v-if="!block.collapsed">Thinking…</template>
+                    <template v-else-if="block.durationSeconds">Thought for {{ block.durationSeconds }}s</template>
+                    <template v-else>Thought</template>
+                  </span>
                 </summary>
-                <div class="thinking-block-content">
+                <div class="thinking-block-content progress-actions">
                   <MarkdownBlock :content="block.content" />
                 </div>
               </details>

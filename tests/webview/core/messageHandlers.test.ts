@@ -725,3 +725,105 @@ describe('warning banner handler', () => {
     expect(state.warningBanner.message).toBe('');
   });
 });
+
+describe('chunked read_file handlers', () => {
+  test('handleShowToolAction preserves startLine on action items', async () => {
+    const state = await import('../../../src/webview/scripts/core/state');
+    const handlers = await import('../../../src/webview/scripts/core/messageHandlers/progress');
+
+    state.timeline.value = [];
+    state.currentProgressIndex.value = null;
+    state.currentStreamIndex.value = null;
+    state.currentAssistantThreadId.value = null;
+
+    handlers.handleStartProgressGroup({ type: 'startProgressGroup', title: 'Reading file' });
+    handlers.handleShowToolAction({
+      type: 'showToolAction',
+      status: 'success',
+      icon: '📄',
+      text: 'Read main.ts',
+      detail: 'lines 1–100',
+      filePath: 'src/main.ts',
+      startLine: 1
+    });
+
+    const thread = state.timeline.value[0] as any;
+    const group = thread.blocks[1].tools[0];
+    expect(group.actions[0].startLine).toBe(1);
+    expect(group.actions[0].filePath).toBe('src/main.ts');
+  });
+
+  test('handleShowToolAction preserves filePath without checkpointId for reads', async () => {
+    const state = await import('../../../src/webview/scripts/core/state');
+    const handlers = await import('../../../src/webview/scripts/core/messageHandlers/progress');
+
+    state.timeline.value = [];
+    state.currentProgressIndex.value = null;
+    state.currentStreamIndex.value = null;
+    state.currentAssistantThreadId.value = null;
+
+    handlers.handleStartProgressGroup({ type: 'startProgressGroup', title: 'Reading' });
+    handlers.handleShowToolAction({
+      type: 'showToolAction',
+      status: 'success',
+      icon: '📄',
+      text: 'Read config.ts',
+      detail: 'lines 1–50',
+      filePath: 'src/config.ts',
+      startLine: 1
+    });
+
+    const thread = state.timeline.value[0] as any;
+    const action = thread.blocks[1].tools[0].actions[0];
+    expect(action.filePath).toBe('src/config.ts');
+    expect(action.checkpointId).toBeUndefined();
+    expect(action.startLine).toBe(1);
+  });
+
+  test('multiple chunk success actions create separate action items', async () => {
+    const state = await import('../../../src/webview/scripts/core/state');
+    const handlers = await import('../../../src/webview/scripts/core/messageHandlers/progress');
+
+    state.timeline.value = [];
+    state.currentProgressIndex.value = null;
+    state.currentStreamIndex.value = null;
+    state.currentAssistantThreadId.value = null;
+
+    handlers.handleStartProgressGroup({ type: 'startProgressGroup', title: 'Reading file.ts' });
+
+    // Chunk 1 running then success
+    handlers.handleShowToolAction({
+      type: 'showToolAction', status: 'running', icon: '📄',
+      text: 'Reading file.ts', detail: 'lines 1–100',
+      filePath: 'src/file.ts', startLine: 1
+    });
+    handlers.handleShowToolAction({
+      type: 'showToolAction', status: 'success', icon: '📄',
+      text: 'Read file.ts', detail: 'lines 1–100',
+      filePath: 'src/file.ts', startLine: 1
+    });
+
+    // Chunk 2 running then success
+    handlers.handleShowToolAction({
+      type: 'showToolAction', status: 'running', icon: '📄',
+      text: 'Reading file.ts', detail: 'lines 101–200',
+      filePath: 'src/file.ts', startLine: 101
+    });
+    handlers.handleShowToolAction({
+      type: 'showToolAction', status: 'success', icon: '📄',
+      text: 'Read file.ts', detail: 'lines 101–200',
+      filePath: 'src/file.ts', startLine: 101
+    });
+
+    handlers.handleFinishProgressGroup({ type: 'finishProgressGroup' });
+
+    const thread = state.timeline.value[0] as any;
+    const group = thread.blocks[1].tools[0];
+    expect(group.status).toBe('done');
+    expect(group.actions.length).toBe(2);
+    expect(group.actions[0].text).toBe('Read file.ts');
+    expect(group.actions[0].detail).toBe('lines 1–100');
+    expect(group.actions[1].text).toBe('Read file.ts');
+    expect(group.actions[1].detail).toBe('lines 101–200');
+  });
+});

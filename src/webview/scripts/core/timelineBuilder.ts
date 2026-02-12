@@ -1,13 +1,13 @@
 import { recalcBlockTotals } from './messageHandlers/filesChanged';
 import { filesChangedBlocks } from './state';
 import type {
-  AssistantThreadFilesChangedBlock,
-  AssistantThreadItem,
-  AssistantThreadToolsBlock,
-  CommandApprovalItem,
-  FileEditApprovalItem,
-  ProgressItem,
-  TimelineItem
+    AssistantThreadFilesChangedBlock,
+    AssistantThreadItem,
+    AssistantThreadToolsBlock,
+    CommandApprovalItem,
+    FileEditApprovalItem,
+    ProgressItem,
+    TimelineItem
 } from './types';
 
 // ---------------------------------------------------------------------------
@@ -111,7 +111,8 @@ class TimelineBuilder {
     thread.blocks.push({
       type: 'thinking',
       content: payload?.content || '',
-      collapsed: true
+      collapsed: true,
+      durationSeconds: payload?.durationSeconds
     });
   }
 
@@ -151,7 +152,8 @@ class TimelineBuilder {
       text: actionText,
       detail: payload?.detail || null,
       filePath: payload?.filePath || undefined,
-      checkpointId: payload?.checkpointId || undefined
+      checkpointId: payload?.checkpointId || undefined,
+      startLine: payload?.startLine || undefined
     };
 
     if (status !== 'running' && status !== 'pending') {
@@ -231,10 +233,14 @@ class TimelineBuilder {
       const actionId = `action_${payload?.approvalId}`;
       const existingAction = this.currentGroup.actions.find(a => a.id === actionId);
       if (existingAction) {
-        const isError = payload?.status === 'skipped' || payload?.status === 'error';
-        existingAction.status = isError ? 'error' : 'success';
-        existingAction.detail = payload?.command?.substring(0, 60) || existingAction.detail;
-        if (isError) this.currentGroup.status = 'error';
+        if (payload?.status === 'running') {
+          existingAction.status = 'running';
+        } else {
+          const isError = payload?.status === 'skipped' || payload?.status === 'error';
+          existingAction.status = isError ? 'error' : 'success';
+          existingAction.detail = payload?.command?.substring(0, 60) || existingAction.detail;
+          if (isError) this.currentGroup.status = 'error';
+        }
       }
     }
 

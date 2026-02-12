@@ -1,3 +1,4 @@
+import * as vscode from 'vscode';
 import { AgentChatExecutor } from '../../services/agent/agentChatExecutor';
 import { PendingEditReviewService } from '../../services/review/pendingEditReviewService';
 import { ChatSessionController } from '../chatSessionController';
@@ -9,7 +10,8 @@ import { IMessageHandler, WebviewMessageEmitter } from '../chatTypes';
 export class FileChangeMessageHandler implements IMessageHandler {
   readonly handledTypes = [
     'openFileChangeDiff', 'openFileChangeReview', 'requestFilesDiffStats',
-    'keepFile', 'undoFile', 'keepAllChanges', 'undoAllChanges'
+    'keepFile', 'undoFile', 'keepAllChanges', 'undoAllChanges',
+    'openWorkspaceFile', 'revealInExplorer'
   ] as const;
 
   constructor(
@@ -49,6 +51,12 @@ export class FileChangeMessageHandler implements IMessageHandler {
         break;
       case 'undoAllChanges':
         await this.handleUndoAllChanges(data.checkpointId, data.sessionId);
+        break;
+      case 'openWorkspaceFile':
+        await this.handleOpenWorkspaceFile(data.path, data.line);
+        break;
+      case 'revealInExplorer':
+        await this.handleRevealInExplorer(data.path);
         break;
     }
   }
@@ -115,5 +123,35 @@ export class FileChangeMessageHandler implements IMessageHandler {
     await this.agentExecutor.persistUiEvent(resolvedSessionId, 'keepUndoResult', payload);
     this.emitter.postMessage({ type: 'keepUndoResult', ...payload, sessionId: resolvedSessionId });
     await this.sessionController.sendSessionsList();
+  }
+
+  private async handleOpenWorkspaceFile(relativePath: string, line?: number) {
+    if (!relativePath) return;
+    const workspaceFolders = vscode.workspace.workspaceFolders;
+    if (!workspaceFolders?.length) return;
+    const fileUri = vscode.Uri.joinPath(workspaceFolders[0].uri, relativePath);
+    try {
+      const doc = await vscode.workspace.openTextDocument(fileUri);
+      const options: vscode.TextDocumentShowOptions = { preview: true };
+      if (typeof line === 'number' && line > 0) {
+        const pos = new vscode.Position(line - 1, 0);
+        options.selection = new vscode.Range(pos, pos);
+      }
+      await vscode.window.showTextDocument(doc, options);
+    } catch (err: any) {
+      console.warn('[FileChangeHandler] Failed to open file:', relativePath, err);
+    }
+  }
+
+  private async handleRevealInExplorer(relativePath: string) {
+    if (!relativePath) return;
+    const workspaceFolders = vscode.workspace.workspaceFolders;
+    if (!workspaceFolders?.length) return;
+    const uri = vscode.Uri.joinPath(workspaceFolders[0].uri, relativePath);
+    try {
+      await vscode.commands.executeCommand('revealInExplorer', uri);
+    } catch (err: any) {
+      console.warn('[FileChangeHandler] Failed to reveal in explorer:', relativePath, err);
+    }
   }
 }

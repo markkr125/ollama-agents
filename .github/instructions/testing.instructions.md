@@ -21,7 +21,8 @@ This repo uses two complementary test harnesses:
 - Location:
   - Test harness + mocks: `tests/extension/`
   - Test suites: `tests/extension/suite/`
-    - `tests/extension/suite/utils/` for pure utilities
+    - `tests/extension/suite/agent/` for agent tool tests (toolRegistry, readFile)
+    - `tests/extension/suite/utils/` for pure utilities (toolCallParser, commandSafety, toolUIFormatter)
     - `tests/extension/suite/services/` for service-level integration tests
 
 2) **Webview tests (fast unit/component)**
@@ -31,6 +32,21 @@ This repo uses two complementary test harnesses:
 - Config: `tests/webview/vitest.config.ts`
 
 To run everything locally (recommended before pushing): `npm run test:all`.
+
+## Post-Change Test Requirements (Non-Negotiable)
+
+After **any** code or test change, run the appropriate test suite(s) before considering the work done:
+
+| What changed | Command | Why |
+|---|---|---|
+| `src/webview/**` only | `npm run test:webview` | Fast Vitest tests for webview logic |
+| `src/**` (non-webview) only | `npm test` | Extension host tests (launches VS Code, runs Mocha) |
+| Both, or unsure | `npm run test:all` | Runs both harnesses sequentially |
+| New test files added | `npm run test:all` | Verify new tests actually run and pass in the correct harness |
+
+**Common mistake**: Creating extension host test files (under `tests/extension/`) but only running `npm run test:webview`. The new tests compile (`tsc --noEmit`) but are never executed. Always run `npm test` when adding/changing extension host tests.
+
+**Common mistake**: Running `npx tsc -p tsconfig.test.json --noEmit` and assuming tests pass. Type-checking only validates types — it does NOT execute the tests. A test can compile cleanly and still fail at runtime.
 
 ## What to test with Vitest vs `@vscode/test-electron`
 
@@ -69,7 +85,7 @@ Good `@vscode/test-electron` targets:
 
 The following test suites exist in `tests/webview/`:
 
-**`timelineBuilder.test.ts`** (28 tests) - Tests the `buildTimelineFromMessages` function:
+**`timelineBuilder.test.ts`** (31 tests) - Tests the `buildTimelineFromMessages` function:
 - Block-based structure: user messages, assistant threads, text block merging
 - UI event replay: `startProgressGroup`, `showToolAction`, `finishProgressGroup`
 - Command approval flow: `requestToolApproval`, `toolApprovalResult`, skipped status
@@ -80,8 +96,9 @@ The following test suites exist in `tests/webview/`:
 - **Live/history parity tests**: `showToolAction` update-in-place behavior (same text, different text, pending→running→success)
 - **Thinking blocks**: `thinkingBlock` event creates collapsed thinking blocks in thread, multiple blocks, empty content
 - **showError event**: Creates error action in progress group, works within existing groups
+- **Chunked read_file**: `startLine` preserved on chunk actions, `filePath` without `checkpointId` for reads, `list_files` detail with basePath preserved
 
-**`messageHandlers.test.ts`** (21 tests) - Tests live message handlers:
+**`messageHandlers.test.ts`** (24 tests) - Tests live message handlers:
 - Streaming handlers: `handleStreamChunk` creates/updates text blocks
 - Progress group handlers: start/show/finish progress groups
 - Approval handlers with live/history parity: both progress group action AND approval card
@@ -91,6 +108,7 @@ The following test suites exist in `tests/webview/`:
 - **Settings update**: `handleSettingsUpdate` does not clear model options
 - **Thinking block handlers**: `handleStreamThinking` creates/updates thinking blocks, `handleCollapseThinking` collapses them, new thinking after collapse creates new block
 - **Warning banner handler**: `handleShowWarningBanner` sets banner state, ignores wrong session
+- **Chunked read_file handlers**: `startLine` and `filePath` passthrough, no `checkpointId` on read actions, multiple chunks create separate action items
 
 **`actions.test.ts`** (10 tests) - Tests UI actions:
 - Debounced search behavior
@@ -113,14 +131,21 @@ The following test suites exist in `tests/webview/`:
 - Updates when content prop changes
 - Caching behavior prevents unnecessary re-renders
 
+**`ProgressGroup.test.ts`** (16 tests) - Tests Vue component:
+- **`isCompletedFileGroup` guard** (REGRESSION): Flat view only for file edits with `checkpointId`; read actions (no `checkpointId`) render as normal progress groups; running groups never render flat; mixed actions require ALL to have `checkpointId`
+- **File click handling**: Click with `checkpointId` opens diff view; click without (read action) opens file at `startLine`; click without `startLine` opens at undefined
+- **Tree listing**: Renders `├`/`└` connectors, full path tooltip, folder click → `revealInExplorer`, file click → `openWorkspaceFile`, summary strips basePath from display
+- **Action rendering**: Title display, detail text, `has-listing` class for multi-line detail
+
 **`SettingsPage.test.ts`** (19 tests) - Tests settings page composable + component:
 - **Composable (`useSettingsPage`)**: bearer input, temperature input, tool timeout input, recreate messages table delegation, dismiss welcome, session patterns sync (immediate, reactive, defaults)
 - **Component**: welcome banner visibility + dismiss, navigation sections rendering + click + active class, page visibility based on `currentPage`, recreate messages button, test connection button, model options in select dropdowns
 
-**`parity.test.ts`** (12 tests) - Tests live/history structural parity:
+**`parity.test.ts`** (11 tests) - Tests live/history structural parity:
 - Ensures that live message handlers and `timelineBuilder` produce identical timeline structures for the same event sequences
+- **Chunked read_file parity**: Verifies that chunked `read_file` actions with `startLine` and `filePath` produce identical structures in live handlers vs `timelineBuilder`, and that `checkpointId` is absent (not misidentified as file edits)
 
-**`core/filesChanged.test.ts`** (28 tests) - Tests files-changed widget state management:
+**`core/filesChanged.test.ts`** (30 tests) - Tests files-changed widget state management:
 - **ONE-widget merging**: single block creation, merging across checkpoints, dedup files, dedup checkpointIds
 - **Diff stats**: `handleFilesDiffStats` populates per-file `additions`/`deletions`, recalculates totals
 - **Per-file keep/undo**: single file removal, block removal when last file resolved, checkpointId cleanup
@@ -151,6 +176,16 @@ The following test suites exist in `tests/extension/suite/`:
 - list_files: lists workspace root correctly
 - get_diagnostics: accepts multiple path argument names
 - Tool registration: verifies all expected tools are registered
+
+**`agent/readFile.test.ts`** (13 tests) - Tests streaming file I/O helpers:
+- `CHUNK_SIZE` is 100
+- `countFileLines`: small file, single-line no trailing newline, empty file (0 lines), 200-line file, nonexistent file rejects with ENOENT
+- `readFileChunk`: first chunk of multi-line file, second chunk, full file range, single-line range, early stop (does not read beyond `endLine`), nonexistent file rejects, exactly `CHUNK_SIZE` lines, `CHUNK_SIZE + 1` lines boundary
+
+**`utils/toolUIFormatter.test.ts`** (25 tests) - Tests tool UI text generation:
+- `getProgressGroupTitle`: single read shows filename, multiple reads show comma-separated, >5 reads → "Reading multiple files", deduplication, `file` arg variant, read+write → "Modifying files", search/write/list/command titles, empty args fallback
+- `getToolActionInfo`: read/write/list/search/unknown tool text, startLine line range in detail, empty detail without startLine
+- `getToolSuccessInfo`: read returns filePath + line count, read with startLine returns range + startLine, write returns filePath, list_files includes basePath tab-separated, search reports match count, command reports exit code
 
 **`services/sessionIndexService.test.ts`** (8 tests) - Tests SQLite session/message CRUD:
 - Session creation/update/listing with pagination

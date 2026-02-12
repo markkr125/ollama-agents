@@ -251,6 +251,7 @@ export class AgentChatExecutor {
           chatRequest.think = true;
         }
 
+        const thinkingStartTime = Date.now();
         const streamResult = await this.streamProcessor.streamIteration(
           chatRequest, sessionId, model, iteration, useNativeTools, token
         );
@@ -280,7 +281,8 @@ export class AgentChatExecutor {
         // --- 3. Persist thinking block (BEFORE text and tools — order matters for history) ---
         const displayThinking = thinkingContent.replace(/\[TASK_COMPLETE\]/gi, '').trim();
         if (displayThinking) {
-          await this.persistUiEvent(sessionId, 'thinkingBlock', { content: displayThinking });
+          const durationSeconds = Math.round((Date.now() - thinkingStartTime) / 1000);
+          await this.persistUiEvent(sessionId, 'thinkingBlock', { content: displayThinking, durationSeconds });
           this.emitter.postMessage({ type: 'collapseThinking', sessionId });
         }
 
@@ -349,8 +351,13 @@ export class AgentChatExecutor {
 
         // --- 7. Execute tool batch ---
         const groupTitle = getProgressGroupTitle(toolCalls);
-        this.emitter.postMessage({ type: 'startProgressGroup', title: groupTitle, sessionId });
-        await this.persistUiEvent(sessionId, 'startProgressGroup', { title: groupTitle });
+        const isTerminalOnly = toolCalls.every(t => t.name === 'run_terminal_command' || t.name === 'run_command');
+
+        // Skip progress group wrapper for terminal-only batches — the approval card is sufficient
+        if (!isTerminalOnly) {
+          this.emitter.postMessage({ type: 'startProgressGroup', title: groupTitle, sessionId });
+          await this.persistUiEvent(sessionId, 'startProgressGroup', { title: groupTitle });
+        }
 
         // Push assistant message to conversation history
         const assistantMsg: any = { role: 'assistant', content: response };
@@ -367,8 +374,10 @@ export class AgentChatExecutor {
           hasWrittenFiles = true;
         }
 
-        this.emitter.postMessage({ type: 'finishProgressGroup', sessionId });
-        await this.persistUiEvent(sessionId, 'finishProgressGroup', {});
+        if (!isTerminalOnly) {
+          this.emitter.postMessage({ type: 'finishProgressGroup', sessionId });
+          await this.persistUiEvent(sessionId, 'finishProgressGroup', {});
+        }
 
         // Feed tool results back into conversation history
         if (useNativeTools) {

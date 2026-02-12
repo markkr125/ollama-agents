@@ -58,10 +58,14 @@ export const handleToolApprovalResult = (msg: ToolApprovalResultMessage) => {
       const actionId = `action_${msg.approvalId}`;
       const existingAction = group.actions.find(a => a.id === actionId);
       if (existingAction) {
-        const isError = msg.status === 'skipped' || msg.status === 'error';
-        existingAction.status = isError ? 'error' : 'success';
-        existingAction.detail = msg.command?.substring(0, 60) || existingAction.detail;
-        if (isError) group.status = 'error';
+        if (msg.status === 'running') {
+          existingAction.status = 'running';
+        } else {
+          const isError = msg.status === 'skipped' || msg.status === 'error';
+          existingAction.status = isError ? 'error' : 'success';
+          existingAction.detail = msg.command?.substring(0, 60) || existingAction.detail;
+          if (isError) group.status = 'error';
+        }
       }
     }
   }

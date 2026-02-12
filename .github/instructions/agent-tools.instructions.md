@@ -79,6 +79,27 @@ interface ToolBatchResult {
 
 Handles: per-tool "running"→"success"/"error" UI events, `persistUiEvent` for each action, inline diff stats computation (`+N -N` badges), incremental `filesChanged` emission, tool result persistence to DB, skipped-action detection.
 
+#### Chunked `read_file` Interception
+
+All `read_file` calls are intercepted **before** the normal tool execution path and routed through `executeChunkedRead()`. This prevents loading entire files into memory.
+
+**Flow:**
+1. `isReadFile` check at top of loop → `executeChunkedRead()` → `continue`
+2. Resolve path via `resolveWorkspacePath()`
+3. Count total lines via streaming (`countFileLines()`)
+4. Loop in `CHUNK_SIZE` (100) line chunks:
+   - Emit "running" UI action: `Reading ${fileName}` / `lines ${start}–${end}`
+   - Stream just that range via `readFileChunk()`
+   - Emit "success" UI action: `Read ${fileName}` / `lines ${start}–${end}`
+   - Persist the success event
+5. Concatenate all chunks, persist a **single** combined tool message to DB
+6. Return combined content to LLM
+
+**Key design decisions:**
+- `readFile.ts` schema exposes only `path`/`file` — **no `startLine`/`endLine`** — so the LLM cannot bypass chunking
+- Each chunk gets its own UI action with `filePath` and `startLine` for click-to-open navigation
+- Chunk actions have `filePath` but **no `checkpointId`** — this is critical for `ProgressGroup.vue`'s `isCompletedFileGroup` guard (only file edits with checkpointId render flat)
+
 ### `AgentSummaryBuilder` — Post-Loop Finalization
 
 Called once after the while-loop exits. Handles:
@@ -241,9 +262,9 @@ All core agent types are centralised in `src/types/agent.ts`:
 **Built-in Tools (6 total):**
 | Tool | Description |
 |------|-------------|
-| `read_file` | Read file contents |
+| `read_file` | Read file contents (streaming, chunked in 100-line blocks via `countFileLines` + `readFileChunk`; see `src/agent/tools/readFile.ts`) |
 | `write_file` | Write/create file (handles both) |
-| `list_files` | List directory contents |
+| `list_files` | List directory contents (output includes `basePath` for click handling) |
 | `search_workspace` | Search for text in files |
 | `run_terminal_command` | Execute shell commands |
 | `get_diagnostics` | Get file errors/warnings |

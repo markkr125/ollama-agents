@@ -25,8 +25,10 @@
         @click="handleOpenReview(file.path, file.checkpointId)"
       >
         <span class="file-ext-badge" :class="fileExtClass(file.path)">{{ fileExt(file.path) }}</span>
-        <span class="file-name" :title="file.path">{{ fileName(file.path) }}</span>
-        <span v-if="fileDir(file.path)" class="file-dir">{{ fileDir(file.path) }}</span>
+        <span class="file-identity" :title="file.path">
+          <span class="file-name">{{ fileName(file.path) }}</span>
+          <span v-if="fileDir(file.path)" class="file-dir">{{ fileDir(file.path) }}</span>
+        </span>
         <span v-if="file.additions != null" class="file-stats">
           <span class="stat-add">+{{ file.additions }}</span>
           <span class="stat-del">-{{ file.deletions }}</span>
@@ -38,7 +40,7 @@
       </div>
     </div>
 
-    <div v-if="block.totalChanges" class="files-changed-nav" @click.stop>
+    <div v-if="block.totalChanges && block.totalChanges > 1" class="files-changed-nav" @click.stop>
       <span class="fc-nav-label">Change {{ block.currentChange ?? 0 }} of {{ block.totalChanges }}</span>
       <button class="fc-nav-arrow-btn" title="Previous change" @click="handleNavPrev">←</button>
       <button class="fc-nav-arrow-btn" title="Next change" @click="handleNavNext">→</button>

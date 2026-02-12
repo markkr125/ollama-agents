@@ -116,7 +116,7 @@ export const handleStreamThinking = (msg: StreamThinkingMessage) => {
     // NEW thinking block = new iteration → reset stream target so next
     // streamChunk creates a per-iteration text block at the right position
     activeStreamBlock = null;
-    thinkingBlock = { type: 'thinking', content: '', collapsed: false };
+    thinkingBlock = { type: 'thinking', content: '', collapsed: false, startTime: Date.now() };
     thread.blocks.push(thinkingBlock);
   }
 
@@ -134,7 +134,11 @@ export const handleCollapseThinking = (msg: CollapseThinkingMessage) => {
   const thread = ensureAssistantThread();
   for (const block of thread.blocks) {
     if (block.type === 'thinking' && !(block as AssistantThreadThinkingBlock).collapsed) {
-      (block as AssistantThreadThinkingBlock).collapsed = true;
+      const tb = block as AssistantThreadThinkingBlock;
+      if (tb.startTime) {
+        tb.durationSeconds = Math.round((Date.now() - tb.startTime) / 1000);
+      }
+      tb.collapsed = true;
     }
   }
 };

@@ -153,6 +153,13 @@
   font-size: 12px;
   color: var(--fg);
 
+  &.has-listing {
+    .action-status,
+    .file-icon {
+      display: none;
+    }
+  }
+
   .action-status {
     width: 14px;
     height: 14px;
@@ -202,11 +209,82 @@
     .detail {
       color: var(--muted);
       opacity: 0.8;
+      margin-left: 4px;
 
       &.diff-stats {
         opacity: 1;
         margin-left: 6px;
       }
+    }
+
+    .action-listing {
+      display: flex;
+      flex-direction: column;
+      margin-top: 4px;
+      padding: 4px 0;
+      gap: 1px;
+
+      &.tree-listing {
+        padding-left: 0;
+      }
+    }
+
+    .listing-row {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      padding: 1px 4px;
+      font-size: 11.5px;
+      border-radius: 3px;
+
+      &:hover {
+        background: var(--vscode-list-hoverBackground);
+      }
+
+      &.clickable {
+        cursor: pointer;
+
+        .listing-name:hover {
+          text-decoration: underline;
+          color: var(--accent);
+        }
+      }
+
+      &.folder .listing-name {
+        color: var(--fg);
+        font-weight: 500;
+      }
+    }
+
+    .tree-connector {
+      color: var(--surface-border);
+      font-size: 11px;
+      width: 10px;
+      flex-shrink: 0;
+      user-select: none;
+    }
+
+    .listing-icon {
+      font-size: 12px;
+      width: 16px;
+      text-align: center;
+      flex-shrink: 0;
+    }
+
+    .listing-name {
+      color: var(--muted);
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+
+    .listing-size {
+      margin-left: auto;
+      color: var(--muted);
+      opacity: 0.6;
+      font-size: 10.5px;
+      font-variant-numeric: tabular-nums;
+      flex-shrink: 0;
     }
   }
 }

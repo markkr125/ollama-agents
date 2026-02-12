@@ -580,3 +580,103 @@ describe('CRITICAL: activeStreamBlock prevents duplicate text blocks', () => {
     expect(nonEmptyTexts[1].content).toBe('Result.');
   });
 });
+
+describe('CRITICAL: Chunked read_file parity - startLine + filePath passthrough', () => {
+  /**
+   * Scenario: Agent reads a file that gets chunked into 2 chunks.
+   * The progress group should contain both chunk actions with startLine,
+   * and the structure must match between live and history.
+   */
+  test('chunked read_file with startLine: live === restored', async () => {
+    // ─── PATH 1: Live handlers ───
+    const state = await import('../../../src/webview/scripts/core/state');
+    const streaming = await import('../../../src/webview/scripts/core/messageHandlers/streaming');
+    const progress = await import('../../../src/webview/scripts/core/messageHandlers/progress');
+
+    state.timeline.value = [];
+    state.currentStreamIndex.value = null;
+    state.currentAssistantThreadId.value = null;
+    state.currentProgressIndex.value = null;
+
+    // Agent streams initial text
+    streaming.handleStreamChunk({ type: 'streamChunk', content: 'Let me read that file.' });
+
+    // Progress group for chunked read
+    progress.handleStartProgressGroup({ type: 'startProgressGroup', title: 'Reading main.ts' });
+
+    // Chunk 1: running then success
+    progress.handleShowToolAction({
+      type: 'showToolAction', status: 'running', icon: '📄',
+      text: 'Reading main.ts', detail: 'lines 1–100',
+      filePath: 'src/main.ts', startLine: 1
+    });
+    progress.handleShowToolAction({
+      type: 'showToolAction', status: 'success', icon: '📄',
+      text: 'Read main.ts', detail: 'lines 1–100',
+      filePath: 'src/main.ts', startLine: 1
+    });
+
+    // Chunk 2: running then success
+    progress.handleShowToolAction({
+      type: 'showToolAction', status: 'running', icon: '📄',
+      text: 'Reading main.ts', detail: 'lines 101–150',
+      filePath: 'src/main.ts', startLine: 101
+    });
+    progress.handleShowToolAction({
+      type: 'showToolAction', status: 'success', icon: '📄',
+      text: 'Read main.ts', detail: 'lines 101–150',
+      filePath: 'src/main.ts', startLine: 101
+    });
+
+    progress.handleFinishProgressGroup({ type: 'finishProgressGroup' });
+
+    const liveThread = state.timeline.value[0] as any;
+    const liveToolsBlock = liveThread.blocks.find((b: any) => b.type === 'tools');
+    const liveGroup = liveToolsBlock.tools[0];
+
+    // Verify live structure
+    expect(liveGroup.title).toBe('Reading main.ts');
+    expect(liveGroup.status).toBe('done');
+    expect(liveGroup.actions.length).toBe(2);
+    expect(liveGroup.actions[0].startLine).toBe(1);
+    expect(liveGroup.actions[0].filePath).toBe('src/main.ts');
+    expect(liveGroup.actions[0].status).toBe('success');
+    expect(liveGroup.actions[0].checkpointId).toBeUndefined();
+    expect(liveGroup.actions[1].startLine).toBe(101);
+    expect(liveGroup.actions[1].filePath).toBe('src/main.ts');
+
+    // ─── PATH 2: Timeline builder (from DB messages) ───
+    const builder = await import('../../../src/webview/scripts/core/timelineBuilder');
+
+    const dbMessages = [
+      { id: 'a1', role: 'assistant', content: 'Let me read that file.' },
+      makeUiEvent('ui1', 'startProgressGroup', { title: 'Reading main.ts' }),
+      makeUiEvent('ui2', 'showToolAction', {
+        status: 'success', icon: '📄', text: 'Read main.ts',
+        detail: 'lines 1–100', filePath: 'src/main.ts', startLine: 1
+      }),
+      makeUiEvent('ui3', 'showToolAction', {
+        status: 'success', icon: '📄', text: 'Read main.ts',
+        detail: 'lines 101–150', filePath: 'src/main.ts', startLine: 101
+      }),
+      { id: 't1', role: 'tool', toolName: 'read_file', toolOutput: '...file content...' },
+      makeUiEvent('ui4', 'finishProgressGroup', {})
+    ];
+
+    const restoredTimeline = builder.buildTimelineFromMessages(dbMessages);
+    const restoredThread = restoredTimeline[0] as any;
+    const restoredToolsBlock = restoredThread.blocks.find((b: any) => b.type === 'tools');
+    const restoredGroup = restoredToolsBlock.tools[0];
+
+    // ─── PARITY CHECK ───
+    // Both should have 2 actions with startLine, filePath, no checkpointId
+    expect(restoredGroup.actions.length).toBe(liveGroup.actions.length);
+    expect(restoredGroup.actions[0].startLine).toBe(liveGroup.actions[0].startLine);
+    expect(restoredGroup.actions[0].filePath).toBe(liveGroup.actions[0].filePath);
+    expect(restoredGroup.actions[0].checkpointId).toBeUndefined();
+    expect(restoredGroup.actions[1].startLine).toBe(liveGroup.actions[1].startLine);
+    expect(restoredGroup.actions[1].filePath).toBe(liveGroup.actions[1].filePath);
+    expect(restoredGroup.status).toBe(liveGroup.status);
+    expect(restoredGroup.title).toBe(liveGroup.title);
+  });
+});

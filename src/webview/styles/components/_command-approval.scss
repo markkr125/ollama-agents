@@ -1,36 +1,111 @@
 .command-approval {
-  border: 1px solid var(--border);
-  border-radius: 10px;
-  margin: 12px 0;
-  background: var(--surface-bg);
+  margin: 10px 0;
   overflow: hidden;
-  min-height: 120px;
-  display: flex;
-  flex-direction: column;
+  background: var(--surface-bg);
 
-  &.severity-critical {
+  /* Hide native disclosure marker */
+  &, & > summary {
+    list-style: none;
+  }
+  &::-webkit-details-marker,
+  & > summary::-webkit-details-marker {
+    display: none;
+  }
+
+  /* Rotate chevron when collapsed */
+  &:not([open]) .command-approval-chevron {
+    transform: rotate(-90deg);
+  }
+}
+
+.command-approval-summary {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px;
+  background: transparent;
+  cursor: pointer;
+  user-select: none;
+  font-size: 12.5px;
+  font-weight: 500;
+  border: none;
+  min-width: 0;
+  overflow: hidden;
+
+  &:hover {
+    background: var(--vscode-list-hoverBackground);
+  }
+}
+
+.command-approval-chevron {
+  font-size: 10px;
+  transition: transform 0.2s;
+  color: var(--muted);
+}
+
+.command-approval-summary-text {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--fg);
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+}
+
+.command-approval-cmd-preview {
+  font-family: var(--vscode-editor-font-family);
+  font-size: 11.5px;
+  font-weight: 400;
+  color: var(--muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.command-approval-body {
+  border: 1px solid var(--surface-border);
+  border-radius: 10px;
+  margin: 0 12px 8px;
+  overflow: hidden;
+
+  .severity-critical > & {
     border-color: var(--error);
   }
 
-  &.severity-high {
+  .severity-high > & {
     border-color: var(--vscode-charts-orange);
   }
 
-  &.severity-medium {
+  .severity-medium > & {
     border-color: var(--vscode-charts-yellow);
   }
 }
 
-.command-approval-header {
+.command-approval-status-icon {
+  width: 14px;
+  height: 14px;
   display: flex;
   align-items: center;
-  gap: 8px;
-  padding: 10px 12px;
-  background: var(--panel-bg);
-  font-size: 12px;
-  font-weight: 600;
-  text-transform: uppercase;
-  letter-spacing: 0.02em;
+  justify-content: center;
+  font-size: 11px;
+  flex-shrink: 0;
+
+  .spinner {
+    width: 12px;
+    height: 12px;
+  }
+
+  &.approved {
+    color: var(--success);
+    font-weight: 600;
+  }
+
+  &.skipped {
+    color: var(--error);
+    font-weight: 600;
+  }
 }
 
 .command-approval-icon {
@@ -58,11 +133,11 @@
   color: var(--muted);
   font-size: 10px;
   text-transform: uppercase;
+  flex-shrink: 0;
 }
 
 .command-approval-command {
   padding: 12px;
-  border-top: 1px solid var(--border);
   border-bottom: 1px solid var(--border);
   background: var(--vscode-input-background);
   min-height: 36px;
@@ -109,10 +184,18 @@
   padding: 6px 12px;
   font-size: 11px;
   color: var(--muted);
+  min-width: 0;
 
   .detail-label {
     font-weight: 600;
     color: var(--fg);
+    flex-shrink: 0;
+  }
+
+  .detail-value {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
   }
 }
 
@@ -198,6 +281,18 @@
 
 .status-approved {
   color: var(--success);
+}
+
+.status-running {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--foreground);
+
+  .spinner {
+    width: 12px;
+    height: 12px;
+  }
 }
 
 .status-skipped {

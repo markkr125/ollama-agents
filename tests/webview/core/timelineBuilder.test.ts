@@ -849,3 +849,83 @@ describe('buildTimelineFromMessages - showError event', () => {
     expect(group.actions[1].text).toBe('Tool failed');
   });
 });
+
+describe('buildTimelineFromMessages - chunked read_file', () => {
+  const makeUiEvent = (id: string, eventType: string, payload: any) => ({
+    id,
+    role: 'tool',
+    toolName: '__ui__',
+    toolOutput: JSON.stringify({ eventType, payload })
+  });
+
+  test('showToolAction preserves startLine on read_file chunk actions', async () => {
+    const builder = await import('../../../src/webview/scripts/core/timelineBuilder');
+    const messages = [
+      { id: 'a1', role: 'assistant', content: '' },
+      makeUiEvent('ui1', 'startProgressGroup', { title: 'Reading main.ts' }),
+      makeUiEvent('ui2', 'showToolAction', {
+        status: 'success', icon: '📄', text: 'Read main.ts',
+        detail: 'lines 1–100', filePath: 'src/main.ts', startLine: 1
+      }),
+      makeUiEvent('ui3', 'showToolAction', {
+        status: 'success', icon: '📄', text: 'Read main.ts',
+        detail: 'lines 101–150', filePath: 'src/main.ts', startLine: 101
+      }),
+      makeUiEvent('ui4', 'finishProgressGroup', {})
+    ];
+
+    const timeline = builder.buildTimelineFromMessages(messages);
+    const thread = timeline[0] as any;
+    const group = thread.blocks[1].tools[0];
+
+    expect(group.actions.length).toBe(2);
+    expect(group.actions[0].startLine).toBe(1);
+    expect(group.actions[0].detail).toBe('lines 1–100');
+    expect(group.actions[0].filePath).toBe('src/main.ts');
+    expect(group.actions[1].startLine).toBe(101);
+    expect(group.actions[1].detail).toBe('lines 101–150');
+  });
+
+  test('read_file actions without checkpointId are not treated as file edits', async () => {
+    const builder = await import('../../../src/webview/scripts/core/timelineBuilder');
+    const messages = [
+      { id: 'a1', role: 'assistant', content: '' },
+      makeUiEvent('ui1', 'startProgressGroup', { title: 'Reading config.ts' }),
+      makeUiEvent('ui2', 'showToolAction', {
+        status: 'success', icon: '📄', text: 'Read config.ts',
+        detail: 'lines 1–50', filePath: 'src/config.ts', startLine: 1
+      }),
+      makeUiEvent('ui3', 'finishProgressGroup', {})
+    ];
+
+    const timeline = builder.buildTimelineFromMessages(messages);
+    const thread = timeline[0] as any;
+    const group = thread.blocks[1].tools[0];
+
+    // Action has filePath but NO checkpointId
+    expect(group.actions[0].filePath).toBe('src/config.ts');
+    expect(group.actions[0].checkpointId).toBeUndefined();
+  });
+
+  test('list_files detail with basePath is preserved in timeline', async () => {
+    const builder = await import('../../../src/webview/scripts/core/timelineBuilder');
+    const detail = '2 files\tsrc/utils\n📄 helpers.ts\t1024\n📄 index.ts\t512';
+    const messages = [
+      { id: 'a1', role: 'assistant', content: '' },
+      makeUiEvent('ui1', 'startProgressGroup', { title: 'Exploring workspace' }),
+      makeUiEvent('ui2', 'showToolAction', {
+        status: 'success', icon: '📋', text: 'Listed src/utils',
+        detail
+      }),
+      makeUiEvent('ui3', 'finishProgressGroup', {})
+    ];
+
+    const timeline = builder.buildTimelineFromMessages(messages);
+    const thread = timeline[0] as any;
+    const action = thread.blocks[1].tools[0].actions[0];
+
+    // Detail should be preserved as-is for the tree listing parser
+    expect(action.detail).toBe(detail);
+    expect(action.detail).toContain('\tsrc/utils\n');
+  });
+});

@@ -32,6 +32,8 @@ export type AssistantThreadThinkingBlock = {
   type: 'thinking';
   content: string;
   collapsed: boolean;
+  startTime?: number;
+  durationSeconds?: number;
 };
 
 export type AssistantThreadToolsBlock = {
@@ -78,6 +80,7 @@ export type ActionItem = {
   detail?: string | null;
   filePath?: string;
   checkpointId?: string;
+  startLine?: number;
 };
 
 export type ProgressItem = {
@@ -97,7 +100,7 @@ export type CommandApprovalItem = {
   cwd?: string;
   severity: 'critical' | 'high' | 'medium';
   reason?: string;
-  status: 'pending' | 'approved' | 'skipped';
+  status: 'pending' | 'running' | 'approved' | 'skipped';
   timestamp: number;
   output?: string;
   exitCode?: number | null;
@@ -190,6 +193,7 @@ export type ShowToolActionMessage = {
   detail?: string | null;
   filePath?: string;
   checkpointId?: string;
+  startLine?: number;
 };
 
 export type ToolApprovalResultMessage = {

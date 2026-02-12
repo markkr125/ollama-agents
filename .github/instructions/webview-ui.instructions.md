@@ -101,6 +101,38 @@ To prevent incomplete markdown (e.g., `**What` rendering as literal text instead
 - Never render tool blocks as standalone timeline items outside the assistant thread.
 - Both live handlers and `timelineBuilder` create an initial empty text block for consistency.
 
+## Progress Group Rendering Modes
+
+`ProgressGroup.vue` has two rendering modes controlled by the `isCompletedFileGroup` computed:
+
+### Flat Mode (File Edits)
+When the group is `done` AND every action has both `filePath` and `checkpointId`, the group renders as a flat list of file edits with verb, filename, and `+N -N` diff stats. Clicking a filename opens the diff view.
+
+### Normal Mode (Default)
+For all other groups (reads, searches, commands, mixed operations), the group renders with a collapsible header, status icons, and individual action items.
+
+### ⚠️ `isCompletedFileGroup` Guard (Critical Regression Point)
+```typescript
+const isCompletedFileGroup = computed(() =>
+  props.item.status === 'done' &&
+  props.item.actions.length > 0 &&
+  props.item.actions.every(a => a.filePath && a.checkpointId)
+);
+```
+The `checkpointId` requirement is **critical**. Read actions have `filePath` (for click-to-open) but NOT `checkpointId`. Without this guard, chunked read actions would incorrectly render in flat mode.
+
+### Action Click Handling
+- **With `checkpointId`**: Opens file diff view via `openFileChangeDiff(checkpointId, filePath)`
+- **Without `checkpointId`**: Opens the source file via `openWorkspaceFile(filePath, startLine)` — used for `read_file` chunks
+- **`startLine`**: Optional line number for positioning the cursor (set by chunked read)
+
+### Tree Listing (list_files / search_workspace)
+Actions with multi-line `detail` (containing `\n`) render as a tree with connectors:
+- `├` for intermediary entries, `└` for the last entry
+- Folders are bold and clickable → `revealInExplorer(fullPath)`
+- Files are clickable → `openWorkspaceFile(fullPath)`
+- `detail` format: `"summary\tbasePath\n📁 name\n📄 name\tsize"` — basePath is tab-separated on the first line for path construction
+
 ## UI Event Persistence
 
 UI events (progress groups, tool actions, approvals) are persisted as `__ui__` tool messages:

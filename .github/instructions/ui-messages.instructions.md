@@ -14,7 +14,7 @@ description: "Backend-to-frontend and frontend-to-backend message protocol for t
 | `showThinking` | `{message, sessionId}` | Show loading state for a session |
 | `hideThinking` | `{sessionId}` | Hide loading state for a session |
 | `startProgressGroup` | `{title, sessionId}` | Start collapsible group |
-| `showToolAction` | `{status, icon, text, detail, sessionId}` | Add/update action in group |
+| `showToolAction` | `{status, icon, text, detail, filePath?, checkpointId?, startLine?, sessionId}` | Add/update action in group |
 | `finishProgressGroup` | `{sessionId}` | Mark group complete |
 | `requestToolApproval` | `{id, command, cwd, severity, reason, sessionId}` | Show terminal command approval card |
 | `toolApprovalResult` | `{approvalId, status, output, command?, autoApproved?, sessionId}` | Update terminal command approval status |
@@ -93,6 +93,8 @@ description: "Backend-to-frontend and frontend-to-backend message protocol for t
 | `openFileChangeReview` | `{checkpointId, filePath}` | Open inline review (CodeLens) for a file |
 | `navigateReviewPrev` | `{checkpointIds}` | Navigate to previous change (hunk-level, cross-file) |
 | `navigateReviewNext` | `{checkpointIds}` | Navigate to next change (hunk-level, cross-file) |
+| `openWorkspaceFile` | `{path, line?}` | Open a workspace file in the editor, optionally at a specific line |
+| `revealInExplorer` | `{path}` | Reveal a folder/file in the VS Code file explorer sidebar |
 
 ## Session-Concurrent Streaming
 

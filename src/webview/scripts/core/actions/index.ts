@@ -22,7 +22,9 @@ export {
     navigatePrevChange,
     openFileChangeDiff,
     openFileChangeReview,
+    openWorkspaceFile,
     requestFilesDiffStats,
+    revealInExplorer,
     undoAllChanges,
     undoFile
 } from './filesChanged';

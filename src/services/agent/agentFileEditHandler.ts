@@ -68,7 +68,8 @@ export class AgentFileEditHandler {
     const decision = evaluateFileSensitivity(normalizedRelPath, patterns);
 
     const approvalId = `file_edit_${Date.now()}_${Math.random().toString(36).slice(2)}`;
-    const diffHtml = decision.requiresApproval
+    // Skip diff for new files — showing all lines as additions is not useful
+    const diffHtml = decision.requiresApproval && originalContent
       ? renderDiffHtml(normalizedRelPath, originalContent, newContent)
       : '';
 

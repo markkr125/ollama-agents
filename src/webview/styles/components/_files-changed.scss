@@ -172,18 +172,29 @@
   &.ext-default   { background: var(--surface-border); color: var(--muted); }
 }
 
+.file-identity {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+}
+
 .file-name {
   white-space: nowrap;
   color: var(--fg);
+  flex-shrink: 0;
 }
 
 .file-dir {
-  flex: 1;
   color: var(--muted);
   font-size: 11px;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+  direction: rtl;
+  text-align: left;
 }
 
 .file-stats {

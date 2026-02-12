@@ -113,10 +113,25 @@ export class AgentTerminalHandler {
       if (approval.command && approval.command.trim()) {
         args.command = approval.command.trim();
       }
+
+      // Emit 'running' state so the webview keeps the spinner while the command executes
+      await this.persistUiEvent(sessionId, 'toolApprovalResult', {
+        approvalId,
+        status: 'running',
+        command: String(args?.command || '').trim(),
+        cwd
+      });
+      this.emitter.postMessage({
+        type: 'toolApprovalResult',
+        sessionId,
+        approvalId,
+        status: 'running',
+        command: String(args?.command || '').trim()
+      });
     } else {
       await this.persistUiEvent(sessionId, 'toolApprovalResult', {
         approvalId,
-        status: 'approved',
+        status: 'running',
         output: 'Auto-approved for this session.',
         autoApproved: true,
         command,
@@ -128,7 +143,7 @@ export class AgentTerminalHandler {
         type: 'toolApprovalResult',
         sessionId,
         approvalId,
-        status: 'approved',
+        status: 'running',
         output: 'Auto-approved for this session.',
         autoApproved: true,
         command,
