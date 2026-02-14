@@ -17,6 +17,10 @@ export interface StreamResult {
   nativeToolCalls: OllamaToolCall[];
   /** Whether any text chunk was actually sent to the UI */
   firstChunkReceived: boolean;
+  /** Timestamp (ms) of the last thinking token received — used for accurate duration */
+  lastThinkingTimestamp: number;
+  /** Whether collapseThinking was already sent from inside the stream (on tool_call detection) */
+  thinkingCollapsed: boolean;
 }
 
 // ---------------------------------------------------------------------------
@@ -44,10 +48,13 @@ export class AgentStreamProcessor {
     model: string,
     iteration: number,
     useNativeTools: boolean,
-    token: vscode.CancellationToken
+    token: vscode.CancellationToken,
+    thinkingStartTime?: number
   ): Promise<StreamResult> {
     let response = '';
     let thinkingContent = '';
+    let lastThinkingTimestamp = 0;
+    let thinkingCollapsed = false;
     const nativeToolCalls: OllamaToolCall[] = [];
 
     const stream = this.client.chat(chatRequest);
@@ -68,6 +75,7 @@ export class AgentStreamProcessor {
       // Accumulate thinking tokens
       if (chunk.message?.thinking) {
         thinkingContent += chunk.message.thinking;
+        lastThinkingTimestamp = Date.now();
         this.emitter.postMessage({
           type: 'streamThinking',
           content: thinkingContent.replace(/\[TASK_COMPLETE\]/gi, ''),
@@ -78,13 +86,33 @@ export class AgentStreamProcessor {
       // Accumulate native tool calls
       if (chunk.message?.tool_calls && chunk.message.tool_calls.length > 0) {
         nativeToolCalls.push(...chunk.message.tool_calls);
-        // Show a transient indicator so the user knows tools are being prepared
-        // (native tool call tokens generate silently — no content tokens fire)
+        // Tool calls arrived — thinking is definitely over.
+        // Collapse thinking immediately with the real duration so the UI
+        // stops showing "Thinking..." the instant we know tools are coming.
         if (!textFrozen) {
           textFrozen = true;
+          if (thinkingContent && thinkingStartTime && lastThinkingTimestamp > 0) {
+            const durationSeconds = Math.round((lastThinkingTimestamp - thinkingStartTime) / 1000);
+            this.emitter.postMessage({ type: 'collapseThinking', sessionId, durationSeconds });
+            thinkingCollapsed = true;
+          }
+          // Show what files are about to be written (extract from tool_call args)
+          const writeFiles = chunk.message.tool_calls
+            .filter((tc: any) => {
+              const name = tc?.function?.name || '';
+              return name === 'write_file' || name === 'create_file';
+            })
+            .map((tc: any) => {
+              const p = tc?.function?.arguments?.path || tc?.function?.arguments?.file || '';
+              return p ? p.split('/').pop() : '';
+            })
+            .filter(Boolean);
+          const message = writeFiles.length > 0
+            ? `Writing ${writeFiles.join(', ')}...`
+            : 'Preparing tools...';
           this.emitter.postMessage({
             type: 'showThinking',
-            message: 'Preparing tools...',
+            message,
             sessionId
           });
         }
@@ -154,6 +182,6 @@ export class AgentStreamProcessor {
     // (It stays visible during streaming as a "still generating" indicator.)
     this.emitter.postMessage({ type: 'hideThinking', sessionId });
 
-    return { response, thinkingContent, nativeToolCalls, firstChunkReceived };
+    return { response, thinkingContent, nativeToolCalls, firstChunkReceived, lastThinkingTimestamp, thinkingCollapsed };
   }
 }

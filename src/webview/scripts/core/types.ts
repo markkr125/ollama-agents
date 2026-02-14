@@ -267,6 +267,7 @@ export type StreamThinkingMessage = {
 export type CollapseThinkingMessage = {
   type: 'collapseThinking';
   sessionId?: string;
+  durationSeconds?: number;
 };
 
 export type ShowWarningBannerMessage = {

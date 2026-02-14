@@ -257,7 +257,7 @@ export class AgentChatExecutor {
         let streamResult;
         try {
           streamResult = await this.streamProcessor.streamIteration(
-            chatRequest, sessionId, model, iteration, useNativeTools, token
+            chatRequest, sessionId, model, iteration, useNativeTools, token, thinkingStartTime
           );
         } catch (thinkErr: any) {
           // Ollama returns 400 when `think: true` is sent to models that don't
@@ -267,7 +267,7 @@ export class AgentChatExecutor {
             delete chatRequest.think;
             this.outputChannel?.appendLine(`[Iteration ${iteration}] Model does not support thinking — retrying without think:true`);
             streamResult = await this.streamProcessor.streamIteration(
-              chatRequest, sessionId, model, iteration, useNativeTools, token
+              chatRequest, sessionId, model, iteration, useNativeTools, token, thinkingStartTime
             );
           } else {
             throw thinkErr;
@@ -299,9 +299,17 @@ export class AgentChatExecutor {
         // --- 3. Persist thinking block (BEFORE text and tools — order matters for history) ---
         const displayThinking = thinkingContent.replace(/\[TASK_COMPLETE\]/gi, '').trim();
         if (displayThinking) {
-          const durationSeconds = Math.round((Date.now() - thinkingStartTime) / 1000);
+          // Use the timestamp of the last thinking token for accurate duration.
+          // Without this, the duration includes Ollama's tool_call buffering
+          // time (can be 60-80s for large files) which inflates the counter.
+          const thinkingEndTime = streamResult.lastThinkingTimestamp || Date.now();
+          const durationSeconds = Math.round((thinkingEndTime - thinkingStartTime) / 1000);
           await this.persistUiEvent(sessionId, 'thinkingBlock', { content: displayThinking, durationSeconds });
-          this.emitter.postMessage({ type: 'collapseThinking', sessionId });
+          // Only send collapseThinking if the stream processor didn't already
+          // (it sends one early when native tool_calls are detected)
+          if (!streamResult.thinkingCollapsed) {
+            this.emitter.postMessage({ type: 'collapseThinking', sessionId, durationSeconds });
+          }
         }
 
         // --- 4. Process per-iteration delta text ---

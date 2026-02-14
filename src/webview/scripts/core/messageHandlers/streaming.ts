@@ -1,13 +1,13 @@
 import { scrollToBottom, startAssistantMessage } from '../actions/index';
 import { activeThinkingGroup, currentAssistantThreadId, currentSessionId, currentStreamIndex } from '../state';
 import type {
-  AssistantThreadTextBlock,
-  AssistantThreadThinkingBlock,
-  AssistantThreadThinkingGroupBlock,
-  CollapseThinkingMessage,
-  StreamChunkMessage,
-  StreamThinkingMessage,
-  ThinkingGroupSection
+    AssistantThreadTextBlock,
+    AssistantThreadThinkingBlock,
+    AssistantThreadThinkingGroupBlock,
+    CollapseThinkingMessage,
+    StreamChunkMessage,
+    StreamThinkingMessage,
+    ThinkingGroupSection
 } from '../types';
 import { ensureAssistantThread } from './threadUtils';
 
@@ -227,7 +227,11 @@ export const handleCollapseThinking = (msg: CollapseThinkingMessage) => {
     for (let i = group.sections.length - 1; i >= 0; i--) {
       const section = group.sections[i];
       if (section.type === 'thinkingContent' && !section.durationSeconds) {
-        if (section.startTime) {
+        // Prefer the backend-provided duration (excludes tool_call buffering time).
+        // Fall back to client-side wall-clock if not provided.
+        if (msg.durationSeconds) {
+          section.durationSeconds = msg.durationSeconds;
+        } else if (section.startTime) {
           section.durationSeconds = Math.round((Date.now() - section.startTime) / 1000);
         }
         break;
@@ -244,7 +248,9 @@ export const handleCollapseThinking = (msg: CollapseThinkingMessage) => {
   for (const block of thread.blocks) {
     if (block.type === 'thinking' && !(block as AssistantThreadThinkingBlock).collapsed) {
       const tb = block as AssistantThreadThinkingBlock;
-      if (tb.startTime) {
+      if (msg.durationSeconds) {
+        tb.durationSeconds = msg.durationSeconds;
+      } else if (tb.startTime) {
         tb.durationSeconds = Math.round((Date.now() - tb.startTime) / 1000);
       }
       tb.collapsed = true;
