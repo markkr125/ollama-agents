@@ -453,16 +453,17 @@ describe('CRITICAL: Live handlers vs timelineBuilder block-structure parity', ()
 
     expect(liveBlocks).toEqual(restoredBlocks);
 
-    // [thinkingGroup{thinking₁, tools₁, thinking₂, tools₂}] [text(summary)]
-    expect(liveBlocks.length).toBe(2);
+    // Write group is pulled out of the thinking group:
+    // [thinkingGroup{thinking₁, tools₁, thinking₂}] [tools₂(write)] [text(summary)]
+    expect(liveBlocks.length).toBe(3);
     expect(liveBlocks[0].type).toBe('thinkingGroup');
     expect(liveBlocks[0].collapsed).toBe(true);
-    expect(liveBlocks[0].sections.length).toBe(4);
+    expect(liveBlocks[0].sections.length).toBe(3);
     expect(liveBlocks[0].sections[0]).toEqual({ type: 'thinkingContent', content: 'Planning...' });
     expect(liveBlocks[0].sections[1].type).toBe('tools');
     expect(liveBlocks[0].sections[2]).toEqual({ type: 'thinkingContent', content: 'Writing...' });
-    expect(liveBlocks[0].sections[3].type).toBe('tools');
-    expect(liveBlocks[1]).toEqual({ type: 'text', content: 'Task completed successfully.' });
+    expect(liveBlocks[1].type).toBe('tools');
+    expect(liveBlocks[2]).toEqual({ type: 'text', content: 'Task completed successfully.' });
   });
 
 

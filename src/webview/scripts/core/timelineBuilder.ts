@@ -1,14 +1,14 @@
 import { recalcBlockTotals } from './messageHandlers/filesChanged';
 import { filesChangedBlocks } from './state';
 import type {
-    AssistantThreadFilesChangedBlock,
-    AssistantThreadItem,
-    AssistantThreadThinkingGroupBlock,
-    AssistantThreadToolsBlock,
-    CommandApprovalItem,
-    FileEditApprovalItem,
-    ProgressItem,
-    TimelineItem
+  AssistantThreadFilesChangedBlock,
+  AssistantThreadItem,
+  AssistantThreadThinkingGroupBlock,
+  AssistantThreadToolsBlock,
+  CommandApprovalItem,
+  FileEditApprovalItem,
+  ProgressItem,
+  TimelineItem
 } from './types';
 
 // ---------------------------------------------------------------------------
@@ -219,6 +219,12 @@ class TimelineBuilder {
   }
 
   private handleStartProgressGroup(payload: any, messageId: string): void {
+    // Write actions go at thread level — not buried inside the thinking group
+    const title = payload?.title || '';
+    if (/\b(writ|modif|creat)/i.test(title) && this.currentThinkingGroup) {
+      this.closeThinkingGroup();
+    }
+
     const toolsBlock = this.resolveToolsBlock();
     this.currentGroup = {
       id: payload?.groupId || `progress_${messageId}`,

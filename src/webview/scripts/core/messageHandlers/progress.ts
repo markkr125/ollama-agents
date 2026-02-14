@@ -1,7 +1,12 @@
 import { scrollToBottom } from '../actions/index';
 import { activeThinkingGroup, currentProgressIndex, currentSessionId } from '../state';
 import type { ActionItem, AssistantThreadToolsBlock, ProgressItem, ShowToolActionMessage, StartProgressGroupMessage } from '../types';
+import { closeActiveThinkingGroup } from './streaming';
 import { ensureAssistantThread, getOrCreateToolsBlock } from './threadUtils';
+
+/** Detect progress group titles that indicate file-write operations. */
+const isWriteGroupTitle = (title: string): boolean =>
+  /\b(writ|modif|creat)/i.test(title);
 
 /**
  * Get or create a tools block inside the active thinking group's sections.
@@ -35,6 +40,12 @@ export const handleStartProgressGroup = (msg: StartProgressGroupMessage) => {
     return;
   }
   ensureAssistantThread();
+
+  // Write actions go at thread level — not buried inside the thinking group
+  if (isWriteGroupTitle(msg.title || '') && activeThinkingGroup.value) {
+    closeActiveThinkingGroup();
+  }
+
   const toolsBlock = resolveToolsBlock();
   const group: ProgressItem = {
     id: `progress_${Date.now()}`,
