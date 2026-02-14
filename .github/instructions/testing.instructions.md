@@ -48,6 +48,39 @@ After **any** code or test change, run the appropriate test suite(s) before cons
 
 **Common mistake**: Running `npx tsc -p tsconfig.test.json --noEmit` and assuming tests pass. Type-checking only validates types — it does NOT execute the tests. A test can compile cleanly and still fail at runtime.
 
+## ⚠️ Both Harnesses Are Mandatory (Non-Negotiable)
+
+When a feature or bug fix spans both backend (`src/services/`, `src/agent/`, `src/views/`, `src/utils/`) and frontend (`src/webview/`), **BOTH** test harnesses must receive new tests. This is the most commonly neglected rule.
+
+### The Rule
+
+> **If your change touches backend logic AND has UI implications, you MUST write tests in BOTH `tests/extension/` (Mocha) AND `tests/webview/` (Vitest).** Skipping either harness is not acceptable.
+
+### Why This Matters
+
+- **Vitest-only coverage** catches webview rendering/state bugs but misses backend logic errors (wrong data emitted, wrong persistence, wrong tool execution).
+- **Mocha-only coverage** catches service/utility bugs but misses how the UI consumes the data (duplicate entries, wrong state transitions, parity mismatches).
+- **Type-checking is not testing.** `tsc --noEmit` passing does NOT mean behavior is correct.
+
+### Concrete Examples
+
+| Change | Extension host test (Mocha) | Webview test (Vitest) |
+|--------|-----------------------------|-----------------------|
+| New tool verb ("Created"/"Edited") | `toolUIFormatter.test.ts`: verify `getToolSuccessInfo` returns correct verb for `_isNew` flag | `ProgressGroup.test.ts`: verify component renders correct text; `parity.test.ts`: verify live === restored |
+| New agent tool | `toolRegistry.test.ts`: tool registered, executes correctly | `parity.test.ts`: tool action events produce correct timeline |
+| New message type | Handler test in `tests/extension/suite/`: verify correct `postMessage` + `persistUiEvent` | `messageHandlers.test.ts` or `parity.test.ts`: verify handler produces correct blocks |
+| File edit approval flow change | Service test: verify approval emission sequence | `parity.test.ts`: verify live/restored parity for the new flow |
+| New setting | `settingsHandler.test.ts`: verify setting read/write | `SettingsPage.test.ts`: verify UI binds to setting correctly |
+
+### Enforcement Checklist
+
+Before marking a task as done, verify:
+
+- [ ] Extension host tests cover the backend logic (`npm test` passes)
+- [ ] Webview tests cover the UI/state behavior (`npm run test:webview` passes)
+- [ ] Both test suites are actually **executed** (not just compiled)
+- [ ] `npm run test:all` passes end-to-end
+
 ## What to test with Vitest vs `@vscode/test-electron`
 
 Use the two harnesses for different risk profiles:
@@ -131,8 +164,9 @@ The following test suites exist in `tests/webview/`:
 - Updates when content prop changes
 - Caching behavior prevents unnecessary re-renders
 
-**`ProgressGroup.test.ts`** (16 tests) - Tests Vue component:
+**`ProgressGroup.test.ts`** (24 tests) - Tests Vue component:
 - **`isCompletedFileGroup` guard** (REGRESSION): Flat view only for file edits with `checkpointId`; read actions (no `checkpointId`) render as normal progress groups; running groups never render flat; mixed actions require ALL to have `checkpointId`
+- **Flat write group rendering** (REGRESSION): Write/modify groups render flat in running state; spinner shown for running actions, checkmark for completed; no duplicate action entries per file; chevron hidden when no filename; non-write groups (e.g. "Reading files") never render flat when running
 - **File click handling**: Click with `checkpointId` opens diff view; click without (read action) opens file at `startLine`; click without `startLine` opens at undefined
 - **Tree listing**: Renders `├`/`└` connectors, full path tooltip, folder click → `revealInExplorer`, file click → `openWorkspaceFile`, summary strips basePath from display
 - **Action rendering**: Title display, detail text, `has-listing` class for multi-line detail
@@ -141,9 +175,12 @@ The following test suites exist in `tests/webview/`:
 - **Composable (`useSettingsPage`)**: bearer input, temperature input, tool timeout input, recreate messages table delegation, dismiss welcome, session patterns sync (immediate, reactive, defaults)
 - **Component**: welcome banner visibility + dismiss, navigation sections rendering + click + active class, page visibility based on `currentPage`, recreate messages button, test connection button, model options in select dropdowns
 
-**`parity.test.ts`** (11 tests) - Tests live/history structural parity:
+**`parity.test.ts`** (19 tests) - Tests live/history structural parity:
 - Ensures that live message handlers and `timelineBuilder` produce identical timeline structures for the same event sequences
 - **Chunked read_file parity**: Verifies that chunked `read_file` actions with `startLine` and `filePath` produce identical structures in live handlers vs `timelineBuilder`, and that `checkpointId` is absent (not misidentified as file edits)
+- **REGRESSION: write_file single action**: Verifies exactly one action per file write (running → success merge), no duplicates, live === restored
+- **REGRESSION: edit verbs**: Verifies "Editing" → "Edited" verbs for existing files (not "Write"/"Added"), live === restored
+- **REGRESSION: multi-file write batch**: Verifies N files produce exactly N actions (not 2N), live === restored
 
 **`core/filesChanged.test.ts`** (30 tests) - Tests files-changed widget state management:
 - **ONE-widget merging**: single block creation, merging across checkpoints, dedup files, dedup checkpointIds
@@ -155,6 +192,7 @@ The following test suites exist in `tests/webview/`:
 - **REGRESSION: session restore**: requests diff stats for each checkpointId on restore, `statsLoading=true` on pending blocks
 - **REGRESSION: safety net stats**: re-requests stats for old checkpoint files without stats, skips files that already have stats
 - **REGRESSION: nav uses change-level counter**: `reviewChangePosition` updates `currentChange`/`totalChanges`, nav bar hidden until set, hunk-level not file-level count, nav actions post `checkpointIds` array
+- **REGRESSION: re-edit stats refresh**: `handleFilesChanged` re-requests stats when all incoming files already exist (agent re-edits same file); verifies `requestFilesDiffStats` posted; stale totals trigger refresh; handles overlapping re-edit + new file combo; no re-request when incoming set is empty
 
 ## Existing test coverage (Extension Host)
 
@@ -182,10 +220,11 @@ The following test suites exist in `tests/extension/suite/`:
 - `countFileLines`: small file, single-line no trailing newline, empty file (0 lines), 200-line file, nonexistent file rejects with ENOENT
 - `readFileChunk`: first chunk of multi-line file, second chunk, full file range, single-line range, early stop (does not read beyond `endLine`), nonexistent file rejects, exactly `CHUNK_SIZE` lines, `CHUNK_SIZE + 1` lines boundary
 
-**`utils/toolUIFormatter.test.ts`** (25 tests) - Tests tool UI text generation:
+**`utils/toolUIFormatter.test.ts`** (29 tests) - Tests tool UI text generation:
 - `getProgressGroupTitle`: single read shows filename, multiple reads show comma-separated, >5 reads → "Reading multiple files", deduplication, `file` arg variant, read+write → "Modifying files", search/write/list/command titles, empty args fallback
 - `getToolActionInfo`: read/write/list/search/unknown tool text, startLine line range in detail, empty detail without startLine
 - `getToolSuccessInfo`: read returns filePath + line count, read with startLine returns range + startLine, write returns filePath, list_files includes basePath tab-separated, search reports match count, command reports exit code
+- **REGRESSION: `_isNew` flag**: `write_file` with `_isNew=true` → "Created", `_isNew=false` → "Edited", omitted → "Edited" (default), `create_file` → "Created"
 
 **`services/sessionIndexService.test.ts`** (8 tests) - Tests SQLite session/message CRUD:
 - Session creation/update/listing with pagination
@@ -208,9 +247,20 @@ The following test suites exist in `tests/extension/suite/`:
 - `getDatabaseService` is exported as a function (guards against stale webpack builds)
 - `DatabaseService` class is exported
 
+**`services/agentFileEditHandler.test.ts`** (10 tests) - Integration tests for file edit handler:
+- **REGRESSION: Single running action (no duplicates)**: New file emits exactly ONE `showToolAction(running)` with "Creating" verb; existing file uses "Editing" verb; sensitive file with auto-approve still only ONE running action; sensitive file with manual approve produces ONE running + ONE pending, no extras
+- **`_isNew` flag**: Set to `true` for non-existent files, `false` for existing files
+- **postMessage/persistUiEvent parity**: Every posted event has a matching persisted event with correct sessionId; sensitive file approval flow persists all event types
+- **Deferred content generation**: Uses `description` to generate content via LLM when `content` is missing; uses provided `content` directly when present
+
 **`utils/commandSafety.test.ts`** - Tests terminal command safety analysis:
 - Dangerous command detection (rm -rf, sudo, etc.)
 - Platform-specific filtering
+
+**`services/fileChangeMessageHandler.test.ts`** - Tests file change handler:
+- **REGRESSION: requestFilesDiffStats recomputes from disk**: Stats are always fresh (recomputed from `original_content` vs current disk), not cached; verifies per-file + checkpoint totals update
+- **REGRESSION: re-edit stats freshness**: When agent re-edits a file, `requestFilesDiffStats` returns updated stats matching the new content
+- **REGRESSION: review position after keep/undo**: `handleKeepFile` and `handleUndoFile` post `reviewChangePosition` after removing file from review; counter decrements; zero hunks → no position sent
 
 ## Webview test rules (important)
 

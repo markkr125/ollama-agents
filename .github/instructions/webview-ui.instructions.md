@@ -361,11 +361,33 @@ The widget is pinned to the bottom of the chat (below the input area), not embed
 
 | Action | Handler | Effect |
 |--------|---------|--------|
-| Agent writes files | `handleFilesChanged()` | Creates/merges block in `filesChangedBlocks` by `checkpointId` |
+| Agent writes files | `handleFilesChanged()` | Creates/merges block in `filesChangedBlocks` by `checkpointId`; re-requests stats on re-edits |
 | Stats arrive | `handleFilesDiffStats()` | Populates `additions`/`deletions` on matching files |
-| Single keep/undo | `handleFileChangeResult()` | Splices file out of block; removes block if empty |
-| Keep All / Undo All | `handleKeepUndoResult()` | Removes entire block |
+| Single keep/undo (click) | `FilesChanged.vue` click handler | **Optimistic UI**: `removeFileOptimistic()` removes file immediately, recalculates totals, cleans up empty checkpointIds/block. THEN sends `keepFile`/`undoFile` to backend. |
+| Single keep/undo (response) | `handleFileChangeResult()` | **Safety net only**: removes file if still present (usually already gone from optimistic removal) |
+| Keep All / Undo All (click) | `FilesChanged.vue` click handler | **Optimistic UI**: `filesChangedBlocks.value = []` immediately, then sends backend message |
+| Keep All / Undo All (response) | `handleKeepUndoResult()` | Removes block (usually already cleared by optimistic UI) |
+| Re-edit detected | `handleFilesChanged()` | When all incoming files already exist (`added=false`), still sends `requestFilesDiffStats` to refresh stale stats |
 | Session cleared | `handleClearMessages()` | Sets `filesChangedBlocks.value = []` |
+
+### ⚠️ Optimistic UI Pattern (Keep/Undo)
+
+The filesChanged widget uses **optimistic UI** for keep/undo operations. The file is removed from the widget **immediately in the click handler** (inside the Vue component), before the backend round-trip completes. This guarantees Vue reactivity, since the mutation happens in a synchronous component method.
+
+**Why not rely on the message handler?** Three approaches were attempted for handling removal in the `handleFileChangeResult` response handler:
+1. `filter()` + reassignment — failed in practice
+2. Fully immutable object replacement — failed in practice
+3. `triggerRef()` — failed in practice
+
+All three suffered from Vue reactivity quirks with deeply nested reactive arrays inside `ref()`. The optimistic approach bypasses the problem entirely.
+
+**`FilesChanged.vue` → `removeFileOptimistic()`** handles:
+- Removing the file from `block.files` via `splice()`
+- Recalculating `totalAdditions` / `totalDeletions`
+- Cleaning up `checkpointIds` when no files reference a checkpoint
+- Clearing `filesChangedBlocks.value = []` when the block becomes empty
+
+**`handleFileChangeResult`** is retained as a **safety net** for edge cases (e.g., session restore where the optimistic handler wasn't active).
 
 ### History Restoration
 

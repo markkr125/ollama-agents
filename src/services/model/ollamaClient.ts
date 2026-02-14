@@ -1,13 +1,13 @@
 import {
-    ChatRequest,
-    GenerateRequest,
-    Model,
-    ModelsResponse,
-    OllamaAuthError,
-    OllamaConnectionError,
-    OllamaError,
-    ShowModelResponse,
-    StreamChunk
+  ChatRequest,
+  GenerateRequest,
+  Model,
+  ModelsResponse,
+  OllamaAuthError,
+  OllamaConnectionError,
+  OllamaError,
+  ShowModelResponse,
+  StreamChunk
 } from '../../types/ollama';
 import { parseNDJSON } from '../../utils/streamParser';
 
@@ -76,6 +76,11 @@ export class OllamaClient {
         throw error;
       }
 
+      // Never retry an intentional abort (user clicked Stop)
+      if (error.name === 'AbortError') {
+        throw error;
+      }
+
       if (attempt < this.retryAttempts - 1) {
         const delay = this.retryDelays[attempt];
         console.log(`Retry attempt ${attempt + 1}/${this.retryAttempts} after ${delay}ms`);
@@ -94,14 +99,15 @@ export class OllamaClient {
   /**
    * Stream chat completions
    */
-  async *chat(request: ChatRequest): AsyncGenerator<StreamChunk> {
+  async *chat(request: ChatRequest, signal?: AbortSignal): AsyncGenerator<StreamChunk> {
     const url = `${this.baseUrl}/api/chat`;
     const body = { ...request, stream: true };
 
     const response = await this.fetchWithRetry(url, {
       method: 'POST',
       headers: this.getHeaders(),
-      body: JSON.stringify(body)
+      body: JSON.stringify(body),
+      signal
     });
 
     if (!response.ok) {

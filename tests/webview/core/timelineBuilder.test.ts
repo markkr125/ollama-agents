@@ -940,3 +940,136 @@ describe('buildTimelineFromMessages - chunked read_file', () => {
     expect(action.detail).toContain('\tsrc/utils\n');
   });
 });
+
+// ---------------------------------------------------------------------------
+// filesChanged restore — ensures the widget appears when loading sessions
+// ---------------------------------------------------------------------------
+
+describe('buildTimelineFromMessages - filesChanged restore', () => {
+  const makeUiEvent = (id: string, eventType: string, payload: any) => ({
+    id,
+    role: 'tool',
+    toolName: '__ui__',
+    toolOutput: JSON.stringify({ eventType, payload })
+  });
+
+  test('filesChanged event populates filesChangedBlocks', async () => {
+    const builder = await import('../../../src/webview/scripts/core/timelineBuilder');
+    const state = await import('../../../src/webview/scripts/core/state');
+
+    const messages = [
+      { id: 'u1', role: 'user', content: 'edit file' },
+      { id: 'a1', role: 'assistant', content: 'Done' },
+      makeUiEvent('fc1', 'filesChanged', {
+        checkpointId: 'ckpt_1',
+        files: [{ path: 'src/foo.ts', action: 'modified' }],
+        status: 'pending'
+      })
+    ];
+
+    builder.buildTimelineFromMessages(messages);
+
+    expect(state.filesChangedBlocks.value.length).toBe(1);
+    const block = state.filesChangedBlocks.value[0];
+    expect(block.checkpointIds).toEqual(['ckpt_1']);
+    expect(block.files.length).toBe(1);
+    expect(block.files[0].path).toBe('src/foo.ts');
+    expect(block.files[0].status).toBe('pending');
+    expect(block.statsLoading).toBe(true);
+  });
+
+  test('multiple filesChanged events merge into one block', async () => {
+    const builder = await import('../../../src/webview/scripts/core/timelineBuilder');
+    const state = await import('../../../src/webview/scripts/core/state');
+
+    const messages = [
+      { id: 'u1', role: 'user', content: 'edit files' },
+      { id: 'a1', role: 'assistant', content: 'Done' },
+      makeUiEvent('fc1', 'filesChanged', {
+        checkpointId: 'ckpt_1',
+        files: [{ path: 'src/a.ts', action: 'modified' }],
+        status: 'pending'
+      }),
+      makeUiEvent('fc2', 'filesChanged', {
+        checkpointId: 'ckpt_2',
+        files: [{ path: 'src/b.ts', action: 'created' }],
+        status: 'pending'
+      })
+    ];
+
+    builder.buildTimelineFromMessages(messages);
+
+    expect(state.filesChangedBlocks.value.length).toBe(1);
+    const block = state.filesChangedBlocks.value[0];
+    expect(block.checkpointIds).toEqual(['ckpt_1', 'ckpt_2']);
+    expect(block.files.length).toBe(2);
+  });
+
+  test('keepUndoResult removes files and block when all resolved', async () => {
+    const builder = await import('../../../src/webview/scripts/core/timelineBuilder');
+    const state = await import('../../../src/webview/scripts/core/state');
+
+    const messages = [
+      { id: 'u1', role: 'user', content: 'edit file' },
+      makeUiEvent('fc1', 'filesChanged', {
+        checkpointId: 'ckpt_1',
+        files: [{ path: 'src/foo.ts', action: 'modified' }],
+        status: 'pending'
+      }),
+      makeUiEvent('kur1', 'keepUndoResult', {
+        checkpointId: 'ckpt_1',
+        action: 'kept',
+        success: true
+      })
+    ];
+
+    builder.buildTimelineFromMessages(messages);
+
+    // Block should be removed after keep all
+    expect(state.filesChangedBlocks.value.length).toBe(0);
+  });
+
+  test('fileChangeResult removes individual file from block', async () => {
+    const builder = await import('../../../src/webview/scripts/core/timelineBuilder');
+    const state = await import('../../../src/webview/scripts/core/state');
+
+    const messages = [
+      { id: 'u1', role: 'user', content: 'edit files' },
+      makeUiEvent('fc1', 'filesChanged', {
+        checkpointId: 'ckpt_1',
+        files: [
+          { path: 'src/a.ts', action: 'modified' },
+          { path: 'src/b.ts', action: 'modified' }
+        ],
+        status: 'pending'
+      }),
+      makeUiEvent('fcr1', 'fileChangeResult', {
+        checkpointId: 'ckpt_1',
+        filePath: 'src/a.ts',
+        action: 'kept',
+        success: true
+      })
+    ];
+
+    builder.buildTimelineFromMessages(messages);
+
+    expect(state.filesChangedBlocks.value.length).toBe(1);
+    const block = state.filesChangedBlocks.value[0];
+    expect(block.files.length).toBe(1);
+    expect(block.files[0].path).toBe('src/b.ts');
+  });
+
+  test('no filesChanged events leaves filesChangedBlocks empty', async () => {
+    const builder = await import('../../../src/webview/scripts/core/timelineBuilder');
+    const state = await import('../../../src/webview/scripts/core/state');
+
+    const messages = [
+      { id: 'u1', role: 'user', content: 'hello' },
+      { id: 'a1', role: 'assistant', content: 'Hi' }
+    ];
+
+    builder.buildTimelineFromMessages(messages);
+
+    expect(state.filesChangedBlocks.value.length).toBe(0);
+  });
+});

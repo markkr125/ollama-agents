@@ -2,16 +2,24 @@ import * as path from 'path';
 import * as vscode from 'vscode';
 import { ToolRegistry } from '../../agent/toolRegistry';
 import { PersistUiEventFn } from '../../types/agent';
+import { ChatMessage, ChatRequest } from '../../types/ollama';
 import { renderDiffHtml } from '../../utils/diffRenderer';
 import { DEFAULT_SENSITIVE_FILE_PATTERNS, evaluateFileSensitivity } from '../../utils/fileSensitivity';
 import { WebviewMessageEmitter } from '../../views/chatTypes';
 import { DatabaseService } from '../database/databaseService';
 import { EditManager } from '../editManager';
+import { OllamaClient } from '../model/ollamaClient';
 import { ApprovalManager } from './approvalManager';
 
 // ---------------------------------------------------------------------------
 // AgentFileEditHandler — file sensitivity check, approval flow, and
 // execution for write_file/create_file. Extracted from AgentChatExecutor.
+//
+// Supports **deferred content generation**: when a tool call provides
+// `description` but no `content`, makes a separate streaming LLM call to
+// generate the file content. This avoids Ollama's silent 60-80s buffering
+// of tool_call JSON for large files — the spinner shows "Writing file..."
+// immediately when the tool is invoked.
 // ---------------------------------------------------------------------------
 
 export class AgentFileEditHandler {
@@ -25,7 +33,8 @@ export class AgentFileEditHandler {
     private readonly emitter: WebviewMessageEmitter,
     private readonly approvalManager: ApprovalManager,
     private readonly persistUiEvent: PersistUiEventFn,
-    private readonly outputChannel: vscode.OutputChannel
+    private readonly outputChannel: vscode.OutputChannel,
+    private readonly client: OllamaClient
   ) {}
 
   async execute(
@@ -35,7 +44,9 @@ export class AgentFileEditHandler {
     sessionId: string,
     actionText: string,
     actionIcon: string,
-    token: vscode.CancellationToken
+    token: vscode.CancellationToken,
+    model?: string,
+    messages?: ChatMessage[]
   ) {
     const relPath = String(args?.path || args?.file || '').trim();
     if (!relPath) {
@@ -57,7 +68,48 @@ export class AgentFileEditHandler {
       originalContent = '';
     }
 
-    const newContent = String(args?.content ?? '');
+    // Tag args so downstream success handlers know if this was a create or edit
+    const isNew = !originalContent;
+    args._isNew = isNew;
+
+    // Emit the running action with the correct verb (Creating vs Editing)
+    // Must happen BEFORE deferred content generation so the UI isn't empty.
+    const fileName = relPath.split('/').pop() || relPath;
+    const runningText = isNew ? `Creating ${fileName}` : `Editing ${fileName}`;
+    await this.persistUiEvent(sessionId, 'showToolAction', {
+      status: 'running',
+      icon: actionIcon,
+      text: runningText,
+      detail: ''
+    });
+    this.emitter.postMessage({
+      type: 'showToolAction',
+      status: 'running',
+      icon: actionIcon,
+      text: runningText,
+      detail: '',
+      sessionId
+    });
+
+    // -----------------------------------------------------------------------
+    // Deferred content generation: when the model provides `description` but
+    // no `content`, make a separate streaming LLM call to produce the file.
+    // This avoids Ollama buffering the entire file inside a tool_call JSON.
+    // -----------------------------------------------------------------------
+    let newContent: string;
+    const hasDescription = typeof args?.description === 'string' && args.description.trim();
+    const hasContent = typeof args?.content === 'string' && args.content.trim();
+
+    if (!hasContent && hasDescription && model) {
+      newContent = await this.generateDeferredContent(
+        model, relPath, args.description, originalContent, messages, token
+      );
+      // Patch args.content so the downstream toolRegistry.execute() writes it
+      args.content = newContent;
+    } else {
+      newContent = String(args?.content ?? '');
+    }
+
     const sessionRecord = sessionId ? await this.databaseService.getSession(sessionId) : null;
     const autoApproveSensitiveEdits = !!sessionRecord?.auto_approve_sensitive_edits;
     const sessionPatterns = sessionRecord?.sensitive_file_patterns
@@ -101,15 +153,6 @@ export class AgentFileEditHandler {
         reason: decision.reason,
         diffHtml
       });
-
-      this.emitter.postMessage({
-        type: 'showToolAction',
-        status: 'running',
-        icon: actionIcon,
-        text: actionText,
-        detail: normalizedRelPath,
-        sessionId
-      });
     } else if (decision.requiresApproval) {
       this.fileApprovalCache.set(approvalId, {
         filePath,
@@ -121,7 +164,7 @@ export class AgentFileEditHandler {
       await this.persistUiEvent(sessionId, 'showToolAction', {
         status: 'pending',
         icon: actionIcon,
-        text: actionText,
+        text: runningText,
         detail: 'Awaiting approval'
       });
 
@@ -129,7 +172,7 @@ export class AgentFileEditHandler {
         type: 'showToolAction',
         status: 'pending',
         icon: actionIcon,
-        text: actionText,
+        text: runningText,
         detail: 'Awaiting approval',
         sessionId
       });
@@ -213,35 +256,6 @@ export class AgentFileEditHandler {
         diffHtml
       });
 
-      await this.persistUiEvent(sessionId, 'showToolAction', {
-        status: 'running',
-        icon: actionIcon,
-        text: actionText,
-        detail: normalizedRelPath
-      });
-      this.emitter.postMessage({
-        type: 'showToolAction',
-        status: 'running',
-        icon: actionIcon,
-        text: actionText,
-        detail: normalizedRelPath,
-        sessionId
-      });
-    } else {
-      await this.persistUiEvent(sessionId, 'showToolAction', {
-        status: 'running',
-        icon: actionIcon,
-        text: actionText,
-        detail: normalizedRelPath
-      });
-      this.emitter.postMessage({
-        type: 'showToolAction',
-        status: 'running',
-        icon: actionIcon,
-        text: actionText,
-        detail: normalizedRelPath,
-        sessionId
-      });
     }
 
     const result = await this.toolRegistry.execute(toolName, args, context);
@@ -307,5 +321,98 @@ export class AgentFileEditHandler {
       }),
       toolOutput: diffHtml || ''
     });
+  }
+
+  /**
+   * Generate file content via a separate streaming LLM call.
+   *
+   * The main agent loop receives only `{ path, description }` from the tool
+   * call (tiny, instant). This method builds a focused prompt and streams
+   * the actual file content from the model, accumulating it token-by-token.
+   */
+  private async generateDeferredContent(
+    model: string,
+    relPath: string,
+    description: string,
+    originalContent: string,
+    conversationMessages?: ChatMessage[],
+    token?: vscode.CancellationToken
+  ): Promise<string> {
+    const isEdit = !!originalContent;
+    const ext = path.extname(relPath).slice(1);
+
+    // Build a focused system prompt — the model should output ONLY file content
+    const systemPrompt = [
+      `You are a code generator. Output ONLY the complete file content for "${relPath}" — no markdown fences, no explanations, no surrounding text.`,
+      ext ? `The file type is ${ext}.` : '',
+      isEdit
+        ? 'The user wants to MODIFY the existing file. Apply the described changes to the original content below and output the full updated file.'
+        : 'The user wants to CREATE a new file. Generate the full file content based on the description.',
+    ].filter(Boolean).join(' ');
+
+    // Build the user message with the description + original content (if editing)
+    const userParts: string[] = [`Description of ${isEdit ? 'changes' : 'content'}: ${description}`];
+    if (isEdit) {
+      userParts.push(`\nOriginal file content:\n\`\`\`\n${originalContent}\n\`\`\``);
+    }
+
+    // Include a condensed task context from the last user message in the conversation
+    if (conversationMessages?.length) {
+      const lastUser = [...conversationMessages].reverse().find(m => m.role === 'user');
+      if (lastUser?.content) {
+        const truncated = lastUser.content.length > 2000
+          ? lastUser.content.slice(0, 2000) + '…'
+          : lastUser.content;
+        userParts.push(`\nTask context:\n${truncated}`);
+      }
+    }
+
+    const chatMessages: ChatMessage[] = [
+      { role: 'system', content: systemPrompt },
+      { role: 'user', content: userParts.join('\n') }
+    ];
+
+    const request: ChatRequest = {
+      model,
+      messages: chatMessages,
+      stream: true,
+      options: { temperature: 0.2 }
+    };
+
+    this.outputChannel.appendLine(`[Deferred write] Generating content for ${relPath} (model: ${model})`);
+
+    let accumulated = '';
+    try {
+      for await (const chunk of this.client.chat(request)) {
+        if (token?.isCancellationRequested) {
+          this.outputChannel.appendLine(`[Deferred write] Cancelled for ${relPath}`);
+          break;
+        }
+        const delta = chunk.message?.content;
+        if (delta) {
+          accumulated += delta;
+        }
+      }
+    } catch (error: any) {
+      this.outputChannel.appendLine(`[Deferred write] Error for ${relPath}: ${error.message}`);
+      throw new Error(`Failed to generate content for ${relPath}: ${error.message}`);
+    }
+
+    // Strip markdown code fences the model may wrap around content despite instructions
+    accumulated = this.stripCodeFences(accumulated);
+
+    this.outputChannel.appendLine(`[Deferred write] Generated ${accumulated.split('\n').length} lines for ${relPath}`);
+    return accumulated;
+  }
+
+  /** Strip leading/trailing markdown code fences (```lang ... ```) if present. */
+  private stripCodeFences(text: string): string {
+    const trimmed = text.trim();
+    const fenceStart = /^```[\w]*\n?/;
+    const fenceEnd = /\n?```\s*$/;
+    if (fenceStart.test(trimmed) && fenceEnd.test(trimmed)) {
+      return trimmed.replace(fenceStart, '').replace(fenceEnd, '');
+    }
+    return trimmed;
   }
 }

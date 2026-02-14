@@ -1,14 +1,15 @@
 <template>
-  <!-- Flat rendering for completed file-only groups -->
-  <div v-if="isCompletedFileGroup" class="flat-file-actions">
+  <!-- Flat rendering for file-write groups (any state) and completed file groups -->
+  <div v-if="isFlatFileGroup" class="flat-file-actions">
     <div v-for="action in item.actions" :key="action.id" class="flat-action">
       <span class="action-status" :class="actionStatusClass(action.status)">
-        <span v-if="action.status === 'success'">✓</span>
+        <span v-if="action.status === 'running'" class="spinner"></span>
+        <span v-else-if="action.status === 'success'">✓</span>
         <span v-else-if="action.status === 'error'">✗</span>
         <span v-else>○</span>
       </span>
       <span class="flat-verb">{{ getVerb(action) }}</span>
-      <span class="flat-chevron">▸</span>
+      <span v-if="getFileName(action)" class="flat-chevron">▸</span>
       <span
         class="flat-filename"
         @click.stop="action.filePath && handleOpenDiff(action.checkpointId, action.filePath)"
@@ -85,12 +86,21 @@ const props = defineProps<{
   actionStatusClass: (status: ActionItem['status']) => Record<string, boolean>;
 }>();
 
-/** True when the group is done and every action is a file edit with a checkpoint (not reads). Renders flat. */
-const isCompletedFileGroup = computed(() =>
-  props.item.status === 'done' &&
-  props.item.actions.length > 0 &&
-  props.item.actions.every(a => a.filePath && a.checkpointId)
-);
+/**
+ * True when the group should render flat (no collapsible header):
+ * - Write/modify/create groups in ANY state (running or done)
+ * - Completed file-only groups with checkpoints
+ */
+const isFlatFileGroup = computed(() => {
+  if (props.item.actions.length === 0) return false;
+  // Write-only groups always render flat
+  if (/\b(writ|modif|creat)/i.test(props.item.title)) return true;
+  // Completed file groups with checkpoints
+  return (
+    props.item.status === 'done' &&
+    props.item.actions.every(a => a.filePath && a.checkpointId)
+  );
+});
 
 const getVerb = (action: ActionItem): string => {
   if (!action.filePath) return action.text;

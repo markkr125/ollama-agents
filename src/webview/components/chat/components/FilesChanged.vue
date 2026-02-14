@@ -50,6 +50,7 @@
 
 <script setup lang="ts">
 import { keepAllChanges, keepFile, navigateNextChange, navigatePrevChange, openFileChangeReview, undoAllChanges, undoFile } from '../../../scripts/core/actions';
+import { filesChangedBlocks } from '../../../scripts/core/state';
 import type { AssistantThreadFilesChangedBlock } from '../../../scripts/core/types';
 
 const props = defineProps<{
@@ -95,20 +96,58 @@ const handleOpenReview = (filePath: string, checkpointId: string) => {
   openFileChangeReview(checkpointId, filePath);
 };
 
+/**
+ * Optimistic UI: remove a file from the block immediately on click,
+ * before the backend round-trip. Recalculates totals and cleans up
+ * empty checkpointIds / block.
+ */
+const removeFileOptimistic = (filePath: string, checkpointId: string) => {
+  const idx = props.block.files.findIndex(f => f.path === filePath && f.checkpointId === checkpointId);
+  if (idx < 0) return;
+
+  props.block.files.splice(idx, 1);
+
+  // Recalculate totals
+  let totalAdd = 0, totalDel = 0;
+  for (const f of props.block.files) {
+    totalAdd += f.additions ?? 0;
+    totalDel += f.deletions ?? 0;
+  }
+  props.block.totalAdditions = totalAdd;
+  props.block.totalDeletions = totalDel;
+
+  // Clean up checkpointId if no files reference it
+  if (!props.block.files.some(f => f.checkpointId === checkpointId)) {
+    const cidx = props.block.checkpointIds.indexOf(checkpointId);
+    if (cidx >= 0) props.block.checkpointIds.splice(cidx, 1);
+  }
+
+  // Remove block entirely if empty
+  if (props.block.files.length === 0) {
+    filesChangedBlocks.value = [];
+  }
+};
+
 const handleKeepFile = (filePath: string, checkpointId: string) => {
+  removeFileOptimistic(filePath, checkpointId);
   keepFile(checkpointId, filePath);
 };
 
 const handleUndoFile = (filePath: string, checkpointId: string) => {
+  removeFileOptimistic(filePath, checkpointId);
   undoFile(checkpointId, filePath);
 };
 
 const handleKeepAll = () => {
-  keepAllChanges(props.block.checkpointIds);
+  const cpIds = [...props.block.checkpointIds];
+  filesChangedBlocks.value = [];
+  keepAllChanges(cpIds);
 };
 
 const handleUndoAll = () => {
-  undoAllChanges(props.block.checkpointIds);
+  const cpIds = [...props.block.checkpointIds];
+  filesChangedBlocks.value = [];
+  undoAllChanges(cpIds);
 };
 
 const handleNavPrev = () => {

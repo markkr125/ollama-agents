@@ -182,6 +182,58 @@ describe('handleFileChangeResult — per-file keep/undo', () => {
     expect(block.files.length).toBe(1);
     expect(block.files[0].path).toBe('b.ts');
   });
+
+  test('failed keep does NOT remove file, marks status instead', async () => {
+    const state = await import('../../../src/webview/scripts/core/state');
+    const { handleFilesChanged, handleFileChangeResult } = await import('../../../src/webview/scripts/core/messageHandlers/filesChanged');
+
+    state.filesChangedBlocks.value = [];
+
+    handleFilesChanged({ checkpointId: 'ckpt_1', files: [{ path: 'a.ts' }, { path: 'b.ts' }] });
+
+    handleFileChangeResult({ checkpointId: 'ckpt_1', filePath: 'a.ts', action: 'kept', success: false });
+
+    // File remains in the list
+    expect(state.filesChangedBlocks.value.length).toBe(1);
+    const block = state.filesChangedBlocks.value[0];
+    expect(block.files.length).toBe(2);
+    // Status is updated to reflect the failed action
+    expect(block.files[0].path).toBe('a.ts');
+    expect(block.files[0].status).toBe('kept');
+    // Other file untouched
+    expect(block.files[1].path).toBe('b.ts');
+    expect(block.files[1].status).toBe('pending');
+  });
+
+  test('failed undo marks status as undone, keeps file in list', async () => {
+    const state = await import('../../../src/webview/scripts/core/state');
+    const { handleFilesChanged, handleFileChangeResult } = await import('../../../src/webview/scripts/core/messageHandlers/filesChanged');
+
+    state.filesChangedBlocks.value = [];
+
+    handleFilesChanged({ checkpointId: 'ckpt_1', files: [{ path: 'a.ts' }] });
+
+    handleFileChangeResult({ checkpointId: 'ckpt_1', filePath: 'a.ts', action: 'undone', success: false });
+
+    expect(state.filesChangedBlocks.value.length).toBe(1);
+    const block = state.filesChangedBlocks.value[0];
+    expect(block.files.length).toBe(1);
+    expect(block.files[0].status).toBe('undone');
+  });
+
+  test('checkpoint stays when file fails (not cleaned up)', async () => {
+    const state = await import('../../../src/webview/scripts/core/state');
+    const { handleFilesChanged, handleFileChangeResult } = await import('../../../src/webview/scripts/core/messageHandlers/filesChanged');
+
+    state.filesChangedBlocks.value = [];
+
+    handleFilesChanged({ checkpointId: 'ckpt_1', files: [{ path: 'a.ts' }] });
+
+    handleFileChangeResult({ checkpointId: 'ckpt_1', filePath: 'a.ts', action: 'kept', success: false });
+
+    // Checkpoint should NOT be removed since the file is still present
+    expect(state.filesChangedBlocks.value[0].checkpointIds).toEqual(['ckpt_1']);
+  });
 });
 
 describe('handleKeepUndoResult — bulk keep/undo', () => {
@@ -558,7 +610,7 @@ describe('REGRESSION: safety net re-requests missing stats on new file addition'
     expect(statsRequests[0][0].checkpointId).toBe('ckpt_2');
   });
 
-  test('no extra requests when all existing files have stats', async () => {
+  test('re-sends stats request when same file is re-edited (incremental filesChanged)', async () => {
     const state = await import('../../../src/webview/scripts/core/state');
     const { handleFilesChanged } = await import('../../../src/webview/scripts/core/messageHandlers/filesChanged');
 
@@ -569,13 +621,122 @@ describe('REGRESSION: safety net re-requests missing stats on new file addition'
 
     vscodePostMessage.mockClear();
 
-    // Same checkpoint, existing file not re-added → no stats request
+    // Agent re-edits the same file → backend sends filesChanged again with the same file.
+    // Stats are now stale, so a new requestFilesDiffStats must be sent.
     handleFilesChanged({ checkpointId: 'ckpt_1', files: [{ path: 'a.ts' }] });
 
     const statsRequests = vscodePostMessage.mock.calls.filter(
       (call: any[]) => call[0]?.type === 'requestFilesDiffStats'
     );
-    // File already exists → added=false → no stats request at all
+    // File already exists but may have been re-edited → stats refresh
+    expect(statsRequests.length).toBe(1);
+    expect(statsRequests[0][0].checkpointId).toBe('ckpt_1');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// REGRESSION: agent re-edits same file — widget stats must reflect all edits
+// ---------------------------------------------------------------------------
+
+describe('REGRESSION: re-editing same file refreshes diff stats', () => {
+  test('second edit triggers stats re-request even though file count is unchanged', async () => {
+    const state = await import('../../../src/webview/scripts/core/state');
+    const { handleFilesChanged, handleFilesDiffStats } = await import('../../../src/webview/scripts/core/messageHandlers/filesChanged');
+
+    state.filesChangedBlocks.value = [];
+
+    // Agent writes a.ts → first filesChanged
+    handleFilesChanged({ checkpointId: 'ckpt_1', files: [{ path: 'a.ts' }] });
+
+    // Backend responds with first-edit stats
+    handleFilesDiffStats({ checkpointId: 'ckpt_1', files: [{ path: 'a.ts', additions: 5, deletions: 1 }] });
+
+    const block = state.filesChangedBlocks.value[0];
+    expect(block.totalAdditions).toBe(5);
+    expect(block.totalDeletions).toBe(1);
+
+    vscodePostMessage.mockClear();
+
+    // Agent re-edits a.ts → second filesChanged with same file
+    handleFilesChanged({ checkpointId: 'ckpt_1', files: [{ path: 'a.ts' }] });
+
+    // Must request updated stats
+    const statsRequests = vscodePostMessage.mock.calls.filter(
+      (call: any[]) => call[0]?.type === 'requestFilesDiffStats'
+    );
+    expect(statsRequests.length).toBe(1);
+
+    // Backend responds with updated stats (second edit added more lines)
+    handleFilesDiffStats({ checkpointId: 'ckpt_1', files: [{ path: 'a.ts', additions: 15, deletions: 3 }] });
+
+    expect(block.totalAdditions).toBe(15);
+    expect(block.totalDeletions).toBe(3);
+  });
+
+  test('mixed new files + re-edited files: all stats refreshed', async () => {
+    const state = await import('../../../src/webview/scripts/core/state');
+    const { handleFilesChanged, handleFilesDiffStats } = await import('../../../src/webview/scripts/core/messageHandlers/filesChanged');
+
+    state.filesChangedBlocks.value = [];
+
+    // Agent writes a.ts
+    handleFilesChanged({ checkpointId: 'ckpt_1', files: [{ path: 'a.ts' }] });
+    handleFilesDiffStats({ checkpointId: 'ckpt_1', files: [{ path: 'a.ts', additions: 5, deletions: 1 }] });
+
+    vscodePostMessage.mockClear();
+
+    // Agent writes b.ts AND re-edits a.ts → backend sends both
+    handleFilesChanged({ checkpointId: 'ckpt_1', files: [{ path: 'a.ts' }, { path: 'b.ts' }] });
+
+    // b.ts is new → added=true → stats requested
+    const statsRequests = vscodePostMessage.mock.calls.filter(
+      (call: any[]) => call[0]?.type === 'requestFilesDiffStats'
+    );
+    expect(statsRequests.length).toBe(1);
+    expect(statsRequests[0][0].checkpointId).toBe('ckpt_1');
+
+    // Backend responds with updated stats for both files
+    handleFilesDiffStats({ checkpointId: 'ckpt_1', files: [
+      { path: 'a.ts', additions: 15, deletions: 3 },
+      { path: 'b.ts', additions: 8, deletions: 0 }
+    ] });
+
+    const block = state.filesChangedBlocks.value[0];
+    expect(block.files.length).toBe(2);
+    expect(block.totalAdditions).toBe(23);
+    expect(block.totalDeletions).toBe(3);
+  });
+
+  test('file count in block header stays correct after re-edit', async () => {
+    const state = await import('../../../src/webview/scripts/core/state');
+    const { handleFilesChanged } = await import('../../../src/webview/scripts/core/messageHandlers/filesChanged');
+
+    state.filesChangedBlocks.value = [];
+
+    handleFilesChanged({ checkpointId: 'ckpt_1', files: [{ path: 'a.ts' }, { path: 'b.ts' }] });
+
+    // Re-edit a.ts: backend sends both files again
+    handleFilesChanged({ checkpointId: 'ckpt_1', files: [{ path: 'a.ts' }, { path: 'b.ts' }] });
+
+    // Still exactly 2 files — no duplicates
+    expect(state.filesChangedBlocks.value[0].files.length).toBe(2);
+  });
+
+  test('no stats request when filesChanged has empty files array', async () => {
+    const state = await import('../../../src/webview/scripts/core/state');
+    const { handleFilesChanged } = await import('../../../src/webview/scripts/core/messageHandlers/filesChanged');
+
+    state.filesChangedBlocks.value = [];
+    handleFilesChanged({ checkpointId: 'ckpt_1', files: [{ path: 'a.ts' }] });
+
+    vscodePostMessage.mockClear();
+
+    // Edge case: empty files array should not trigger stats request
+    handleFilesChanged({ checkpointId: 'ckpt_1', files: [] });
+
+    const statsRequests = vscodePostMessage.mock.calls.filter(
+      (call: any[]) => call[0]?.type === 'requestFilesDiffStats'
+    );
     expect(statsRequests.length).toBe(0);
   });
 });

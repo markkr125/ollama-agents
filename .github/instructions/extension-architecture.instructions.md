@@ -299,6 +299,39 @@ The files-changed widget and the review service both track file change state ind
 | Review → Widget | `onDidResolveFile` event → chatView persists + posts `fileChangeResult` | All hunks in a file resolved via CodeLens |
 | Review → Widget | `onDidUpdateHunkStats` event → chatView posts `filesDiffStats` | Any hunk keep/undo changes +/- counts |
 | Review → Widget | `reviewChangePosition` message posted after nav/open/stats | Updates "Change X of Y" counter + `activeFilePath` in widget |
+| Review → Widget | `fileChangeMessageHandler.sendReviewPosition()` posts `reviewChangePosition` | After keep/undo single file — ensures counter reflects reduced hunk count |
+| Agent → Review → Widget | `chatMessageHandler.onFileWritten` callback → `startReviewForCheckpoint` → `reviewChangePosition` | Each file written during agent loop updates counter + active file |
+
+### Visible Editor Tracking in `startReviewForCheckpoint`
+
+After rebuilding the review session, `startReviewForCheckpoint` iterates `vscode.window.visibleTextEditors` to find editors that match reviewed files:
+
+1. Applies decorations to all matching visible editors
+2. Sets `currentFileIndex` to the **focused** (`activeTextEditor`) editor if it matches a review file
+3. Falls back to any visible editor that matches
+4. This ensures `getChangePosition()` returns the correct `filePath` for the widget's active file indicator
+
+This prevents the active file highlight from jumping to index 0 when the review session is rebuilt (e.g., when the agent writes a new file while the user is viewing a different one).
+
+### Per-File Review Callback (`onFileWritten`)
+
+During agent execution, `chatMessageHandler.ts` registers a per-write callback:
+
+```typescript
+this.agentExecutor.onFileWritten = (checkpointId: string) => {
+  reviewSvc.startReviewForCheckpoint(checkpointId).then(() => {
+    const pos = reviewSvc.getChangePosition(checkpointId);
+    if (pos) {
+      emitter.postMessage({ type: 'reviewChangePosition', checkpointId, ... });
+    }
+  });
+};
+```
+
+This ensures:
+- CodeLens decorations appear as each file is written (not just at the end)
+- The widget's "Change X of Y" counter and `activeFilePath` stay current during multi-file agent iterations
+- The callback is cleared (`onFileWritten = undefined`) after execution completes
 
 ### Session Stats Refresh After Keep/Undo
 
@@ -375,3 +408,85 @@ This two-level approach handles the case where some checkpoints have per-file st
 ### Snapshot Content Pruning
 
 After a file is **kept**, its `original_content` is set to `NULL` via `pruneCheckpointContent()`. This saves storage since the original is no longer needed for undo. Undone files retain `original_content` for debugging.
+
+### Diff Stats Flow — `computeFilesDiffStats` & the filesChanged Widget
+
+Diff stats (`+N -N` per file) flow through several paths depending on context. Understanding **when** stats are computed and **how** they reach the UI prevents long debugging sessions.
+
+#### 1. Live Agent Flow (first computation)
+
+```
+Agent loop ends → agentSummaryBuilder.finalize()
+  ├─ persistUiEvent(sessionId, 'filesChanged', {checkpointId, files, status:'pending'})
+  └─ emitter.postMessage({type:'filesChanged', checkpointId, files, status:'pending', sessionId})
+      → webview handleFilesChanged() creates standalone block in filesChangedBlocks
+      → webview posts {type:'requestFilesDiffStats', checkpointId}
+          → FileChangeMessageHandler.handleRequestFilesDiffStats()
+              ├─ checkpointManager.computeFilesDiffStats(checkpointId)
+              │   ├─ Reads file_snapshots from DB (original_content)
+              │   ├─ Reads current file from disk
+              │   ├─ structuredPatch() → counts +/- per file
+              │   ├─ updateFileSnapshotsDiffStats() → saves per-file stats to DB
+              │   └─ updateCheckpointDiffStats() → caches totals on checkpoint row
+              ├─ emitter.postMessage({type:'filesDiffStats', checkpointId, files})
+              └─ reviewService.startReviewForCheckpoint() → builds review session
+```
+
+#### 2. Session Restore (from history)
+
+```
+User clicks session in list → chatSessionController.loadSession()
+  ├─ postMessage({type:'loadSessionMessages', messages})
+  │   → webview handleLoadSessionMessages()
+  │       ├─ buildTimelineFromMessages(messages)
+  │       │   └─ TimelineBuilder processes __ui__ tool messages:
+  │       │       handleFilesChanged(payload) → pushes to restoredFcBlocks
+  │       │       build() → sets filesChangedBlocks.value = restoredFcBlocks
+  │       └─ For each block with statsLoading && checkpointIds.length:
+  │           vscode.postMessage({type:'requestFilesDiffStats', checkpointId})
+  │           → same backend path as live flow (step 1 above)
+  ├─ ensureFilesChangedWidget(sessionId, messages)  ← FALLBACK
+  │   (only fires if NO __ui__ filesChanged event in messages)
+  │   ├─ Queries getCheckpoints(sessionId) for pending/partial
+  │   ├─ Queries getFileSnapshots(ckptId) for pending files
+  │   └─ Posts synthetic {type:'filesChanged'} per checkpoint
+  │       → webview live handleFilesChanged() creates block + requests stats
+  └─ postMessage({type:'generationStopped'})
+```
+
+**Why the fallback?** Old sessions (created before `filesChanged` persistence was implemented), or sessions where `sessionId` was `undefined` at `persistUiEvent` time (Pitfall #13), have no `__ui__` filesChanged event in the DB. Without the fallback, the widget silently doesn't appear even though the checkpoint data exists.
+
+#### 3. Review CodeLens Keep/Undo (recomputation)
+
+```
+User clicks Keep/Undo via CodeLens on a hunk
+  → reviewService resolves hunk → emits onDidResolveFile
+  → chatView.ts subscriber posts fileChangeResult + calls:
+      computeFilesDiffStats(checkpointId) → recalculates all files
+      → posts filesDiffStats to webview → widget updates +/- counts
+```
+
+#### 4. Hunk-Level Stats Update (real-time)
+
+```
+Any hunk keep/undo → reviewService emits onDidUpdateHunkStats
+  → chatView.ts subscriber posts {type:'filesDiffStats', checkpointId, files:[{path, additions, deletions}]}
+  → webview handleFilesDiffStats() updates single file in block
+```
+
+#### 5. Session List Badge Refresh
+
+```
+sendSessionsList()
+  ├─ databaseService.listSessions()
+  └─ databaseService.getSessionsPendingStats()  ← SQL query over checkpoints + file_snapshots
+      → returns Map<sessionId, {additions, deletions, fileCount}>
+      → merged into session list payload → webview shows +N -N badge
+```
+
+**Refresh triggers** — all call `sendSessionsList()`:
+- Agent/chat execution completes (`chatMessageHandler.ts` finally block)
+- Keep/Undo file (`fileChangeMessageHandler.ts`)
+- Keep All / Undo All (`fileChangeMessageHandler.ts`)
+- Session delete, new session create
+- First message in new session (title update)

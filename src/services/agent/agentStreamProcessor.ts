@@ -57,7 +57,15 @@ export class AgentStreamProcessor {
     let thinkingCollapsed = false;
     const nativeToolCalls: OllamaToolCall[] = [];
 
-    const stream = this.client.chat(chatRequest);
+    // Create an AbortController so we can abort the HTTP stream immediately
+    // when the user clicks Stop. Without this, the `for await` loop blocks on
+    // `reader.read()` until Ollama produces the next token — which can be
+    // 30+ seconds during thinking. During that time `finalize()` can't run,
+    // so `filesChanged` is never emitted.
+    const abortController = new AbortController();
+    const cancelDisposable = token.onCancellationRequested(() => abortController.abort());
+
+    const stream = this.client.chat(chatRequest, abortController.signal);
 
     this.emitter.postMessage({
       type: 'showThinking',
@@ -69,6 +77,7 @@ export class AgentStreamProcessor {
     let firstChunkReceived = false;
     let lastStreamTime = 0;
 
+    try {
     for await (const chunk of stream) {
       if (token.isCancellationRequested) break;
 
@@ -174,6 +183,14 @@ export class AgentStreamProcessor {
           }
         }
       }
+    }
+    } catch (err: any) {
+      // AbortError is expected when the user clicks Stop — treat as clean exit
+      if (err.name !== 'AbortError') {
+        throw err;
+      }
+    } finally {
+      cancelDisposable.dispose();
     }
 
     // Send final content state (no pending timer to flush anymore)

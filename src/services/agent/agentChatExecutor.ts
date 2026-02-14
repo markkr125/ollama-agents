@@ -37,6 +37,7 @@ export class AgentChatExecutor {
   private readonly summaryBuilder: AgentSummaryBuilder;
   readonly checkpointManager: CheckpointManager;
   private editManager: EditManager;
+  private _onFileWritten?: (checkpointId: string) => void;
 
   constructor(
     private readonly client: OllamaClient,
@@ -70,7 +71,8 @@ export class AgentChatExecutor {
       this.emitter,
       this.approvalManager,
       persistFn,
-      this.outputChannel
+      this.outputChannel,
+      this.client
     );
 
     this.checkpointManager = new CheckpointManager(
@@ -92,7 +94,8 @@ export class AgentChatExecutor {
       this.checkpointManager,
       this.decorationProvider,
       persistFn,
-      this.refreshExplorer
+      this.refreshExplorer,
+      (checkpointId: string) => this._onFileWritten?.(checkpointId)
     );
 
     this.summaryBuilder = new AgentSummaryBuilder(this.client, this.databaseService, this.emitter);
@@ -104,6 +107,11 @@ export class AgentChatExecutor {
 
   handleToolApprovalResponse(approvalId: string, approved: boolean, command?: string): void {
     this.approvalManager.handleResponse(approvalId, approved, command);
+  }
+
+  /** Register a callback invoked after each successful file write (e.g. to trigger CodeLens review). */
+  set onFileWritten(cb: ((checkpointId: string) => void) | undefined) {
+    this._onFileWritten = cb;
   }
 
   /** Open diff for a cached file-edit approval entry. */
@@ -407,7 +415,7 @@ export class AgentChatExecutor {
 
         const batchResult = await this.toolRunner.executeBatch(
           toolCalls, context, sessionId, model, groupTitle,
-          currentCheckpointId, agentSession, useNativeTools, token
+          currentCheckpointId, agentSession, useNativeTools, token, messages
         );
 
         if (batchResult.wroteFiles) {

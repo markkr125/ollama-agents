@@ -154,7 +154,13 @@ export class CheckpointManager {
    */
   async undoFile(checkpointId: string, filePath: string): Promise<{ success: boolean }> {
     const snapshot = await this.databaseService.getSnapshotForFile(checkpointId, filePath);
-    if (!snapshot || snapshot.original_content === null) {
+    if (!snapshot) {
+      return { success: false };
+    }
+
+    // For created files, original_content is null — undo means delete the file.
+    // For modified files, original_content must be present to revert.
+    if (snapshot.action !== 'created' && snapshot.original_content === null) {
       return { success: false };
     }
 
@@ -172,7 +178,7 @@ export class CheckpointManager {
           doc.positionAt(0),
           doc.positionAt(doc.getText().length)
         );
-        edit.replace(uri, fullRange, snapshot.original_content);
+        edit.replace(uri, fullRange, snapshot.original_content!);
         await vscode.workspace.applyEdit(edit);
         await doc.save();
       }

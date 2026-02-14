@@ -281,6 +281,8 @@ export class ChatMessageHandler implements IMessageHandler {
       await this.sessionController.setSessionStatus(finalStatus, sessionIdAtStart);
       this.state.activeSessions.delete(sessionIdAtStart);
       this.emitter.postMessage({ type: 'generationStopped', sessionId: sessionIdAtStart });
+      // Refresh session list so pending stats badge appears immediately
+      await this.sessionController.sendSessionsList();
     }
   }
 
@@ -321,7 +323,25 @@ export class ChatMessageHandler implements IMessageHandler {
       }
     } catch { /* proceed without — executor will default to XML fallback */ }
 
+    // Register per-file review callback so CodeLens appears as each file is written
+    if (this.reviewService) {
+      const reviewSvc = this.reviewService;
+      const emitter = this.emitter;
+      this.agentExecutor.onFileWritten = (checkpointId: string) => {
+        reviewSvc.startReviewForCheckpoint(checkpointId).then(() => {
+          const pos = reviewSvc.getChangePosition(checkpointId);
+          if (pos) {
+            emitter.postMessage({ type: 'reviewChangePosition', checkpointId, current: pos.current, total: pos.total, filePath: pos.filePath });
+          }
+        }).catch(() => {});
+      };
+    }
+
     const result = await this.agentExecutor.execute(agentSession, config, token, sessionId, this.state.currentModel, capabilities);
+
+    // Clear the per-write callback
+    this.agentExecutor.onFileWritten = undefined;
+
     if (this.sessionController.getCurrentSessionId() === sessionId) {
       this.sessionController.pushMessage(result.assistantMessage);
     }

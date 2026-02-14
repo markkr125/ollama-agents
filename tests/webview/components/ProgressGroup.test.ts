@@ -198,6 +198,98 @@ describe('ProgressGroup', () => {
     });
   });
 
+  // ─── REGRESSION: Write groups render flat (no collapsible header) ──
+
+  describe('flat write group rendering', () => {
+
+    test('write group renders flat in RUNNING state', () => {
+      const item = makeProgressItem(
+        { title: 'Writing files', status: 'running' },
+        [makeAction({ filePath: 'src/a.ts', status: 'running', text: 'Creating a.ts' })]
+      );
+      const wrapper = mount(ProgressGroup, { props: { item, ...defaultProps } });
+
+      expect(wrapper.find('.flat-file-actions').exists()).toBe(true);
+      expect(wrapper.find('.progress-group').exists()).toBe(false);
+    });
+
+    test('modifying files group renders flat in RUNNING state', () => {
+      const item = makeProgressItem(
+        { title: 'Modifying files', status: 'running' },
+        [makeAction({ filePath: 'src/b.ts', status: 'running', text: 'Editing b.ts' })]
+      );
+      const wrapper = mount(ProgressGroup, { props: { item, ...defaultProps } });
+
+      expect(wrapper.find('.flat-file-actions').exists()).toBe(true);
+    });
+
+    test('running flat action shows spinner', () => {
+      const item = makeProgressItem(
+        { title: 'Writing files', status: 'running' },
+        [makeAction({ filePath: 'src/a.ts', status: 'running', text: 'Creating a.ts' })]
+      );
+      const wrapper = mount(ProgressGroup, { props: { item, ...defaultProps } });
+
+      expect(wrapper.find('.spinner').exists()).toBe(true);
+    });
+
+    test('completed flat action shows checkmark, not spinner', () => {
+      const item = makeProgressItem(
+        { title: 'Writing files', status: 'done' },
+        [makeAction({ filePath: 'src/a.ts', status: 'success', text: 'Created a.ts', checkpointId: 'cp1' })]
+      );
+      const wrapper = mount(ProgressGroup, { props: { item, ...defaultProps } });
+
+      expect(wrapper.find('.spinner').exists()).toBe(false);
+      expect(wrapper.text()).toContain('✓');
+    });
+
+    test('REGRESSION: no duplicate action entries for same file', () => {
+      // This catches the bug where both handler AND tool runner emitted
+      // running actions, resulting in two entries for the same file.
+      const item = makeProgressItem(
+        { title: 'Writing files', status: 'done' },
+        [makeAction({ filePath: 'src/x.ts', status: 'success', text: 'Edited x.ts', checkpointId: 'cp1' })]
+      );
+      const wrapper = mount(ProgressGroup, { props: { item, ...defaultProps } });
+
+      const flatActions = wrapper.findAll('.flat-action');
+      expect(flatActions.length).toBe(1);
+    });
+
+    test('chevron hidden when action has no filename', () => {
+      const item = makeProgressItem(
+        { title: 'Writing files', status: 'done' },
+        [makeAction({ text: 'Some action', status: 'success' })]
+        // Note: no filePath set — getFileName returns ''
+      );
+      const wrapper = mount(ProgressGroup, { props: { item, ...defaultProps } });
+
+      expect(wrapper.find('.flat-chevron').exists()).toBe(false);
+    });
+
+    test('chevron visible when action has a filePath', () => {
+      const item = makeProgressItem(
+        { title: 'Writing files', status: 'done' },
+        [makeAction({ filePath: 'src/hello.ts', text: 'Created hello.ts', status: 'success', checkpointId: 'cp1' })]
+      );
+      const wrapper = mount(ProgressGroup, { props: { item, ...defaultProps } });
+
+      expect(wrapper.find('.flat-chevron').exists()).toBe(true);
+    });
+
+    test('non-write groups do NOT render flat when running', () => {
+      const item = makeProgressItem(
+        { title: 'Reading files', status: 'running' },
+        [makeAction({ filePath: 'src/a.ts', status: 'running', text: 'Reading a.ts' })]
+      );
+      const wrapper = mount(ProgressGroup, { props: { item, ...defaultProps } });
+
+      expect(wrapper.find('.flat-file-actions').exists()).toBe(false);
+      expect(wrapper.find('.progress-group').exists()).toBe(true);
+    });
+  });
+
   // ─── Action rendering ─────────────────────────────────────────────
 
   describe('action rendering', () => {

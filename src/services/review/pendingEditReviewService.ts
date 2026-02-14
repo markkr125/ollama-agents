@@ -138,13 +138,29 @@ export class PendingEditReviewService implements vscode.Disposable {
       await this.rebuildSession(mergedIds);
       if (!this.activeSession) return;
 
+      // Apply decorations to visible editors and track which review file
+      // the user is currently viewing so activeFilePath stays accurate.
+      let visibleFileIdx = -1;
+      const activeEditor = vscode.window.activeTextEditor;
       for (const editor of vscode.window.visibleTextEditors) {
-        const fileState = this.activeSession.files.find(
+        const idx = this.activeSession.files.findIndex(
           f => f.uri.toString() === editor.document.uri.toString()
         );
-        if (fileState) {
-          this.decorationMgr.applyDecorations(editor, fileState);
+        if (idx >= 0) {
+          this.decorationMgr.applyDecorations(editor, this.activeSession.files[idx]);
+          // Prefer the focused/active editor; fallback to any visible one
+          if (activeEditor && editor.document.uri.toString() === activeEditor.document.uri.toString()) {
+            visibleFileIdx = idx;
+          } else if (visibleFileIdx < 0) {
+            visibleFileIdx = idx;
+          }
         }
+      }
+
+      // Update currentFileIndex to the currently visible file so that
+      // getChangePosition() returns the correct filePath for the widget.
+      if (visibleFileIdx >= 0) {
+        this.activeSession.currentFileIndex = visibleFileIdx;
       }
     });
   }

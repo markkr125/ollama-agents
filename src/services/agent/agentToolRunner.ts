@@ -5,6 +5,7 @@ import { ToolRegistry } from '../../agent/toolRegistry';
 import { resolveWorkspacePath } from '../../agent/tools/pathUtils';
 import { CHUNK_SIZE, countFileLines, readFileChunk } from '../../agent/tools/readFile';
 import { PersistUiEventFn } from '../../types/agent';
+import { ChatMessage } from '../../types/ollama';
 import { ToolExecution } from '../../types/session';
 import { WebviewMessageEmitter } from '../../views/chatTypes';
 import { getToolActionInfo, getToolSuccessInfo } from '../../views/toolUIFormatter';
@@ -44,7 +45,8 @@ export class AgentToolRunner {
     private readonly checkpointManager: CheckpointManager,
     private readonly decorationProvider: PendingEditDecorationProvider,
     private readonly persistUiEvent: PersistUiEventFn,
-    private readonly refreshExplorer: () => void
+    private readonly refreshExplorer: () => void,
+    private readonly onFileWritten?: (checkpointId: string) => void
   ) {}
 
   /**
@@ -60,7 +62,8 @@ export class AgentToolRunner {
     currentCheckpointId: string | undefined,
     agentSession: any,
     useNativeTools: boolean,
-    token: vscode.CancellationToken
+    token: vscode.CancellationToken,
+    messages?: ChatMessage[]
   ): Promise<ToolBatchResult> {
     const nativeResults: ToolBatchResult['nativeResults'] = [];
     const xmlResults: string[] = [];
@@ -112,8 +115,9 @@ export class AgentToolRunner {
         continue;
       }
 
-      // Show "running" status for generic tools and file edits (terminal handler shows its own)
-      if (!isTerminalCommand) {
+      // Show "running" status for generic tools (terminal handler shows its own;
+      // file edit handler emits its own with correct Creating/Editing verb)
+      if (!isTerminalCommand && !isFileEdit) {
         this.emitter.postMessage({
           type: 'showToolAction',
           status: 'running',
@@ -133,7 +137,7 @@ export class AgentToolRunner {
         const result: ToolExecution = isTerminalCommand
           ? await this.terminalHandler.execute(toolCall.name, toolCall.args, context, sessionId, actionText, actionIcon, token)
           : isFileEdit
-            ? await this.fileEditHandler.execute(toolCall.name, toolCall.args, context, sessionId, actionText, actionIcon, token)
+            ? await this.fileEditHandler.execute(toolCall.name, toolCall.args, context, sessionId, actionText, actionIcon, token, model, messages)
             : await this.toolRegistry.execute(toolCall.name, toolCall.args, context);
         agentSession.toolCalls.push(result);
 
@@ -166,6 +170,9 @@ export class AgentToolRunner {
                 status: 'pending',
                 sessionId
               });
+
+              // Trigger inline review (CodeLens) immediately after each write
+              this.onFileWritten?.(currentCheckpointId);
             }
           }
         }
@@ -293,7 +300,7 @@ export class AgentToolRunner {
     model: string,
     groupTitle: string,
     agentSession: any,
-    useNativeTools: boolean
+    _useNativeTools: boolean
   ): Promise<string> {
     const relativePath = toolCall.args?.path || toolCall.args?.file || toolCall.args?.filePath;
     if (!relativePath || typeof relativePath !== 'string') {

@@ -84,7 +84,14 @@ The sessions panel shows `+N -N` badges per session. This is computed by `getSes
 
 This two-level approach handles the transition period where some checkpoints have per-file stats and others only have checkpoint-level fallback totals. The `+0 -0` badge is hidden on the frontend via `v-if="(pendingAdditions ?? 0) > 0 || (pendingDeletions ?? 0) > 0"`.
 
-**Refresh trigger**: All four keep/undo handlers in `fileChangeMessageHandler.ts` call `await sessionController.sendSessionsList()` after resolving, which calls `getSessionsPendingStats()` and pushes updated stats to the webview.
+**Refresh triggers** — all of these call `sendSessionsList()` → `getSessionsPendingStats()`:
+- Agent/chat execution completes (`chatMessageHandler.ts` finally block)
+- Keep/Undo file (`fileChangeMessageHandler.ts`)
+- Keep All / Undo All (`fileChangeMessageHandler.ts`)
+- Session delete, new session create
+- First message in new session (title update)
+
+See the full diff stats flow diagram in `extension-architecture.instructions.md` → "Diff Stats Flow".
 
 ## ⚠️ NEVER Auto-Delete User Data
 

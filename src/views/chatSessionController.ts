@@ -190,6 +190,14 @@ export class ChatSessionController {
       sessionSensitiveFilePatterns: session.sensitive_file_patterns ?? null
     });
 
+    // Ensure filesChanged widget appears even if the original __ui__ event
+    // was never persisted (old sessions, or sessionId was undefined at emit
+    // time — see Pitfall #13). Check whether the messages already contain a
+    // filesChanged __ui__ event; if not but the DB has pending checkpoints,
+    // send synthetic filesChanged messages so the webview can construct the
+    // widget and request diff stats.
+    await this.ensureFilesChangedWidget(sessionId, messages);
+
     if (session.status === 'generating' && this.isSessionActive(sessionId)) {
       this.emitter.postMessage({ type: 'generationStarted', sessionId });
     } else {
@@ -209,6 +217,51 @@ export class ChatSessionController {
     });
     this.emitter.postMessage({ type: 'clearMessages', sessionId });
     await this.sendSessionsList();
+  }
+
+  /**
+   * After loadSessionMessages, check whether the messages already include a
+   * filesChanged __ui__ event. If not, but the session has pending
+   * checkpoints with pending file_snapshots, send synthetic `filesChanged`
+   * messages so the webview constructs the widget.
+   *
+   * This handles sessions where the original filesChanged event was never
+   * persisted (e.g., old sessions created before the persistence was
+   * implemented, or sessions where sessionId was undefined at emit time).
+   */
+  private async ensureFilesChangedWidget(sessionId: string, messages: MessageRecord[]): Promise<void> {
+    // Check whether the message set already contains a filesChanged UI event
+    const hasFilesChangedEvent = messages.some(m => {
+      if (m.role !== 'tool' || m.tool_name !== '__ui__') return false;
+      try {
+        const parsed = JSON.parse(m.tool_output || '{}');
+        return parsed.eventType === 'filesChanged';
+      } catch { return false; }
+    });
+    if (hasFilesChangedEvent) return;
+
+    // No filesChanged event in messages — check for pending checkpoints
+    try {
+      const checkpoints = await this.databaseService.getCheckpoints(sessionId);
+      const pendingCheckpoints = checkpoints.filter(c => c.status === 'pending' || c.status === 'partial');
+      if (pendingCheckpoints.length === 0) return;
+
+      for (const ckpt of pendingCheckpoints) {
+        const snapshots = await this.databaseService.getFileSnapshots(ckpt.id);
+        const pendingFiles = snapshots.filter(s => s.file_status === 'pending');
+        if (pendingFiles.length === 0) continue;
+        const files = pendingFiles.map(s => ({ path: s.file_path, action: s.action }));
+        this.emitter.postMessage({
+          type: 'filesChanged',
+          checkpointId: ckpt.id,
+          files,
+          status: 'pending',
+          sessionId
+        });
+      }
+    } catch (err) {
+      console.warn('[ensureFilesChangedWidget] Failed to check pending checkpoints:', err);
+    }
   }
 
   async deleteSession(sessionId: string, mode: string, model: string) {

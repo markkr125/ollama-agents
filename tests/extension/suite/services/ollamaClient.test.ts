@@ -109,4 +109,42 @@ suite('OllamaClient (mocked API)', () => {
       await server.close();
     }
   });
+
+  test('chat() with AbortSignal terminates instantly on a hanging stream', async () => {
+    // chatHang sends one chunk then holds the connection open forever.
+    // Without abort, this test would hang indefinitely.
+    const server = await startOllamaMockServer({ type: 'chatHang' });
+    try {
+      const client = new OllamaClient(server.baseUrl);
+      const controller = new AbortController();
+
+      const received: string[] = [];
+      const start = Date.now();
+
+      try {
+        for await (const chunk of client.chat(
+          { model: 'test-model', messages: [{ role: 'user', content: 'test' }] },
+          controller.signal
+        )) {
+          if (chunk.message?.content) {
+            received.push(chunk.message.content);
+          }
+          // After the first chunk, abort immediately
+          controller.abort();
+        }
+      } catch (err: any) {
+        // AbortError is expected — that's the whole point of this test
+        assert.strictEqual(err.name, 'AbortError', `Expected AbortError, got ${err.name}: ${err.message}`);
+      }
+
+      const elapsed = Date.now() - start;
+      // Should exit almost instantly after abort (well under 2s)
+      assert.ok(elapsed < 2000, `Abort took ${elapsed}ms — stream was not terminated promptly`);
+      // Should have received the one chunk that was sent before the hang
+      assert.strictEqual(received.length, 1);
+      assert.strictEqual(received[0], 'partial');
+    } finally {
+      await server.close();
+    }
+  });
 });

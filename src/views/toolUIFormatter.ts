@@ -110,13 +110,13 @@ export function getToolSuccessInfo(
     }
     case 'write_file':
       return {
-        actionText: `Edited ${fileName}`,
+        actionText: args?._isNew ? `Created ${fileName}` : `Edited ${fileName}`,
         actionDetail: '',
         filePath: path
       };
     case 'create_file':
       return {
-        actionText: `Added ${fileName}`,
+        actionText: `Created ${fileName}`,
         actionDetail: '',
         filePath: path
       };

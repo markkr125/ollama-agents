@@ -991,4 +991,261 @@ describe('CRITICAL: Chunked read_file parity - startLine + filePath passthrough'
     expect(restoredGroup.status).toBe(liveGroup.status);
     expect(restoredGroup.title).toBe(liveGroup.title);
   });
+
+  /**
+   * REGRESSION: File write actions must produce exactly ONE action entry.
+   *
+   * Bug: agentFileEditHandler emitted a running action AND then the approval
+   * branches also emitted running actions, causing 2+ entries in the
+   * progress group. This test verifies:
+   *   - ONE running action (from handler) upgrades to ONE success action
+   *   - No duplicate action lines for the same file
+   *   - Live and restored views show identical action count
+   */
+  test('REGRESSION: write_file produces exactly one action: live === restored', async () => {
+    // ─── PATH 1: Live handlers ───
+    const state = await import('../../../src/webview/scripts/core/state');
+    const streaming = await import('../../../src/webview/scripts/core/messageHandlers/streaming');
+    const progress = await import('../../../src/webview/scripts/core/messageHandlers/progress');
+
+    state.timeline.value = [];
+    state.currentStreamIndex.value = null;
+    state.currentAssistantThreadId.value = null;
+    state.currentProgressIndex.value = null;
+
+    // Agent streams initial text
+    streaming.handleStreamChunk({ type: 'streamChunk', content: 'I will create the file.' });
+
+    // Progress group for file write
+    progress.handleStartProgressGroup({ type: 'startProgressGroup', title: 'Writing files' });
+
+    // Handler emits ONE running action (Creating verb)
+    progress.handleShowToolAction({
+      type: 'showToolAction', status: 'running', icon: '✏️',
+      text: 'Creating utils.ts', detail: ''
+    });
+
+    // Tool runner emits success action
+    progress.handleShowToolAction({
+      type: 'showToolAction', status: 'success', icon: '✏️',
+      text: 'Created utils.ts', detail: '+42',
+      filePath: 'src/utils.ts', checkpointId: 'cp1'
+    });
+
+    progress.handleFinishProgressGroup({ type: 'finishProgressGroup' });
+
+    const liveThread = state.timeline.value[0] as any;
+    const liveToolsBlock = liveThread.blocks.find((b: any) => b.type === 'tools');
+    const liveGroup = liveToolsBlock.tools[0];
+
+    // CRITICAL: Exactly ONE action (running was upgraded to success)
+    expect(liveGroup.title).toBe('Writing files');
+    expect(liveGroup.status).toBe('done');
+    expect(liveGroup.actions.length).toBe(1);
+    expect(liveGroup.actions[0].status).toBe('success');
+    expect(liveGroup.actions[0].text).toBe('Created utils.ts');
+    expect(liveGroup.actions[0].filePath).toBe('src/utils.ts');
+    expect(liveGroup.actions[0].checkpointId).toBe('cp1');
+
+    // ─── PATH 2: Timeline builder (from DB messages) ───
+    const builder = await import('../../../src/webview/scripts/core/timelineBuilder');
+
+    const dbMessages = [
+      { id: 'a1', role: 'assistant', content: 'I will create the file.' },
+      makeUiEvent('ui1', 'startProgressGroup', { title: 'Writing files' }),
+      makeUiEvent('ui2', 'showToolAction', {
+        status: 'running', icon: '✏️', text: 'Creating utils.ts', detail: ''
+      }),
+      makeUiEvent('ui3', 'showToolAction', {
+        status: 'success', icon: '✏️', text: 'Created utils.ts', detail: '+42',
+        filePath: 'src/utils.ts', checkpointId: 'cp1'
+      }),
+      { id: 't1', role: 'tool', toolName: 'write_file', toolOutput: 'File written' },
+      makeUiEvent('ui4', 'finishProgressGroup', {})
+    ];
+
+    const restoredTimeline = builder.buildTimelineFromMessages(dbMessages);
+    const restoredThread = restoredTimeline[0] as any;
+    const restoredToolsBlock = restoredThread.blocks.find((b: any) => b.type === 'tools');
+    const restoredGroup = restoredToolsBlock.tools[0];
+
+    // ─── PARITY CHECK ───
+    expect(restoredGroup.actions.length).toBe(liveGroup.actions.length);
+    expect(restoredGroup.actions.length).toBe(1);
+    expect(restoredGroup.actions[0].status).toBe('success');
+    expect(restoredGroup.actions[0].text).toBe('Created utils.ts');
+    expect(restoredGroup.actions[0].filePath).toBe('src/utils.ts');
+    expect(restoredGroup.actions[0].checkpointId).toBe('cp1');
+    expect(restoredGroup.status).toBe(liveGroup.status);
+    expect(restoredGroup.title).toBe(liveGroup.title);
+  });
+
+  /**
+   * REGRESSION: Editing an existing file uses "Editing" → "Edited" verbs.
+   *
+   * The handler sets _isNew based on whether original content exists.
+   * The running action text must use "Editing file" (not "Write file"),
+   * and the success action must use "Edited file" (not "Added file").
+   */
+  test('REGRESSION: edit of existing file uses correct verbs: live === restored', async () => {
+    // ─── PATH 1: Live handlers ───
+    const state = await import('../../../src/webview/scripts/core/state');
+    const streaming = await import('../../../src/webview/scripts/core/messageHandlers/streaming');
+    const progress = await import('../../../src/webview/scripts/core/messageHandlers/progress');
+
+    state.timeline.value = [];
+    state.currentStreamIndex.value = null;
+    state.currentAssistantThreadId.value = null;
+    state.currentProgressIndex.value = null;
+
+    streaming.handleStreamChunk({ type: 'streamChunk', content: 'Updating the config.' });
+
+    progress.handleStartProgressGroup({ type: 'startProgressGroup', title: 'Writing files' });
+
+    // Handler emits Editing (not Write)
+    progress.handleShowToolAction({
+      type: 'showToolAction', status: 'running', icon: '✏️',
+      text: 'Editing config.ts', detail: ''
+    });
+
+    // Success with Edited (not Added)
+    progress.handleShowToolAction({
+      type: 'showToolAction', status: 'success', icon: '✏️',
+      text: 'Edited config.ts', detail: '+10 -3',
+      filePath: 'src/config.ts', checkpointId: 'cp2'
+    });
+
+    progress.handleFinishProgressGroup({ type: 'finishProgressGroup' });
+
+    const liveThread = state.timeline.value[0] as any;
+    const liveToolsBlock = liveThread.blocks.find((b: any) => b.type === 'tools');
+    const liveGroup = liveToolsBlock.tools[0];
+
+    expect(liveGroup.actions.length).toBe(1);
+    expect(liveGroup.actions[0].text).toBe('Edited config.ts');
+    expect(liveGroup.actions[0].detail).toBe('+10 -3');
+
+    // ─── PATH 2: Timeline builder ───
+    const builder = await import('../../../src/webview/scripts/core/timelineBuilder');
+
+    const dbMessages = [
+      { id: 'a1', role: 'assistant', content: 'Updating the config.' },
+      makeUiEvent('ui1', 'startProgressGroup', { title: 'Writing files' }),
+      makeUiEvent('ui2', 'showToolAction', {
+        status: 'running', icon: '✏️', text: 'Editing config.ts', detail: ''
+      }),
+      makeUiEvent('ui3', 'showToolAction', {
+        status: 'success', icon: '✏️', text: 'Edited config.ts', detail: '+10 -3',
+        filePath: 'src/config.ts', checkpointId: 'cp2'
+      }),
+      { id: 't1', role: 'tool', toolName: 'write_file', toolOutput: 'Written' },
+      makeUiEvent('ui4', 'finishProgressGroup', {})
+    ];
+
+    const restoredTimeline = builder.buildTimelineFromMessages(dbMessages);
+    const restoredThread = restoredTimeline[0] as any;
+    const restoredToolsBlock = restoredThread.blocks.find((b: any) => b.type === 'tools');
+    const restoredGroup = restoredToolsBlock.tools[0];
+
+    expect(restoredGroup.actions.length).toBe(1);
+    expect(restoredGroup.actions[0].text).toBe('Edited config.ts');
+    expect(restoredGroup.actions[0].detail).toBe('+10 -3');
+    expect(restoredGroup.status).toBe(liveGroup.status);
+  });
+
+  /**
+   * REGRESSION: Multiple file writes must produce one action per file.
+   *
+   * When the agent writes 3 files, the progress group must contain
+   * exactly 3 action entries (one per file), not 6 (with duplicates).
+   */
+  test('REGRESSION: multi-file write batch: one action per file, no duplicates', async () => {
+    const state = await import('../../../src/webview/scripts/core/state');
+    const streaming = await import('../../../src/webview/scripts/core/messageHandlers/streaming');
+    const progress = await import('../../../src/webview/scripts/core/messageHandlers/progress');
+
+    state.timeline.value = [];
+    state.currentStreamIndex.value = null;
+    state.currentAssistantThreadId.value = null;
+    state.currentProgressIndex.value = null;
+
+    streaming.handleStreamChunk({ type: 'streamChunk', content: 'Creating three files.' });
+
+    progress.handleStartProgressGroup({ type: 'startProgressGroup', title: 'Writing files' });
+
+    // File 1: running → success
+    progress.handleShowToolAction({
+      type: 'showToolAction', status: 'running', icon: '✏️',
+      text: 'Creating a.ts', detail: ''
+    });
+    progress.handleShowToolAction({
+      type: 'showToolAction', status: 'success', icon: '✏️',
+      text: 'Created a.ts', detail: '+20',
+      filePath: 'src/a.ts', checkpointId: 'cp1'
+    });
+
+    // File 2: running → success
+    progress.handleShowToolAction({
+      type: 'showToolAction', status: 'running', icon: '✏️',
+      text: 'Editing b.ts', detail: ''
+    });
+    progress.handleShowToolAction({
+      type: 'showToolAction', status: 'success', icon: '✏️',
+      text: 'Edited b.ts', detail: '+5 -2',
+      filePath: 'src/b.ts', checkpointId: 'cp1'
+    });
+
+    // File 3: running → success
+    progress.handleShowToolAction({
+      type: 'showToolAction', status: 'running', icon: '✏️',
+      text: 'Creating c.ts', detail: ''
+    });
+    progress.handleShowToolAction({
+      type: 'showToolAction', status: 'success', icon: '✏️',
+      text: 'Created c.ts', detail: '+35',
+      filePath: 'src/c.ts', checkpointId: 'cp1'
+    });
+
+    progress.handleFinishProgressGroup({ type: 'finishProgressGroup' });
+
+    const liveThread = state.timeline.value[0] as any;
+    const liveToolsBlock = liveThread.blocks.find((b: any) => b.type === 'tools');
+    const liveGroup = liveToolsBlock.tools[0];
+
+    // CRITICAL: Exactly 3 actions (one per file), not 6
+    expect(liveGroup.actions.length).toBe(3);
+    expect(liveGroup.actions[0].text).toBe('Created a.ts');
+    expect(liveGroup.actions[1].text).toBe('Edited b.ts');
+    expect(liveGroup.actions[2].text).toBe('Created c.ts');
+    expect(liveGroup.status).toBe('done');
+
+    // Verify restored
+    const builder = await import('../../../src/webview/scripts/core/timelineBuilder');
+
+    const dbMessages = [
+      { id: 'a1', role: 'assistant', content: 'Creating three files.' },
+      makeUiEvent('ui1', 'startProgressGroup', { title: 'Writing files' }),
+      makeUiEvent('ui2', 'showToolAction', { status: 'running', icon: '✏️', text: 'Creating a.ts', detail: '' }),
+      makeUiEvent('ui3', 'showToolAction', { status: 'success', icon: '✏️', text: 'Created a.ts', detail: '+20', filePath: 'src/a.ts', checkpointId: 'cp1' }),
+      { id: 't1', role: 'tool', toolName: 'write_file', toolOutput: 'Written' },
+      makeUiEvent('ui4', 'showToolAction', { status: 'running', icon: '✏️', text: 'Editing b.ts', detail: '' }),
+      makeUiEvent('ui5', 'showToolAction', { status: 'success', icon: '✏️', text: 'Edited b.ts', detail: '+5 -2', filePath: 'src/b.ts', checkpointId: 'cp1' }),
+      { id: 't2', role: 'tool', toolName: 'write_file', toolOutput: 'Written' },
+      makeUiEvent('ui6', 'showToolAction', { status: 'running', icon: '✏️', text: 'Creating c.ts', detail: '' }),
+      makeUiEvent('ui7', 'showToolAction', { status: 'success', icon: '✏️', text: 'Created c.ts', detail: '+35', filePath: 'src/c.ts', checkpointId: 'cp1' }),
+      { id: 't3', role: 'tool', toolName: 'write_file', toolOutput: 'Written' },
+      makeUiEvent('ui8', 'finishProgressGroup', {})
+    ];
+
+    const restoredTimeline = builder.buildTimelineFromMessages(dbMessages);
+    const restoredThread = restoredTimeline[0] as any;
+    const restoredToolsBlock = restoredThread.blocks.find((b: any) => b.type === 'tools');
+    const restoredGroup = restoredToolsBlock.tools[0];
+
+    expect(restoredGroup.actions.length).toBe(3);
+    expect(restoredGroup.actions[0].text).toBe('Created a.ts');
+    expect(restoredGroup.actions[1].text).toBe('Edited b.ts');
+    expect(restoredGroup.actions[2].text).toBe('Created c.ts');
+    expect(restoredGroup.status).toBe(liveGroup.status);
+  });
 });

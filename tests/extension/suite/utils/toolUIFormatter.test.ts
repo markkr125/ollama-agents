@@ -1,8 +1,8 @@
 import * as assert from 'assert';
 import {
-    getProgressGroupTitle,
-    getToolActionInfo,
-    getToolSuccessInfo
+  getProgressGroupTitle,
+  getToolActionInfo,
+  getToolSuccessInfo
 } from '../../../../src/views/toolUIFormatter';
 
 suite('toolUIFormatter', () => {
@@ -174,6 +174,27 @@ suite('toolUIFormatter', () => {
       const info = getToolSuccessInfo('write_file', { path: 'd.ts' }, '');
       assert.strictEqual(info.filePath, 'd.ts');
       assert.strictEqual(info.actionText, 'Edited d.ts');
+    });
+
+    test('write_file with _isNew=true returns "Created" verb', () => {
+      const info = getToolSuccessInfo('write_file', { path: 'newFile.ts', _isNew: true }, '');
+      assert.strictEqual(info.actionText, 'Created newFile.ts');
+      assert.strictEqual(info.filePath, 'newFile.ts');
+    });
+
+    test('write_file with _isNew=false returns "Edited" verb', () => {
+      const info = getToolSuccessInfo('write_file', { path: 'existing.ts', _isNew: false }, '');
+      assert.strictEqual(info.actionText, 'Edited existing.ts');
+    });
+
+    test('write_file without _isNew defaults to "Edited" verb', () => {
+      const info = getToolSuccessInfo('write_file', { path: 'foo.ts' }, '');
+      assert.strictEqual(info.actionText, 'Edited foo.ts');
+    });
+
+    test('create_file returns "Created" verb', () => {
+      const info = getToolSuccessInfo('create_file', { path: 'brand-new.ts' }, '');
+      assert.strictEqual(info.actionText, 'Created brand-new.ts');
     });
 
     test('list_files includes basePath tab-separated in detail', () => {
