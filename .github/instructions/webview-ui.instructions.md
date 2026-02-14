@@ -50,7 +50,7 @@ interface AssistantThreadItem {
   id: string;
   type: 'assistantThread';
   role: 'assistant';
-  blocks: Array<TextBlock | ToolsBlock | ThinkingBlock>;
+  blocks: Array<TextBlock | ToolsBlock | ThinkingBlock | ThinkingGroupBlock>;
   model?: string;
 }
 
@@ -69,24 +69,57 @@ interface ThinkingBlock {
   content: string;
   collapsed: boolean;
 }
+
+interface ThinkingGroupBlock {
+  type: 'thinkingGroup';
+  sections: Array<ThinkingGroupSection>;
+  collapsed: boolean;
+  streaming: boolean;
+  totalDurationSeconds?: number;
+}
+
+type ThinkingGroupSection =
+  | { type: 'thinkingContent'; content: string; durationSeconds?: number; startTime?: number }
+  | ToolsBlock;
 ```
 
-**Block ordering**: Blocks are added sequentially as events occur:
-1. Thread starts with empty text block: `[{ type: 'text', content: '' }]`
-2. Thinking (if model supports `think`): `[text, { type: 'thinking', content: '...', collapsed: false }]`
-3. After thinking collapses: `collapsed` flips to `true`, then text block follows
-4. When tools start: `[text, thinking, text, { type: 'tools', tools: [...] }]`
-5. More thinking + tools: blocks continue alternating as the model iterates
-6. Final summary: `[text, thinking, text, tools, text, thinking, text]`
+### ThinkingGroup — Grouped Thinking + Read/Search Tools
+
+For thinking models (`think=true`), the webview groups thinking content and **read/search** tool actions into a single **collapsible `<details>` element** called a ThinkingGroup. This keeps the UI compact: reads, searches, and exploratory actions are bundled under the "Thought for Xs" pill.
+
+**What goes INSIDE the ThinkingGroup:**
+- Thinking content sections (`thinkingContent`)
+- Read-only progress groups: `Reading files`, `Exploring workspace`, `Searching codebase`
+
+**What goes OUTSIDE the ThinkingGroup (at thread level):**
+- Write progress groups: `Writing files`, `Modifying files`, `Creating files`
+- Text blocks (streamed text is always at thread level)
+
+**Block ordering with ThinkingGroup:**
+1. Thread starts with empty text block: `[text]`
+2. Thinking starts: `[text, thinkingGroup{thinking₁}]`
+3. Read tools inside group: `[text, thinkingGroup{thinking₁, tools₁(reads), thinking₂}]`
+4. Write tools close group + appear at thread level: `[text, thinkingGroup{...collapsed}] [tools₂(writes)]`
+5. More thinking + tools: new groups can start for subsequent iterations
+6. Final summary: append/create text block as last entry
+
+### Write Groups Close the ThinkingGroup
+
+When `handleStartProgressGroup` receives a progress group whose title matches the write pattern (`/\b(writ|modif|creat)/i`), it **closes the active ThinkingGroup first** via `closeActiveThinkingGroup()`. This happens in both:
+- **Live handler**: `src/webview/scripts/core/messageHandlers/progress.ts`
+- **History builder**: `src/webview/scripts/core/timelineBuilder.ts`
+
+The `isWriteGroupTitle()` regex matches titles like "Writing files", "Modifying files", "Creating config.ts".
 
 ### Thinking Block UI
 
 When a model supports `think=true`, its internal reasoning is streamed via `streamThinking` messages and rendered as a collapsible `<details>` element:
 
 - **Live streaming**: Content streams in real-time, `<details>` is **open** (not collapsed).
-- **Collapse**: When thinking finishes, the backend sends `collapseThinking` → `collapsed` flips to `true`, `<details>` closes.
+- **Collapse**: When the backend detects native tool_calls during streaming, it sends `collapseThinking` with accurate `durationSeconds` immediately — the thinking header changes from "Thinking..." → "Thought for 8s" right then, without waiting for the stream to end.
+- **Duration accuracy**: `durationSeconds` is computed from `lastThinkingTimestamp - thinkingStartTime` (excludes Ollama's tool_call buffering time). The webview prefers the backend-provided duration; falls back to `Date.now() - startTime` if not provided.
 - **Visual style**: Rendered as a 💭 "Thought" pill. No chevron indicator — just a simple toggle.
-- **History rebuild**: `timelineBuilder.ts` handles `thinkingBlock` UI events by creating `ThinkingBlock` with `collapsed: true` (thinking is always finished in history).
+- **History rebuild**: `timelineBuilder.ts` handles `thinkingBlock` UI events by creating collapsed thinking sections inside ThinkingGroups. Duration is carried in the persisted event payload.
 
 ### First-Chunk Streaming Gate
 

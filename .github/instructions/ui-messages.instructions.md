@@ -23,7 +23,7 @@ description: "Backend-to-frontend and frontend-to-backend message protocol for t
 | `sessionApprovalSettings` | `{sessionId, autoApproveCommands?, autoApproveSensitiveEdits?, sessionSensitiveFilePatterns?}` | Push per-session approval toggles |
 | `streamChunk` | `{content, model?, sessionId}` | Stream assistant response (accumulated, not delta) |
 | `streamThinking` | `{content, sessionId}` | Stream thinking content (accumulated, not delta) |
-| `collapseThinking` | `{sessionId}` | Collapse the currently open thinking block |
+| `collapseThinking` | `{sessionId, durationSeconds?}` | Collapse the currently open thinking block (with optional accurate duration) |
 | `thinkingBlock` | `{content, sessionId}` | Persisted thinking block (used in history rebuild) |
 | `showWarningBanner` | `{message, sessionId}` | Show a warning banner in the chat (e.g., model lacks tool support) |
 | `finalMessage` | `{content, model?, sessionId}` | Finalize response scoped to a session |

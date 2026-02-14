@@ -60,10 +60,25 @@ interface StreamResult {
   thinkingContent: string;    // Full accumulated thinking/CoT text
   nativeToolCalls: OllamaToolCall[];  // Native tool calls from API
   firstChunkReceived: boolean; // Whether any text was sent to UI
+  lastThinkingTimestamp: number; // Timestamp (ms) of last thinking token
+  thinkingCollapsed: boolean;    // Whether collapseThinking was already sent
 }
 ```
 
 Handles: thinking token accumulation, native tool_call accumulation, text content accumulation with 32ms throttled UI emission, first-chunk gate (≥8 word chars), `[TASK_COMPLETE]` partial-prefix stripping, partial tool call detection (XML fallback freezing).
+
+#### Early Thinking Collapse on Native Tool Calls
+
+When native `tool_calls` arrive during streaming, the stream processor **immediately** collapses the thinking group rather than waiting for the stream to end:
+
+1. Computes accurate `durationSeconds` from `lastThinkingTimestamp - thinkingStartTime` (excludes Ollama's tool_call buffering time)
+2. Sends `collapseThinking` with `durationSeconds` to the webview — thinking header changes from "Thinking..." → "Thought for 8s" instantly
+3. Extracts filenames from write_file/create_file tool_call arguments and shows "Writing filename.ts..." in the bottom spinner
+4. Sets `thinkingCollapsed = true` so the executor skips sending a duplicate `collapseThinking`
+
+**Why**: Ollama buffers native tool_call content internally (10–80s for large files). Without early collapse, the thinking group header shows "Thinking..." for the entire buffering duration, making it appear the model is still thinking when it's actually generating file content.
+
+**`thinkingStartTime` parameter**: The executor passes `thinkingStartTime` (captured before `streamIteration()`) to the stream processor so it can compute accurate duration without depending on executor state.
 
 ### `AgentToolRunner` — Tool Batch Execution
 
@@ -138,7 +153,7 @@ this.terminalHandler = new AgentTerminalHandler(..., persistFn, ...);
 | Adding streaming logic to `agentChatExecutor.ts` | Executor becomes a god class again | Add to `agentStreamProcessor.ts` |
 | Adding per-tool execution logic to `agentChatExecutor.ts` | Same — executor must stay thin | Add to `agentToolRunner.ts` |
 | Importing `AgentChatExecutor` from a sub-handler | Creates circular dependency | Use `PersistUiEventFn` callback type instead |
-| Making `AgentStreamProcessor` aware of tool execution | Violates streaming ↔ execution boundary | Stream processor returns `StreamResult`, executor decides what to do with it |
+| Making `AgentStreamProcessor` aware of tool execution | Violates streaming ↔ execution boundary | Stream processor returns `StreamResult`, executor decides what to do with it. Exception: the stream processor MAY emit `collapseThinking` and transient `showThinking` spinners on tool_call detection (UI-only, no persistence) |
 | Putting DB persistence logic in stream processor | Stream processor should only handle UI emission | Persistence belongs in executor or tool runner |
 
 ## Agent Execution Flow
@@ -161,13 +176,14 @@ When user sends a message in Agent mode:
            │   ├─ Stream LLM response via OllamaClient.chat()
            │   │   ├─ Accumulate thinking tokens (chunk.message.thinking)
            │   │   ├─ Accumulate native tool_calls (chunk.message.tool_calls)
+           │   │   │   └─ On first tool_call: collapseThinking + "Writing file..." spinner
            │   │   ├─ Accumulate text content (chunk.message.content)
            │   │   └─ Throttled streamChunk to UI (32ms, first-chunk gate ≥8 word chars)
-           │   └─ Return StreamResult { response, thinkingContent, nativeToolCalls }
+           │   └─ Return StreamResult { response, thinkingContent, nativeToolCalls, thinkingCollapsed }
            │
            ├─ [Back in agentChatExecutor.execute()]
            │   ├─ De-duplicate thinking echo in response
-           │   ├─ Persist thinking block (if any)
+           │   ├─ Persist thinking block (if any) — skip collapseThinking if stream already sent it
            │   ├─ Process per-iteration delta text
            │   ├─ Check [TASK_COMPLETE] → validate writes → break
            │   └─ parseToolCalls() → native or XML extraction
