@@ -13,6 +13,7 @@
       <span class="files-changed-actions" @click.stop>
         <button class="fc-btn fc-btn-keep" title="Keep all changes" @click="handleKeepAll">Keep All</button>
         <button class="fc-btn fc-btn-undo" title="Undo all changes" @click="handleUndoAll">Undo All</button>
+        <button class="fc-btn fc-btn-view-all" title="View all edits" @click="handleViewAllEdits">⧉</button>
       </span>
     </div>
 
@@ -33,9 +34,10 @@
           <span class="stat-add">+{{ file.additions }}</span>
           <span class="stat-del">-{{ file.deletions }}</span>
         </span>
-        <span class="file-actions" @click.stop>
-          <button class="fc-file-btn" title="Keep this file" @click="handleKeepFile(file.path, file.checkpointId)">✓</button>
-          <button class="fc-file-btn" title="Undo this file" @click="handleUndoFile(file.path, file.checkpointId)">↩</button>
+          <span class="file-actions" @click.stop>
+          <button class="fc-file-btn fc-file-btn--keep" title="Keep this file" @click="handleKeepFile(file.path, file.checkpointId)">✓</button>
+          <button class="fc-file-btn fc-file-btn--undo" title="Undo this file" @click="handleUndoFile(file.path, file.checkpointId)">⟲</button>
+          <button class="fc-file-btn fc-file-btn--diff" title="View diff" @click="handleOpenReview(file.path, file.checkpointId)">🗎</button>
         </span>
       </div>
     </div>
@@ -49,7 +51,7 @@
 </template>
 
 <script setup lang="ts">
-import { keepAllChanges, keepFile, navigateNextChange, navigatePrevChange, openFileChangeReview, undoAllChanges, undoFile } from '../../../scripts/core/actions';
+import { keepAllChanges, keepFile, navigateNextChange, navigatePrevChange, openFileChangeReview, undoAllChanges, undoFile, viewAllEdits } from '../../../scripts/core/actions';
 import { filesChangedBlocks } from '../../../scripts/core/state';
 import type { AssistantThreadFilesChangedBlock } from '../../../scripts/core/types';
 
@@ -148,6 +150,10 @@ const handleUndoAll = () => {
   const cpIds = [...props.block.checkpointIds];
   filesChangedBlocks.value = [];
   undoAllChanges(cpIds);
+};
+
+const handleViewAllEdits = () => {
+  if (props.block.checkpointIds.length) viewAllEdits([...props.block.checkpointIds]);
 };
 
 const handleNavPrev = () => {

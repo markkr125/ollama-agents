@@ -26,7 +26,8 @@ export {
     requestFilesDiffStats,
     revealInExplorer,
     undoAllChanges,
-    undoFile
+    undoFile,
+    viewAllEdits
 } from './filesChanged';
 export { handleEnter, handleSend, removeContext, resizeInputField } from './input';
 export { formatMarkdown, statusClass } from './markdown';

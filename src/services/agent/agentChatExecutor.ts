@@ -153,6 +153,10 @@ export class AgentChatExecutor {
     return this.checkpointManager.computeFilesDiffStats(checkpointId);
   }
 
+  async openAllEdits(checkpointIds: string[]): Promise<void> {
+    return this.checkpointManager.openAllEdits(checkpointIds);
+  }
+
   // -------------------------------------------------------------------------
   // Persist + post UI events
   // -------------------------------------------------------------------------

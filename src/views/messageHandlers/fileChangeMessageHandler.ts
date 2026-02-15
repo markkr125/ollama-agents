@@ -11,7 +11,7 @@ export class FileChangeMessageHandler implements IMessageHandler {
   readonly handledTypes = [
     'openFileChangeDiff', 'openFileChangeReview', 'requestFilesDiffStats',
     'keepFile', 'undoFile', 'keepAllChanges', 'undoAllChanges',
-    'openWorkspaceFile', 'revealInExplorer'
+    'openWorkspaceFile', 'revealInExplorer', 'viewAllEdits'
   ] as const;
 
   constructor(
@@ -57,6 +57,9 @@ export class FileChangeMessageHandler implements IMessageHandler {
         break;
       case 'revealInExplorer':
         await this.handleRevealInExplorer(data.path);
+        break;
+      case 'viewAllEdits':
+        await this.handleViewAllEdits(data.checkpointIds);
         break;
     }
   }
@@ -169,6 +172,15 @@ export class FileChangeMessageHandler implements IMessageHandler {
         total: pos.total,
         filePath: pos.filePath
       });
+    }
+  }
+
+  private async handleViewAllEdits(checkpointIds: string[]) {
+    if (!checkpointIds?.length) return;
+    try {
+      await this.agentExecutor.openAllEdits(checkpointIds);
+    } catch (err: any) {
+      console.warn('[FileChangeHandler] Failed to open all edits:', err);
     }
   }
 

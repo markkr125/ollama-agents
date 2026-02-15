@@ -51,3 +51,8 @@ export const openWorkspaceFile = (relativePath: string, line?: number) => {
 export const revealInExplorer = (relativePath: string) => {
   vscode.postMessage({ type: 'revealInExplorer', path: relativePath });
 };
+
+/** Open the multi-diff editor showing all pending edits across checkpoints. */
+export const viewAllEdits = (checkpointIds: string[]) => {
+  vscode.postMessage({ type: 'viewAllEdits', checkpointIds });
+};

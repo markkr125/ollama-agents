@@ -41,11 +41,6 @@
   font-size: 12px;
   font-weight: 500;
   color: var(--fg);
-
-  &:hover {
-    background: var(--vscode-list-hoverBackground);
-    border-radius: 4px;
-  }
 }
 
 .files-changed-chevron {
@@ -102,7 +97,8 @@
     color: var(--vscode-button-foreground);
 
     &:hover {
-      opacity: 0.88;
+      background: var(--vscode-button-hoverBackground, var(--vscode-button-background));
+      opacity: 0.9;
     }
   }
 
@@ -112,13 +108,29 @@
     color:  var(--vscode-button-secondaryForeground);
 
     &:hover {
-      background: var(--vscode-list-hoverBackground);
+      background: var(--vscode-button-secondaryHoverBackground, var(--vscode-button-secondaryBackground));
+      border-color: var(--vscode-focusBorder);
+    }
+  }
+
+  &.fc-btn-view-all {
+    background: var(--vscode-button-secondaryBackground);
+    border: 1px solid var(--vscode-button-border);
+    color: var(--vscode-button-secondaryForeground);
+    padding: 2px 6px;
+    font-size: 12px;
+
+    &:hover {
+      background: var(--vscode-button-secondaryHoverBackground, var(--vscode-button-secondaryBackground));
+      border-color: var(--vscode-focusBorder);
     }
   }
 }
 
 .files-changed-list {
   padding: 2px 0 4px;
+  max-height: 12rem;
+  overflow-y: auto;
 }
 
 .files-changed-file {
@@ -130,6 +142,7 @@
   color: var(--fg);
   cursor: pointer;
   border-left: 2px solid transparent;
+  min-height: 1.7rem;
 
   &:hover {
     background: var(--vscode-list-hoverBackground);
@@ -214,17 +227,22 @@
 }
 
 .file-actions {
-  display: flex;
+  display: none;
   gap: 2px;
   flex-shrink: 0;
   margin-left: 2px;
+
+  .files-changed-file:hover &,
+  .files-changed-file--active & {
+    display: flex;
+  }
 }
 
 .fc-file-btn {
   width: 20px;
   height: 20px;
   padding: 0;
-  font-size: 12px;
+  font-size: 16px;
   border: none;
   border-radius: 3px;
   background: transparent;
@@ -235,8 +253,13 @@
   justify-content: center;
 
   &:hover {
-    background: var(--vscode-list-hoverBackground);
+    background: rgba(255, 255, 255, 0.08);
     color: var(--fg);
+  }
+
+  &--diff {
+    font-size: 16px;
+    padding-top: 6px;
   }
 }
 

@@ -384,6 +384,46 @@ export class CheckpointManager {
     await this.databaseService.updateCheckpointStatus(checkpointId, newStatus);
   }
 
+  /**
+   * Open the multi-diff editor showing all pending file changes across the
+   * given checkpoints. Uses the `ollama-original:` URI scheme (registered
+   * globally in extension.ts) for the "before" side and the on-disk file
+   * for the "after" side.
+   */
+  async openAllEdits(checkpointIds: string[]): Promise<void> {
+    const workspaceRoot = this.getWorkspaceRoot();
+    const changes: [vscode.Uri, vscode.Uri, vscode.Uri][] = [];
+    const seen = new Set<string>();
+
+    for (const cpId of checkpointIds) {
+      const snapshots = await this.databaseService.getFileSnapshots(cpId);
+      for (const snap of snapshots) {
+        if (snap.file_status !== 'pending' || seen.has(snap.file_path)) continue;
+        seen.add(snap.file_path);
+
+        const absPath = path.join(workspaceRoot, snap.file_path);
+        const fileUri = vscode.Uri.file(absPath);
+        const originalUri = vscode.Uri.from({
+          scheme: 'ollama-original',
+          path: absPath,
+          query: `ckpt=${encodeURIComponent(cpId)}&rel=${encodeURIComponent(snap.file_path)}`
+        });
+        changes.push([fileUri, originalUri, fileUri]);
+      }
+    }
+
+    if (changes.length === 0) {
+      vscode.window.showInformationMessage('No pending changes to review.');
+      return;
+    }
+
+    await vscode.commands.executeCommand(
+      'vscode.changes',
+      `Suggested Edits (${changes.length} file${changes.length !== 1 ? 's' : ''})`,
+      changes
+    );
+  }
+
   private getWorkspaceRoot(): string {
     const workspaceFolders = vscode.workspace.workspaceFolders;
     return workspaceFolders?.[0]?.uri.fsPath || '';
