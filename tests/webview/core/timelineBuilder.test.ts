@@ -739,7 +739,7 @@ describe('buildTimelineFromMessages - thinking blocks', () => {
     toolOutput: JSON.stringify({ eventType, payload })
   });
 
-  test('thinkingBlock event creates thinking block in thread', async () => {
+  test('thinkingBlock event creates thinkingGroup with thinkingContent section', async () => {
     const builder = await import('../../../src/webview/scripts/core/timelineBuilder');
     const messages = [
       { id: 'u1', role: 'user', content: 'explain this' },
@@ -751,14 +751,16 @@ describe('buildTimelineFromMessages - thinking blocks', () => {
     expect(timeline.length).toBe(2);
 
     const thread = timeline[1] as any;
-    // Should have: empty text block + thinking block
+    // Should have: empty text block + thinkingGroup
     expect(thread.blocks.length).toBe(2);
-    expect(thread.blocks[1].type).toBe('thinking');
-    expect(thread.blocks[1].content).toBe('Let me reason about this...');
+    expect(thread.blocks[1].type).toBe('thinkingGroup');
     expect(thread.blocks[1].collapsed).toBe(true);
+    expect(thread.blocks[1].sections.length).toBe(1);
+    expect(thread.blocks[1].sections[0].type).toBe('thinkingContent');
+    expect(thread.blocks[1].sections[0].content).toBe('Let me reason about this...');
   });
 
-  test('multiple thinkingBlock events create separate blocks', async () => {
+  test('multiple thinkingBlock events with text between: separate groups', async () => {
     const builder = await import('../../../src/webview/scripts/core/timelineBuilder');
     const messages = [
       { id: 'u1', role: 'user', content: 'complex task' },
@@ -771,17 +773,24 @@ describe('buildTimelineFromMessages - thinking blocks', () => {
     const timeline = builder.buildTimelineFromMessages(messages);
     const thread = timeline[1] as any;
 
-    // text → thinking → text → thinking
-    const thinkingBlocks = thread.blocks.filter((b: any) => b.type === 'thinking');
-    expect(thinkingBlocks.length).toBe(2);
-    expect(thinkingBlocks[0].content).toBe('First reasoning step');
-    expect(thinkingBlocks[1].content).toBe('Second reasoning step');
-    // All thinking blocks are collapsed in history
-    expect(thinkingBlocks[0].collapsed).toBe(true);
-    expect(thinkingBlocks[1].collapsed).toBe(true);
+    // text("Starting...") → group1{T1} → text("Intermediate result") → group2{T2}
+    // Text between thinking blocks closes group1, then T2 starts group2.
+    expect(thread.blocks.length).toBe(4);
+    expect(thread.blocks[0].type).toBe('text');
+    expect(thread.blocks[0].content).toBe('Starting...');
+    expect(thread.blocks[1].type).toBe('thinkingGroup');
+    expect(thread.blocks[1].collapsed).toBe(true);
+    expect(thread.blocks[1].sections.length).toBe(1);
+    expect(thread.blocks[1].sections[0].content).toBe('First reasoning step');
+    expect(thread.blocks[2].type).toBe('text');
+    expect(thread.blocks[2].content).toBe('Intermediate result');
+    expect(thread.blocks[3].type).toBe('thinkingGroup');
+    expect(thread.blocks[3].collapsed).toBe(true);
+    expect(thread.blocks[3].sections.length).toBe(1);
+    expect(thread.blocks[3].sections[0].content).toBe('Second reasoning step');
   });
 
-  test('thinkingBlock with empty content still creates block', async () => {
+  test('thinkingBlock with empty content still creates group', async () => {
     const builder = await import('../../../src/webview/scripts/core/timelineBuilder');
     const messages = [
       { id: 'a1', role: 'assistant', content: 'hi' },
@@ -790,10 +799,12 @@ describe('buildTimelineFromMessages - thinking blocks', () => {
 
     const timeline = builder.buildTimelineFromMessages(messages);
     const thread = timeline[0] as any;
-    const thinkingBlocks = thread.blocks.filter((b: any) => b.type === 'thinking');
-    expect(thinkingBlocks.length).toBe(1);
-    expect(thinkingBlocks[0].content).toBe('');
-    expect(thinkingBlocks[0].collapsed).toBe(true);
+    // text("hi") + thinkingGroup{thinkingContent("")}
+    expect(thread.blocks.length).toBe(2);
+    expect(thread.blocks[0].type).toBe('text');
+    expect(thread.blocks[1].type).toBe('thinkingGroup');
+    expect(thread.blocks[1].sections[0].content).toBe('');
+    expect(thread.blocks[1].collapsed).toBe(true);
   });
 });
 
@@ -847,5 +858,218 @@ describe('buildTimelineFromMessages - showError event', () => {
     expect(group.actions.length).toBe(2);
     expect(group.actions[1].status).toBe('error');
     expect(group.actions[1].text).toBe('Tool failed');
+  });
+});
+
+describe('buildTimelineFromMessages - chunked read_file', () => {
+  const makeUiEvent = (id: string, eventType: string, payload: any) => ({
+    id,
+    role: 'tool',
+    toolName: '__ui__',
+    toolOutput: JSON.stringify({ eventType, payload })
+  });
+
+  test('showToolAction preserves startLine on read_file chunk actions', async () => {
+    const builder = await import('../../../src/webview/scripts/core/timelineBuilder');
+    const messages = [
+      { id: 'a1', role: 'assistant', content: '' },
+      makeUiEvent('ui1', 'startProgressGroup', { title: 'Reading main.ts' }),
+      makeUiEvent('ui2', 'showToolAction', {
+        status: 'success', icon: '📄', text: 'Read main.ts',
+        detail: 'lines 1–100', filePath: 'src/main.ts', startLine: 1
+      }),
+      makeUiEvent('ui3', 'showToolAction', {
+        status: 'success', icon: '📄', text: 'Read main.ts',
+        detail: 'lines 101–150', filePath: 'src/main.ts', startLine: 101
+      }),
+      makeUiEvent('ui4', 'finishProgressGroup', {})
+    ];
+
+    const timeline = builder.buildTimelineFromMessages(messages);
+    const thread = timeline[0] as any;
+    const group = thread.blocks[1].tools[0];
+
+    expect(group.actions.length).toBe(2);
+    expect(group.actions[0].startLine).toBe(1);
+    expect(group.actions[0].detail).toBe('lines 1–100');
+    expect(group.actions[0].filePath).toBe('src/main.ts');
+    expect(group.actions[1].startLine).toBe(101);
+    expect(group.actions[1].detail).toBe('lines 101–150');
+  });
+
+  test('read_file actions without checkpointId are not treated as file edits', async () => {
+    const builder = await import('../../../src/webview/scripts/core/timelineBuilder');
+    const messages = [
+      { id: 'a1', role: 'assistant', content: '' },
+      makeUiEvent('ui1', 'startProgressGroup', { title: 'Reading config.ts' }),
+      makeUiEvent('ui2', 'showToolAction', {
+        status: 'success', icon: '📄', text: 'Read config.ts',
+        detail: 'lines 1–50', filePath: 'src/config.ts', startLine: 1
+      }),
+      makeUiEvent('ui3', 'finishProgressGroup', {})
+    ];
+
+    const timeline = builder.buildTimelineFromMessages(messages);
+    const thread = timeline[0] as any;
+    const group = thread.blocks[1].tools[0];
+
+    // Action has filePath but NO checkpointId
+    expect(group.actions[0].filePath).toBe('src/config.ts');
+    expect(group.actions[0].checkpointId).toBeUndefined();
+  });
+
+  test('list_files detail with basePath is preserved in timeline', async () => {
+    const builder = await import('../../../src/webview/scripts/core/timelineBuilder');
+    const detail = '2 files\tsrc/utils\n📄 helpers.ts\t1024\n📄 index.ts\t512';
+    const messages = [
+      { id: 'a1', role: 'assistant', content: '' },
+      makeUiEvent('ui1', 'startProgressGroup', { title: 'Exploring workspace' }),
+      makeUiEvent('ui2', 'showToolAction', {
+        status: 'success', icon: '📋', text: 'Listed src/utils',
+        detail
+      }),
+      makeUiEvent('ui3', 'finishProgressGroup', {})
+    ];
+
+    const timeline = builder.buildTimelineFromMessages(messages);
+    const thread = timeline[0] as any;
+    const action = thread.blocks[1].tools[0].actions[0];
+
+    // Detail should be preserved as-is for the tree listing parser
+    expect(action.detail).toBe(detail);
+    expect(action.detail).toContain('\tsrc/utils\n');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// filesChanged restore — ensures the widget appears when loading sessions
+// ---------------------------------------------------------------------------
+
+describe('buildTimelineFromMessages - filesChanged restore', () => {
+  const makeUiEvent = (id: string, eventType: string, payload: any) => ({
+    id,
+    role: 'tool',
+    toolName: '__ui__',
+    toolOutput: JSON.stringify({ eventType, payload })
+  });
+
+  test('filesChanged event populates filesChangedBlocks', async () => {
+    const builder = await import('../../../src/webview/scripts/core/timelineBuilder');
+    const state = await import('../../../src/webview/scripts/core/state');
+
+    const messages = [
+      { id: 'u1', role: 'user', content: 'edit file' },
+      { id: 'a1', role: 'assistant', content: 'Done' },
+      makeUiEvent('fc1', 'filesChanged', {
+        checkpointId: 'ckpt_1',
+        files: [{ path: 'src/foo.ts', action: 'modified' }],
+        status: 'pending'
+      })
+    ];
+
+    builder.buildTimelineFromMessages(messages);
+
+    expect(state.filesChangedBlocks.value.length).toBe(1);
+    const block = state.filesChangedBlocks.value[0];
+    expect(block.checkpointIds).toEqual(['ckpt_1']);
+    expect(block.files.length).toBe(1);
+    expect(block.files[0].path).toBe('src/foo.ts');
+    expect(block.files[0].status).toBe('pending');
+    expect(block.statsLoading).toBe(true);
+  });
+
+  test('multiple filesChanged events merge into one block', async () => {
+    const builder = await import('../../../src/webview/scripts/core/timelineBuilder');
+    const state = await import('../../../src/webview/scripts/core/state');
+
+    const messages = [
+      { id: 'u1', role: 'user', content: 'edit files' },
+      { id: 'a1', role: 'assistant', content: 'Done' },
+      makeUiEvent('fc1', 'filesChanged', {
+        checkpointId: 'ckpt_1',
+        files: [{ path: 'src/a.ts', action: 'modified' }],
+        status: 'pending'
+      }),
+      makeUiEvent('fc2', 'filesChanged', {
+        checkpointId: 'ckpt_2',
+        files: [{ path: 'src/b.ts', action: 'created' }],
+        status: 'pending'
+      })
+    ];
+
+    builder.buildTimelineFromMessages(messages);
+
+    expect(state.filesChangedBlocks.value.length).toBe(1);
+    const block = state.filesChangedBlocks.value[0];
+    expect(block.checkpointIds).toEqual(['ckpt_1', 'ckpt_2']);
+    expect(block.files.length).toBe(2);
+  });
+
+  test('keepUndoResult removes files and block when all resolved', async () => {
+    const builder = await import('../../../src/webview/scripts/core/timelineBuilder');
+    const state = await import('../../../src/webview/scripts/core/state');
+
+    const messages = [
+      { id: 'u1', role: 'user', content: 'edit file' },
+      makeUiEvent('fc1', 'filesChanged', {
+        checkpointId: 'ckpt_1',
+        files: [{ path: 'src/foo.ts', action: 'modified' }],
+        status: 'pending'
+      }),
+      makeUiEvent('kur1', 'keepUndoResult', {
+        checkpointId: 'ckpt_1',
+        action: 'kept',
+        success: true
+      })
+    ];
+
+    builder.buildTimelineFromMessages(messages);
+
+    // Block should be removed after keep all
+    expect(state.filesChangedBlocks.value.length).toBe(0);
+  });
+
+  test('fileChangeResult removes individual file from block', async () => {
+    const builder = await import('../../../src/webview/scripts/core/timelineBuilder');
+    const state = await import('../../../src/webview/scripts/core/state');
+
+    const messages = [
+      { id: 'u1', role: 'user', content: 'edit files' },
+      makeUiEvent('fc1', 'filesChanged', {
+        checkpointId: 'ckpt_1',
+        files: [
+          { path: 'src/a.ts', action: 'modified' },
+          { path: 'src/b.ts', action: 'modified' }
+        ],
+        status: 'pending'
+      }),
+      makeUiEvent('fcr1', 'fileChangeResult', {
+        checkpointId: 'ckpt_1',
+        filePath: 'src/a.ts',
+        action: 'kept',
+        success: true
+      })
+    ];
+
+    builder.buildTimelineFromMessages(messages);
+
+    expect(state.filesChangedBlocks.value.length).toBe(1);
+    const block = state.filesChangedBlocks.value[0];
+    expect(block.files.length).toBe(1);
+    expect(block.files[0].path).toBe('src/b.ts');
+  });
+
+  test('no filesChanged events leaves filesChangedBlocks empty', async () => {
+    const builder = await import('../../../src/webview/scripts/core/timelineBuilder');
+    const state = await import('../../../src/webview/scripts/core/state');
+
+    const messages = [
+      { id: 'u1', role: 'user', content: 'hello' },
+      { id: 'a1', role: 'assistant', content: 'Hi' }
+    ];
+
+    builder.buildTimelineFromMessages(messages);
+
+    expect(state.filesChangedBlocks.value.length).toBe(0);
   });
 });

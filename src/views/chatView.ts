@@ -211,7 +211,11 @@ export class ChatViewProvider implements vscode.WebviewViewProvider, WebviewMess
 
     webviewView.webview.html = await this.getHtmlForWebview(webviewView.webview);
 
-    webviewView.webview.onDidReceiveMessage(data => this.messageRouter.route(data));
+    webviewView.webview.onDidReceiveMessage(data => {
+      this.messageRouter.route(data).catch(err => {
+        console.error('[ChatView] Unhandled error in message handler:', err);
+      });
+    });
   }
 
   private async getHtmlForWebview(webview: vscode.Webview): Promise<string> {

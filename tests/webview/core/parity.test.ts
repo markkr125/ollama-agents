@@ -30,6 +30,34 @@ const makeUiEvent = (id: string, eventType: string, payload: any) => ({
   toolOutput: JSON.stringify({ eventType, payload })
 });
 
+/** Helper: normalize a tool item for comparison */
+const normalizeToolItem = (t: any) => {
+  if (t.type === 'progress') return {
+    type: 'progress',
+    title: t.title,
+    status: t.status,
+    collapsed: t.collapsed,
+    actionCount: t.actions?.length || 0
+  };
+  if (t.type === 'commandApproval') return {
+    type: 'commandApproval',
+    command: t.command,
+    status: t.status
+  };
+  return { type: t.type };
+};
+
+/** Helper: normalize a thinking group section */
+const normalizeSection = (s: any) => {
+  if (s.type === 'thinkingContent') return { type: 'thinkingContent', content: s.content };
+  if (s.type === 'text') return { type: 'text', content: s.content };
+  if (s.type === 'tools') return {
+    type: 'tools',
+    tools: s.tools.map(normalizeToolItem)
+  };
+  return s;
+};
+
 /**
  * Normalize blocks for structural comparison.
  * Strips IDs, collapses whitespace, removes empty text blocks.
@@ -40,23 +68,14 @@ const normalizeBlocks = (blocks: any[]) =>
     .map((b: any) => {
       if (b.type === 'text') return { type: 'text', content: b.content };
       if (b.type === 'thinking') return { type: 'thinking', content: b.content, collapsed: b.collapsed };
+      if (b.type === 'thinkingGroup') return {
+        type: 'thinkingGroup',
+        collapsed: b.collapsed,
+        sections: b.sections.map(normalizeSection)
+      };
       if (b.type === 'tools') return {
         type: 'tools',
-        tools: b.tools.map((t: any) => {
-          if (t.type === 'progress') return {
-            type: 'progress',
-            title: t.title,
-            status: t.status,
-            collapsed: t.collapsed,
-            actionCount: t.actions?.length || 0
-          };
-          if (t.type === 'commandApproval') return {
-            type: 'commandApproval',
-            command: t.command,
-            status: t.status
-          };
-          return { type: t.type };
-        })
+        tools: b.tools.map(normalizeToolItem)
       };
       return b;
     });
@@ -137,7 +156,8 @@ describe('CRITICAL: Live handlers vs timelineBuilder block-structure parity', ()
 
     // ── Final ──
     // No new content in finalMessage (all text was already persisted per-iteration)
-    // Just signal done
+    // Just signal done — close the thinking group (simulates handleGenerationStopped)
+    streaming.closeActiveThinkingGroup();
     state.currentStreamIndex.value = null;
     state.currentAssistantThreadId.value = null;
     streaming.resetActiveStreamBlock();
@@ -191,16 +211,22 @@ describe('CRITICAL: Live handlers vs timelineBuilder block-structure parity', ()
     expect(liveBlocks).toEqual(restoredBlocks);
 
     // Also verify the expected structure explicitly:
-    // [thinking₁(collapsed)] [tools(done)] [thinking₂(collapsed)] [text] [thinking₃(collapsed)]
-    expect(liveBlocks.length).toBe(5);
-    expect(liveBlocks[0]).toEqual({ type: 'thinking', content: 'Let me check git version.', collapsed: true });
+    // streamChunk closes group1 (T1+tools+T2), then T3 opens a new group2.
+    // [group1{T1,tools,T2}] [tools(approval)] [text(answer)] [group2{T3}]
+    expect(liveBlocks.length).toBe(4);
+    expect(liveBlocks[0].type).toBe('thinkingGroup');
+    expect(liveBlocks[0].collapsed).toBe(true);
+    expect(liveBlocks[0].sections.length).toBe(3);
+    expect(liveBlocks[0].sections[0]).toEqual({ type: 'thinkingContent', content: 'Let me check git version.' });
+    expect(liveBlocks[0].sections[1].type).toBe('tools');
+    expect(liveBlocks[0].sections[2]).toEqual({ type: 'thinkingContent', content: 'Now I can answer about git.' });
     expect(liveBlocks[1].type).toBe('tools');
-    expect(liveBlocks[2]).toEqual({ type: 'thinking', content: 'Now I can answer about git.', collapsed: true });
-    expect(liveBlocks[3]).toEqual({
-      type: 'text',
-      content: 'Git is a distributed VCS.\n\nYou have **Git 2.43.0**.'
-    });
-    expect(liveBlocks[4]).toEqual({ type: 'thinking', content: 'Task done.', collapsed: true });
+    expect(liveBlocks[2].type).toBe('text');
+    expect(liveBlocks[2].content).toBe('Git is a distributed VCS.\n\nYou have **Git 2.43.0**.');
+    expect(liveBlocks[3].type).toBe('thinkingGroup');
+    expect(liveBlocks[3].collapsed).toBe(true);
+    expect(liveBlocks[3].sections.length).toBe(1);
+    expect(liveBlocks[3].sections[0]).toEqual({ type: 'thinkingContent', content: 'Task done.' });
   });
 
 
@@ -232,7 +258,8 @@ describe('CRITICAL: Live handlers vs timelineBuilder block-structure parity', ()
     streaming.handleCollapseThinking({ type: 'collapseThinking' });
     streaming.handleStreamChunk({ type: 'streamChunk', content: 'Here is the answer.' });
 
-    // Done
+    // Done — close thinking group (simulates handleGenerationStopped)
+    streaming.closeActiveThinkingGroup();
     state.currentStreamIndex.value = null;
     state.currentAssistantThreadId.value = null;
     streaming.resetActiveStreamBlock();
@@ -256,12 +283,19 @@ describe('CRITICAL: Live handlers vs timelineBuilder block-structure parity', ()
     expect(liveBlocks).toEqual(restoredBlocks);
 
     // Verify structure:
-    // [thinking₁] [text₁] [tools] [thinking₂] [text₂]
+    // streamChunk closes the group each time, next thinking opens a new one.
+    // [group1{T1}] [text₁] [tools] [group2{T2}] [text₂]
     expect(liveBlocks.length).toBe(5);
-    expect(liveBlocks[0].type).toBe('thinking');
+    expect(liveBlocks[0].type).toBe('thinkingGroup');
+    expect(liveBlocks[0].collapsed).toBe(true);
+    expect(liveBlocks[0].sections.length).toBe(1);
+    expect(liveBlocks[0].sections[0]).toEqual({ type: 'thinkingContent', content: 'Reasoning step 1' });
     expect(liveBlocks[1]).toEqual({ type: 'text', content: 'I\'ll check the file.' });
     expect(liveBlocks[2].type).toBe('tools');
-    expect(liveBlocks[3].type).toBe('thinking');
+    expect(liveBlocks[3].type).toBe('thinkingGroup');
+    expect(liveBlocks[3].collapsed).toBe(true);
+    expect(liveBlocks[3].sections.length).toBe(1);
+    expect(liveBlocks[3].sections[0]).toEqual({ type: 'thinkingContent', content: 'Reasoning step 2' });
     expect(liveBlocks[4]).toEqual({ type: 'text', content: 'Here is the answer.' });
   });
 
@@ -419,13 +453,17 @@ describe('CRITICAL: Live handlers vs timelineBuilder block-structure parity', ()
 
     expect(liveBlocks).toEqual(restoredBlocks);
 
-    // [thinking₁] [tools₁] [thinking₂] [tools₂] [text(summary)]
-    expect(liveBlocks.length).toBe(5);
-    expect(liveBlocks[0]).toEqual({ type: 'thinking', content: 'Planning...', collapsed: true });
+    // Write group is pulled out of the thinking group:
+    // [thinkingGroup{thinking₁, tools₁, thinking₂}] [tools₂(write)] [text(summary)]
+    expect(liveBlocks.length).toBe(3);
+    expect(liveBlocks[0].type).toBe('thinkingGroup');
+    expect(liveBlocks[0].collapsed).toBe(true);
+    expect(liveBlocks[0].sections.length).toBe(3);
+    expect(liveBlocks[0].sections[0]).toEqual({ type: 'thinkingContent', content: 'Planning...' });
+    expect(liveBlocks[0].sections[1].type).toBe('tools');
+    expect(liveBlocks[0].sections[2]).toEqual({ type: 'thinkingContent', content: 'Writing...' });
     expect(liveBlocks[1].type).toBe('tools');
-    expect(liveBlocks[2]).toEqual({ type: 'thinking', content: 'Writing...', collapsed: true });
-    expect(liveBlocks[3].type).toBe('tools');
-    expect(liveBlocks[4]).toEqual({ type: 'text', content: 'Task completed successfully.' });
+    expect(liveBlocks[2]).toEqual({ type: 'text', content: 'Task completed successfully.' });
   });
 
 
@@ -457,6 +495,8 @@ describe('CRITICAL: Live handlers vs timelineBuilder block-structure parity', ()
     streaming.handleCollapseThinking({ type: 'collapseThinking' });
     streaming.handleStreamChunk({ type: 'streamChunk', content: 'Both files look good.' });
 
+    // Close thinking group (simulates handleGenerationStopped)
+    streaming.closeActiveThinkingGroup();
     state.currentStreamIndex.value = null;
     state.currentAssistantThreadId.value = null;
     streaming.resetActiveStreamBlock();
@@ -478,14 +518,19 @@ describe('CRITICAL: Live handlers vs timelineBuilder block-structure parity', ()
 
     expect(liveBlocks).toEqual(restoredBlocks);
 
-    // [thinking₁] [tools] [thinking₂] [text]
-    expect(liveBlocks.length).toBe(4);
+    // [thinkingGroup{thinking₁, tools, thinking₂}] [text]
+    // text is extracted from the group on close (it's the final answer)
+    expect(liveBlocks.length).toBe(2);
+    expect(liveBlocks[0].type).toBe('thinkingGroup');
+    expect(liveBlocks[0].collapsed).toBe(true);
+    expect(liveBlocks[0].sections.length).toBe(3);
+    expect(liveBlocks[1]).toEqual({ type: 'text', content: 'Both files look good.' });
   });
 });
 
 
 describe('CRITICAL: activeStreamBlock prevents duplicate text blocks', () => {
-  test('streamChunk after thinking reuses correct text block', async () => {
+  test('streamChunk after thinking creates text block at thread level (not inside group)', async () => {
     const state = await import('../../../src/webview/scripts/core/state');
     const streaming = await import('../../../src/webview/scripts/core/messageHandlers/streaming');
 
@@ -499,12 +544,17 @@ describe('CRITICAL: activeStreamBlock prevents duplicate text blocks', () => {
     streaming.handleStreamChunk({ type: 'streamChunk', content: 'Text 1' });
 
     const thread = state.timeline.value[0] as any;
+    const group = thread.blocks.find((b: any) => b.type === 'thinkingGroup');
+    expect(group).toBeDefined();
+    // Text goes at thread level, NOT inside group
+    const textSections = group.sections.filter((s: any) => s.type === 'text');
+    expect(textSections.length).toBe(0);
     const textBlocks = thread.blocks.filter((b: any) => b.type === 'text' && b.content);
     expect(textBlocks.length).toBe(1);
     expect(textBlocks[0].content).toBe('Text 1');
   });
 
-  test('multiple streamChunks in same iteration update same block', async () => {
+  test('multiple streamChunks in same iteration update same thread-level text block', async () => {
     const state = await import('../../../src/webview/scripts/core/state');
     const streaming = await import('../../../src/webview/scripts/core/messageHandlers/streaming');
 
@@ -521,13 +571,13 @@ describe('CRITICAL: activeStreamBlock prevents duplicate text blocks', () => {
     streaming.handleStreamChunk({ type: 'streamChunk', content: 'Part one and two' });
 
     const thread = state.timeline.value[0] as any;
+    // All chunks update the SAME thread-level text block
     const textBlocks = thread.blocks.filter((b: any) => b.type === 'text' && b.content);
-    // All chunks should update the SAME block, not create new ones
     expect(textBlocks.length).toBe(1);
     expect(textBlocks[0].content).toBe('Part one and two');
   });
 
-  test('new thinking block creates new text block for next iteration', async () => {
+  test('new thinking block after text does not merge text into group', async () => {
     const state = await import('../../../src/webview/scripts/core/state');
     const streaming = await import('../../../src/webview/scripts/core/messageHandlers/streaming');
 
@@ -546,8 +596,12 @@ describe('CRITICAL: activeStreamBlock prevents duplicate text blocks', () => {
     streaming.handleStreamChunk({ type: 'streamChunk', content: 'Text iter2' });
 
     const thread = state.timeline.value[0] as any;
+    const group = thread.blocks.find((b: any) => b.type === 'thinkingGroup');
+    // Group should only have thinking content, no text
+    const textInGroup = group.sections.filter((s: any) => s.type === 'text');
+    expect(textInGroup.length).toBe(0);
+    // Both texts at thread level
     const textBlocks = thread.blocks.filter((b: any) => b.type === 'text' && b.content);
-    // Each iteration should have its OWN text block (not accumulated)
     expect(textBlocks.length).toBe(2);
     expect(textBlocks[0].content).toBe('Text iter1');
     expect(textBlocks[1].content).toBe('Text iter2');
@@ -578,5 +632,620 @@ describe('CRITICAL: activeStreamBlock prevents duplicate text blocks', () => {
     expect(nonEmptyTexts.length).toBe(2);
     expect(nonEmptyTexts[0].content).toBe('Checking...');
     expect(nonEmptyTexts[1].content).toBe('Result.');
+  });
+});
+
+
+/**
+ * Text content ALWAYS goes at thread-level, never inside a thinking group.
+ * These tests verify the key scenarios around text + thinking group interaction.
+ */
+describe('Text is always outside thinking group', () => {
+  /**
+   * Exact scenario from screenshot:
+   *   Iter1: thinking + tool (list files)
+   *   Iter2: thinking + tool (read file)
+   *   Iter3: thinking + FINAL ANSWER TEXT
+   * The answer text must be a thread-level text block, NOT inside the group.
+   */
+  test('thinking + tools + thinking + tools + thinking + text: text is outside group', async () => {
+    const state = await import('../../../src/webview/scripts/core/state');
+    const streaming = await import('../../../src/webview/scripts/core/messageHandlers/streaming');
+    const progress = await import('../../../src/webview/scripts/core/messageHandlers/progress');
+
+    state.timeline.value = [];
+    state.currentStreamIndex.value = null;
+    state.currentAssistantThreadId.value = null;
+    state.currentProgressIndex.value = null;
+
+    // ── Iter1: thinking + tool ──
+    streaming.handleStreamThinking({ type: 'streamThinking', content: 'Let me explore the workspace.' });
+    streaming.handleCollapseThinking({ type: 'collapseThinking' });
+    progress.handleStartProgressGroup({ type: 'startProgressGroup', title: 'Exploring workspace' });
+    progress.handleShowToolAction({ type: 'showToolAction', status: 'success', icon: '📁', text: 'Listed files', detail: '12 files' });
+    progress.handleFinishProgressGroup({ type: 'finishProgressGroup' });
+
+    // ── Iter2: thinking + tool ──
+    streaming.handleStreamThinking({ type: 'streamThinking', content: 'Need to read the file.' });
+    streaming.handleCollapseThinking({ type: 'collapseThinking' });
+    progress.handleStartProgressGroup({ type: 'startProgressGroup', title: 'Reading _sessions.scss' });
+    progress.handleShowToolAction({ type: 'showToolAction', status: 'success', icon: '📄', text: 'Read _sessions.scss', detail: '200 lines' });
+    progress.handleFinishProgressGroup({ type: 'finishProgressGroup' });
+
+    // ── Iter3: thinking + FINAL ANSWER TEXT (no tool calls) ──
+    streaming.handleStreamThinking({ type: 'streamThinking', content: 'Now I can explain the file.' });
+    streaming.handleCollapseThinking({ type: 'collapseThinking' });
+    streaming.handleStreamChunk({ type: 'streamChunk', content: '_sessions.scss is a **SCSS file** that styles the Sessions page.' });
+
+    // During streaming, text is at thread level (group is still open for more thinking/tools)
+    const threadDuring = state.timeline.value[0] as any;
+    const groupDuring = threadDuring.blocks.find((b: any) => b.type === 'thinkingGroup');
+    const textInGroupDuring = groupDuring.sections.filter((s: any) => s.type === 'text');
+    expect(textInGroupDuring.length).toBe(0); // text is NEVER inside the group
+
+    const textBlocksDuring = threadDuring.blocks.filter((b: any) => b.type === 'text' && b.content);
+    expect(textBlocksDuring.length).toBe(1); // text is at thread level
+
+    // Close the group (simulates handleGenerationStopped / handleFinalMessage)
+    streaming.closeActiveThinkingGroup();
+
+    const thread = state.timeline.value[0] as any;
+
+    // ── KEY ASSERTION: final answer must be a thread-level text block ──
+    const textBlocks = thread.blocks.filter((b: any) => b.type === 'text' && b.content);
+    expect(textBlocks.length).toBe(1);
+    expect(textBlocks[0].content).toBe('_sessions.scss is a **SCSS file** that styles the Sessions page.');
+
+    // ── The thinking group must NOT contain any text sections ──
+    const group = thread.blocks.find((b: any) => b.type === 'thinkingGroup');
+    expect(group).toBeDefined();
+    expect(group.collapsed).toBe(true);
+    const textInGroup = group.sections.filter((s: any) => s.type === 'text');
+    expect(textInGroup.length).toBe(0);
+
+    // Group should have: thinking₁ + tools₁ + thinking₂ + tools₂ + thinking₃
+    expect(group.sections.length).toBe(5);
+    expect(group.sections[0].type).toBe('thinkingContent');
+    expect(group.sections[1].type).toBe('tools');
+    expect(group.sections[2].type).toBe('thinkingContent');
+    expect(group.sections[3].type).toBe('tools');
+    expect(group.sections[4].type).toBe('thinkingContent');
+  });
+
+  /** Same scenario via timelineBuilder (history restoration). */
+  test('same scenario from DB: text is outside group (parity)', async () => {
+    const builder = await import('../../../src/webview/scripts/core/timelineBuilder');
+    const normalizeSection = (s: any) => {
+      if (s.type === 'thinkingContent') return { type: 'thinkingContent' };
+      if (s.type === 'text') return { type: 'text', content: s.content };
+      if (s.type === 'tools') return { type: 'tools' };
+      return s;
+    };
+
+    const dbMessages = [
+      makeUiEvent('ui1', 'thinkingBlock', { content: 'Let me explore the workspace.' }),
+      makeUiEvent('ui2', 'startProgressGroup', { title: 'Exploring workspace' }),
+      makeUiEvent('ui3', 'showToolAction', { status: 'success', icon: '📁', text: 'Listed files', detail: '12 files' }),
+      makeUiEvent('ui4', 'finishProgressGroup', {}),
+      makeUiEvent('ui5', 'thinkingBlock', { content: 'Need to read the file.' }),
+      makeUiEvent('ui6', 'startProgressGroup', { title: 'Reading _sessions.scss' }),
+      makeUiEvent('ui7', 'showToolAction', { status: 'success', icon: '📄', text: 'Read _sessions.scss', detail: '200 lines' }),
+      makeUiEvent('ui8', 'finishProgressGroup', {}),
+      makeUiEvent('ui9', 'thinkingBlock', { content: 'Now I can explain the file.' }),
+      { id: 'a1', role: 'assistant', content: '_sessions.scss is a **SCSS file** that styles the Sessions page.' }
+    ];
+
+    const timeline = builder.buildTimelineFromMessages(dbMessages);
+    const thread = timeline[0] as any;
+
+    // ── KEY ASSERTION: final answer must be a thread-level text block ──
+    const textBlocks = thread.blocks.filter((b: any) => b.type === 'text' && b.content);
+    expect(textBlocks.length).toBe(1);
+    expect(textBlocks[0].content).toBe('_sessions.scss is a **SCSS file** that styles the Sessions page.');
+
+    // Group should NOT contain text sections
+    const group = thread.blocks.find((b: any) => b.type === 'thinkingGroup');
+    expect(group).toBeDefined();
+    expect(group.collapsed).toBe(true);
+    const textInGroup = group.sections.filter((s: any) => s.type === 'text');
+    expect(textInGroup.length).toBe(0);
+
+    // Group structure: thinking₁ + tools₁ + thinking₂ + tools₂ + thinking₃
+    expect(group.sections.map(normalizeSection)).toEqual([
+      { type: 'thinkingContent' },
+      { type: 'tools' },
+      { type: 'thinkingContent' },
+      { type: 'tools' },
+      { type: 'thinkingContent' }
+    ]);
+  });
+
+  /** Iteration text (even when followed by tools) goes to thread level. */
+  test('iteration text followed by tools goes to thread level', async () => {
+    const state = await import('../../../src/webview/scripts/core/state');
+    const streaming = await import('../../../src/webview/scripts/core/messageHandlers/streaming');
+    const progress = await import('../../../src/webview/scripts/core/messageHandlers/progress');
+
+    state.timeline.value = [];
+    state.currentStreamIndex.value = null;
+    state.currentAssistantThreadId.value = null;
+    state.currentProgressIndex.value = null;
+
+    // Iter1: thinking + text + tools
+    streaming.handleStreamThinking({ type: 'streamThinking', content: 'Let me check.' });
+    streaming.handleCollapseThinking({ type: 'collapseThinking' });
+    streaming.handleStreamChunk({ type: 'streamChunk', content: 'Checking the file...' });
+    progress.handleStartProgressGroup({ type: 'startProgressGroup', title: 'Reading' });
+    progress.handleShowToolAction({ type: 'showToolAction', status: 'success', icon: '📄', text: 'Read file', detail: '' });
+    progress.handleFinishProgressGroup({ type: 'finishProgressGroup' });
+
+    // Close group
+    streaming.closeActiveThinkingGroup();
+
+    const thread = state.timeline.value[0] as any;
+    const group = thread.blocks.find((b: any) => b.type === 'thinkingGroup');
+
+    // Text NEVER goes inside the group
+    const textInGroup = group.sections.filter((s: any) => s.type === 'text');
+    expect(textInGroup.length).toBe(0);
+
+    // Text is at thread level
+    const textBlocks = thread.blocks.filter((b: any) => b.type === 'text' && b.content);
+    expect(textBlocks.length).toBe(1);
+    expect(textBlocks[0].content).toBe('Checking the file...');
+  });
+
+  /**
+   * BUG SCENARIO: The model produces the answer in iteration N, then the
+   * executor sends "Continue..." and iteration N+1 has thinking + [TASK_COMPLETE].
+   * The final thinkingContent section ends up AFTER the text section, so the
+   * old "check last section" extraction missed the answer text entirely.
+   */
+  test('text followed by trailing thinkingContent: text is extracted (live)', async () => {
+    const state = await import('../../../src/webview/scripts/core/state');
+    const streaming = await import('../../../src/webview/scripts/core/messageHandlers/streaming');
+    const progress = await import('../../../src/webview/scripts/core/messageHandlers/progress');
+
+    state.timeline.value = [];
+    state.currentStreamIndex.value = null;
+    state.currentAssistantThreadId.value = null;
+    state.currentProgressIndex.value = null;
+
+    // Iter1: thinking + tool
+    streaming.handleStreamThinking({ type: 'streamThinking', content: 'Let me search.' });
+    streaming.handleCollapseThinking({ type: 'collapseThinking' });
+    progress.handleStartProgressGroup({ type: 'startProgressGroup', title: 'Searching' });
+    progress.handleShowToolAction({ type: 'showToolAction', status: 'success', icon: '🔍', text: 'Searched', detail: '' });
+    progress.handleFinishProgressGroup({ type: 'finishProgressGroup' });
+
+    // Iter2: thinking + ANSWER TEXT (no tools → executor sends "Continue...")
+    streaming.handleStreamThinking({ type: 'streamThinking', content: 'Now I can answer.' });
+    streaming.handleCollapseThinking({ type: 'collapseThinking' });
+    streaming.handleStreamChunk({ type: 'streamChunk', content: 'The answer is 42.' });
+
+    // Iter3: thinking for [TASK_COMPLETE] response (no text emitted)
+    streaming.handleStreamThinking({ type: 'streamThinking', content: 'Task complete.' });
+    streaming.handleCollapseThinking({ type: 'collapseThinking' });
+    // No streamChunk — model only said [TASK_COMPLETE]
+
+    // Close group (simulates handleGenerationStopped)
+    streaming.closeActiveThinkingGroup();
+
+    const thread = state.timeline.value[0] as any;
+
+    // Answer text must be at thread level
+    const textBlocks = thread.blocks.filter((b: any) => b.type === 'text' && b.content);
+    expect(textBlocks.length).toBe(1);
+    expect(textBlocks[0].content).toBe('The answer is 42.');
+
+    // Group1 must NOT contain text — only T1 + tools + T2
+    const groups = thread.blocks.filter((b: any) => b.type === 'thinkingGroup');
+    expect(groups.length).toBe(2);
+
+    // Group1: thinking₁ + tools₁ + thinking₂ (closed when streamChunk arrived)
+    expect(groups[0].collapsed).toBe(true);
+    expect(groups[0].sections.length).toBe(3);
+    expect(groups[0].sections[0].type).toBe('thinkingContent');
+    expect(groups[0].sections[1].type).toBe('tools');
+    expect(groups[0].sections[2].type).toBe('thinkingContent');
+
+    // Group2: thinking₃ only (opened by streamThinking after text)
+    expect(groups[1].collapsed).toBe(true);
+    expect(groups[1].sections.length).toBe(1);
+    expect(groups[1].sections[0].type).toBe('thinkingContent');
+  });
+
+  /** Same trailing-thinkingContent scenario via timelineBuilder (history). */
+  test('text followed by trailing thinkingContent: text is extracted (history)', async () => {
+    const builder = await import('../../../src/webview/scripts/core/timelineBuilder');
+
+    const dbMessages = [
+      makeUiEvent('ui1', 'thinkingBlock', { content: 'Let me search.' }),
+      makeUiEvent('ui2', 'startProgressGroup', { title: 'Searching' }),
+      makeUiEvent('ui3', 'showToolAction', { status: 'success', icon: '🔍', text: 'Searched', detail: '' }),
+      makeUiEvent('ui4', 'finishProgressGroup', {}),
+      makeUiEvent('ui5', 'thinkingBlock', { content: 'Now I can answer.' }),
+      { id: 'a1', role: 'assistant', content: 'The answer is 42.' },
+      makeUiEvent('ui6', 'thinkingBlock', { content: 'Task complete.' }),
+    ];
+
+    const timeline = builder.buildTimelineFromMessages(dbMessages);
+    const thread = timeline[0] as any;
+
+    // Answer text must be at thread level
+    const textBlocks = thread.blocks.filter((b: any) => b.type === 'text' && b.content);
+    expect(textBlocks.length).toBe(1);
+    expect(textBlocks[0].content).toBe('The answer is 42.');
+
+    // Two separate groups — group1 closed when text arrived, group2 opened for T3
+    const groups = thread.blocks.filter((b: any) => b.type === 'thinkingGroup');
+    expect(groups.length).toBe(2);
+
+    // Group1: thinking₁ + tools + thinking₂
+    expect(groups[0].sections.length).toBe(3);
+    expect(groups[0].sections[0].type).toBe('thinkingContent');
+    expect(groups[0].sections[1].type).toBe('tools');
+    expect(groups[0].sections[2].type).toBe('thinkingContent');
+
+    // Group2: thinking₃
+    expect(groups[1].sections.length).toBe(1);
+    expect(groups[1].sections[0].type).toBe('thinkingContent');
+  });
+});
+
+describe('CRITICAL: Chunked read_file parity - startLine + filePath passthrough', () => {
+  /**
+   * Scenario: Agent reads a file that gets chunked into 2 chunks.
+   * The progress group should contain both chunk actions with startLine,
+   * and the structure must match between live and history.
+   */
+  test('chunked read_file with startLine: live === restored', async () => {
+    // ─── PATH 1: Live handlers ───
+    const state = await import('../../../src/webview/scripts/core/state');
+    const streaming = await import('../../../src/webview/scripts/core/messageHandlers/streaming');
+    const progress = await import('../../../src/webview/scripts/core/messageHandlers/progress');
+
+    state.timeline.value = [];
+    state.currentStreamIndex.value = null;
+    state.currentAssistantThreadId.value = null;
+    state.currentProgressIndex.value = null;
+
+    // Agent streams initial text
+    streaming.handleStreamChunk({ type: 'streamChunk', content: 'Let me read that file.' });
+
+    // Progress group for chunked read
+    progress.handleStartProgressGroup({ type: 'startProgressGroup', title: 'Reading main.ts' });
+
+    // Chunk 1: running then success
+    progress.handleShowToolAction({
+      type: 'showToolAction', status: 'running', icon: '📄',
+      text: 'Reading main.ts', detail: 'lines 1–100',
+      filePath: 'src/main.ts', startLine: 1
+    });
+    progress.handleShowToolAction({
+      type: 'showToolAction', status: 'success', icon: '📄',
+      text: 'Read main.ts', detail: 'lines 1–100',
+      filePath: 'src/main.ts', startLine: 1
+    });
+
+    // Chunk 2: running then success
+    progress.handleShowToolAction({
+      type: 'showToolAction', status: 'running', icon: '📄',
+      text: 'Reading main.ts', detail: 'lines 101–150',
+      filePath: 'src/main.ts', startLine: 101
+    });
+    progress.handleShowToolAction({
+      type: 'showToolAction', status: 'success', icon: '📄',
+      text: 'Read main.ts', detail: 'lines 101–150',
+      filePath: 'src/main.ts', startLine: 101
+    });
+
+    progress.handleFinishProgressGroup({ type: 'finishProgressGroup' });
+
+    const liveThread = state.timeline.value[0] as any;
+    const liveToolsBlock = liveThread.blocks.find((b: any) => b.type === 'tools');
+    const liveGroup = liveToolsBlock.tools[0];
+
+    // Verify live structure
+    expect(liveGroup.title).toBe('Reading main.ts');
+    expect(liveGroup.status).toBe('done');
+    expect(liveGroup.actions.length).toBe(2);
+    expect(liveGroup.actions[0].startLine).toBe(1);
+    expect(liveGroup.actions[0].filePath).toBe('src/main.ts');
+    expect(liveGroup.actions[0].status).toBe('success');
+    expect(liveGroup.actions[0].checkpointId).toBeUndefined();
+    expect(liveGroup.actions[1].startLine).toBe(101);
+    expect(liveGroup.actions[1].filePath).toBe('src/main.ts');
+
+    // ─── PATH 2: Timeline builder (from DB messages) ───
+    const builder = await import('../../../src/webview/scripts/core/timelineBuilder');
+
+    const dbMessages = [
+      { id: 'a1', role: 'assistant', content: 'Let me read that file.' },
+      makeUiEvent('ui1', 'startProgressGroup', { title: 'Reading main.ts' }),
+      makeUiEvent('ui2', 'showToolAction', {
+        status: 'success', icon: '📄', text: 'Read main.ts',
+        detail: 'lines 1–100', filePath: 'src/main.ts', startLine: 1
+      }),
+      makeUiEvent('ui3', 'showToolAction', {
+        status: 'success', icon: '📄', text: 'Read main.ts',
+        detail: 'lines 101–150', filePath: 'src/main.ts', startLine: 101
+      }),
+      { id: 't1', role: 'tool', toolName: 'read_file', toolOutput: '...file content...' },
+      makeUiEvent('ui4', 'finishProgressGroup', {})
+    ];
+
+    const restoredTimeline = builder.buildTimelineFromMessages(dbMessages);
+    const restoredThread = restoredTimeline[0] as any;
+    const restoredToolsBlock = restoredThread.blocks.find((b: any) => b.type === 'tools');
+    const restoredGroup = restoredToolsBlock.tools[0];
+
+    // ─── PARITY CHECK ───
+    // Both should have 2 actions with startLine, filePath, no checkpointId
+    expect(restoredGroup.actions.length).toBe(liveGroup.actions.length);
+    expect(restoredGroup.actions[0].startLine).toBe(liveGroup.actions[0].startLine);
+    expect(restoredGroup.actions[0].filePath).toBe(liveGroup.actions[0].filePath);
+    expect(restoredGroup.actions[0].checkpointId).toBeUndefined();
+    expect(restoredGroup.actions[1].startLine).toBe(liveGroup.actions[1].startLine);
+    expect(restoredGroup.actions[1].filePath).toBe(liveGroup.actions[1].filePath);
+    expect(restoredGroup.status).toBe(liveGroup.status);
+    expect(restoredGroup.title).toBe(liveGroup.title);
+  });
+
+  /**
+   * REGRESSION: File write actions must produce exactly ONE action entry.
+   *
+   * Bug: agentFileEditHandler emitted a running action AND then the approval
+   * branches also emitted running actions, causing 2+ entries in the
+   * progress group. This test verifies:
+   *   - ONE running action (from handler) upgrades to ONE success action
+   *   - No duplicate action lines for the same file
+   *   - Live and restored views show identical action count
+   */
+  test('REGRESSION: write_file produces exactly one action: live === restored', async () => {
+    // ─── PATH 1: Live handlers ───
+    const state = await import('../../../src/webview/scripts/core/state');
+    const streaming = await import('../../../src/webview/scripts/core/messageHandlers/streaming');
+    const progress = await import('../../../src/webview/scripts/core/messageHandlers/progress');
+
+    state.timeline.value = [];
+    state.currentStreamIndex.value = null;
+    state.currentAssistantThreadId.value = null;
+    state.currentProgressIndex.value = null;
+
+    // Agent streams initial text
+    streaming.handleStreamChunk({ type: 'streamChunk', content: 'I will create the file.' });
+
+    // Progress group for file write
+    progress.handleStartProgressGroup({ type: 'startProgressGroup', title: 'Writing files' });
+
+    // Handler emits ONE running action (Creating verb)
+    progress.handleShowToolAction({
+      type: 'showToolAction', status: 'running', icon: '✏️',
+      text: 'Creating utils.ts', detail: ''
+    });
+
+    // Tool runner emits success action
+    progress.handleShowToolAction({
+      type: 'showToolAction', status: 'success', icon: '✏️',
+      text: 'Created utils.ts', detail: '+42',
+      filePath: 'src/utils.ts', checkpointId: 'cp1'
+    });
+
+    progress.handleFinishProgressGroup({ type: 'finishProgressGroup' });
+
+    const liveThread = state.timeline.value[0] as any;
+    const liveToolsBlock = liveThread.blocks.find((b: any) => b.type === 'tools');
+    const liveGroup = liveToolsBlock.tools[0];
+
+    // CRITICAL: Exactly ONE action (running was upgraded to success)
+    expect(liveGroup.title).toBe('Writing files');
+    expect(liveGroup.status).toBe('done');
+    expect(liveGroup.actions.length).toBe(1);
+    expect(liveGroup.actions[0].status).toBe('success');
+    expect(liveGroup.actions[0].text).toBe('Created utils.ts');
+    expect(liveGroup.actions[0].filePath).toBe('src/utils.ts');
+    expect(liveGroup.actions[0].checkpointId).toBe('cp1');
+
+    // ─── PATH 2: Timeline builder (from DB messages) ───
+    const builder = await import('../../../src/webview/scripts/core/timelineBuilder');
+
+    const dbMessages = [
+      { id: 'a1', role: 'assistant', content: 'I will create the file.' },
+      makeUiEvent('ui1', 'startProgressGroup', { title: 'Writing files' }),
+      makeUiEvent('ui2', 'showToolAction', {
+        status: 'running', icon: '✏️', text: 'Creating utils.ts', detail: ''
+      }),
+      makeUiEvent('ui3', 'showToolAction', {
+        status: 'success', icon: '✏️', text: 'Created utils.ts', detail: '+42',
+        filePath: 'src/utils.ts', checkpointId: 'cp1'
+      }),
+      { id: 't1', role: 'tool', toolName: 'write_file', toolOutput: 'File written' },
+      makeUiEvent('ui4', 'finishProgressGroup', {})
+    ];
+
+    const restoredTimeline = builder.buildTimelineFromMessages(dbMessages);
+    const restoredThread = restoredTimeline[0] as any;
+    const restoredToolsBlock = restoredThread.blocks.find((b: any) => b.type === 'tools');
+    const restoredGroup = restoredToolsBlock.tools[0];
+
+    // ─── PARITY CHECK ───
+    expect(restoredGroup.actions.length).toBe(liveGroup.actions.length);
+    expect(restoredGroup.actions.length).toBe(1);
+    expect(restoredGroup.actions[0].status).toBe('success');
+    expect(restoredGroup.actions[0].text).toBe('Created utils.ts');
+    expect(restoredGroup.actions[0].filePath).toBe('src/utils.ts');
+    expect(restoredGroup.actions[0].checkpointId).toBe('cp1');
+    expect(restoredGroup.status).toBe(liveGroup.status);
+    expect(restoredGroup.title).toBe(liveGroup.title);
+  });
+
+  /**
+   * REGRESSION: Editing an existing file uses "Editing" → "Edited" verbs.
+   *
+   * The handler sets _isNew based on whether original content exists.
+   * The running action text must use "Editing file" (not "Write file"),
+   * and the success action must use "Edited file" (not "Added file").
+   */
+  test('REGRESSION: edit of existing file uses correct verbs: live === restored', async () => {
+    // ─── PATH 1: Live handlers ───
+    const state = await import('../../../src/webview/scripts/core/state');
+    const streaming = await import('../../../src/webview/scripts/core/messageHandlers/streaming');
+    const progress = await import('../../../src/webview/scripts/core/messageHandlers/progress');
+
+    state.timeline.value = [];
+    state.currentStreamIndex.value = null;
+    state.currentAssistantThreadId.value = null;
+    state.currentProgressIndex.value = null;
+
+    streaming.handleStreamChunk({ type: 'streamChunk', content: 'Updating the config.' });
+
+    progress.handleStartProgressGroup({ type: 'startProgressGroup', title: 'Writing files' });
+
+    // Handler emits Editing (not Write)
+    progress.handleShowToolAction({
+      type: 'showToolAction', status: 'running', icon: '✏️',
+      text: 'Editing config.ts', detail: ''
+    });
+
+    // Success with Edited (not Added)
+    progress.handleShowToolAction({
+      type: 'showToolAction', status: 'success', icon: '✏️',
+      text: 'Edited config.ts', detail: '+10 -3',
+      filePath: 'src/config.ts', checkpointId: 'cp2'
+    });
+
+    progress.handleFinishProgressGroup({ type: 'finishProgressGroup' });
+
+    const liveThread = state.timeline.value[0] as any;
+    const liveToolsBlock = liveThread.blocks.find((b: any) => b.type === 'tools');
+    const liveGroup = liveToolsBlock.tools[0];
+
+    expect(liveGroup.actions.length).toBe(1);
+    expect(liveGroup.actions[0].text).toBe('Edited config.ts');
+    expect(liveGroup.actions[0].detail).toBe('+10 -3');
+
+    // ─── PATH 2: Timeline builder ───
+    const builder = await import('../../../src/webview/scripts/core/timelineBuilder');
+
+    const dbMessages = [
+      { id: 'a1', role: 'assistant', content: 'Updating the config.' },
+      makeUiEvent('ui1', 'startProgressGroup', { title: 'Writing files' }),
+      makeUiEvent('ui2', 'showToolAction', {
+        status: 'running', icon: '✏️', text: 'Editing config.ts', detail: ''
+      }),
+      makeUiEvent('ui3', 'showToolAction', {
+        status: 'success', icon: '✏️', text: 'Edited config.ts', detail: '+10 -3',
+        filePath: 'src/config.ts', checkpointId: 'cp2'
+      }),
+      { id: 't1', role: 'tool', toolName: 'write_file', toolOutput: 'Written' },
+      makeUiEvent('ui4', 'finishProgressGroup', {})
+    ];
+
+    const restoredTimeline = builder.buildTimelineFromMessages(dbMessages);
+    const restoredThread = restoredTimeline[0] as any;
+    const restoredToolsBlock = restoredThread.blocks.find((b: any) => b.type === 'tools');
+    const restoredGroup = restoredToolsBlock.tools[0];
+
+    expect(restoredGroup.actions.length).toBe(1);
+    expect(restoredGroup.actions[0].text).toBe('Edited config.ts');
+    expect(restoredGroup.actions[0].detail).toBe('+10 -3');
+    expect(restoredGroup.status).toBe(liveGroup.status);
+  });
+
+  /**
+   * REGRESSION: Multiple file writes must produce one action per file.
+   *
+   * When the agent writes 3 files, the progress group must contain
+   * exactly 3 action entries (one per file), not 6 (with duplicates).
+   */
+  test('REGRESSION: multi-file write batch: one action per file, no duplicates', async () => {
+    const state = await import('../../../src/webview/scripts/core/state');
+    const streaming = await import('../../../src/webview/scripts/core/messageHandlers/streaming');
+    const progress = await import('../../../src/webview/scripts/core/messageHandlers/progress');
+
+    state.timeline.value = [];
+    state.currentStreamIndex.value = null;
+    state.currentAssistantThreadId.value = null;
+    state.currentProgressIndex.value = null;
+
+    streaming.handleStreamChunk({ type: 'streamChunk', content: 'Creating three files.' });
+
+    progress.handleStartProgressGroup({ type: 'startProgressGroup', title: 'Writing files' });
+
+    // File 1: running → success
+    progress.handleShowToolAction({
+      type: 'showToolAction', status: 'running', icon: '✏️',
+      text: 'Creating a.ts', detail: ''
+    });
+    progress.handleShowToolAction({
+      type: 'showToolAction', status: 'success', icon: '✏️',
+      text: 'Created a.ts', detail: '+20',
+      filePath: 'src/a.ts', checkpointId: 'cp1'
+    });
+
+    // File 2: running → success
+    progress.handleShowToolAction({
+      type: 'showToolAction', status: 'running', icon: '✏️',
+      text: 'Editing b.ts', detail: ''
+    });
+    progress.handleShowToolAction({
+      type: 'showToolAction', status: 'success', icon: '✏️',
+      text: 'Edited b.ts', detail: '+5 -2',
+      filePath: 'src/b.ts', checkpointId: 'cp1'
+    });
+
+    // File 3: running → success
+    progress.handleShowToolAction({
+      type: 'showToolAction', status: 'running', icon: '✏️',
+      text: 'Creating c.ts', detail: ''
+    });
+    progress.handleShowToolAction({
+      type: 'showToolAction', status: 'success', icon: '✏️',
+      text: 'Created c.ts', detail: '+35',
+      filePath: 'src/c.ts', checkpointId: 'cp1'
+    });
+
+    progress.handleFinishProgressGroup({ type: 'finishProgressGroup' });
+
+    const liveThread = state.timeline.value[0] as any;
+    const liveToolsBlock = liveThread.blocks.find((b: any) => b.type === 'tools');
+    const liveGroup = liveToolsBlock.tools[0];
+
+    // CRITICAL: Exactly 3 actions (one per file), not 6
+    expect(liveGroup.actions.length).toBe(3);
+    expect(liveGroup.actions[0].text).toBe('Created a.ts');
+    expect(liveGroup.actions[1].text).toBe('Edited b.ts');
+    expect(liveGroup.actions[2].text).toBe('Created c.ts');
+    expect(liveGroup.status).toBe('done');
+
+    // Verify restored
+    const builder = await import('../../../src/webview/scripts/core/timelineBuilder');
+
+    const dbMessages = [
+      { id: 'a1', role: 'assistant', content: 'Creating three files.' },
+      makeUiEvent('ui1', 'startProgressGroup', { title: 'Writing files' }),
+      makeUiEvent('ui2', 'showToolAction', { status: 'running', icon: '✏️', text: 'Creating a.ts', detail: '' }),
+      makeUiEvent('ui3', 'showToolAction', { status: 'success', icon: '✏️', text: 'Created a.ts', detail: '+20', filePath: 'src/a.ts', checkpointId: 'cp1' }),
+      { id: 't1', role: 'tool', toolName: 'write_file', toolOutput: 'Written' },
+      makeUiEvent('ui4', 'showToolAction', { status: 'running', icon: '✏️', text: 'Editing b.ts', detail: '' }),
+      makeUiEvent('ui5', 'showToolAction', { status: 'success', icon: '✏️', text: 'Edited b.ts', detail: '+5 -2', filePath: 'src/b.ts', checkpointId: 'cp1' }),
+      { id: 't2', role: 'tool', toolName: 'write_file', toolOutput: 'Written' },
+      makeUiEvent('ui6', 'showToolAction', { status: 'running', icon: '✏️', text: 'Creating c.ts', detail: '' }),
+      makeUiEvent('ui7', 'showToolAction', { status: 'success', icon: '✏️', text: 'Created c.ts', detail: '+35', filePath: 'src/c.ts', checkpointId: 'cp1' }),
+      { id: 't3', role: 'tool', toolName: 'write_file', toolOutput: 'Written' },
+      makeUiEvent('ui8', 'finishProgressGroup', {})
+    ];
+
+    const restoredTimeline = builder.buildTimelineFromMessages(dbMessages);
+    const restoredThread = restoredTimeline[0] as any;
+    const restoredToolsBlock = restoredThread.blocks.find((b: any) => b.type === 'tools');
+    const restoredGroup = restoredToolsBlock.tools[0];
+
+    expect(restoredGroup.actions.length).toBe(3);
+    expect(restoredGroup.actions[0].text).toBe('Created a.ts');
+    expect(restoredGroup.actions[1].text).toBe('Edited b.ts');
+    expect(restoredGroup.actions[2].text).toBe('Created c.ts');
+    expect(restoredGroup.status).toBe(liveGroup.status);
   });
 });

@@ -50,7 +50,7 @@ interface AssistantThreadItem {
   id: string;
   type: 'assistantThread';
   role: 'assistant';
-  blocks: Array<TextBlock | ToolsBlock | ThinkingBlock>;
+  blocks: Array<TextBlock | ToolsBlock | ThinkingBlock | ThinkingGroupBlock>;
   model?: string;
 }
 
@@ -69,24 +69,57 @@ interface ThinkingBlock {
   content: string;
   collapsed: boolean;
 }
+
+interface ThinkingGroupBlock {
+  type: 'thinkingGroup';
+  sections: Array<ThinkingGroupSection>;
+  collapsed: boolean;
+  streaming: boolean;
+  totalDurationSeconds?: number;
+}
+
+type ThinkingGroupSection =
+  | { type: 'thinkingContent'; content: string; durationSeconds?: number; startTime?: number }
+  | ToolsBlock;
 ```
 
-**Block ordering**: Blocks are added sequentially as events occur:
-1. Thread starts with empty text block: `[{ type: 'text', content: '' }]`
-2. Thinking (if model supports `think`): `[text, { type: 'thinking', content: '...', collapsed: false }]`
-3. After thinking collapses: `collapsed` flips to `true`, then text block follows
-4. When tools start: `[text, thinking, text, { type: 'tools', tools: [...] }]`
-5. More thinking + tools: blocks continue alternating as the model iterates
-6. Final summary: `[text, thinking, text, tools, text, thinking, text]`
+### ThinkingGroup — Grouped Thinking + Read/Search Tools
+
+For thinking models (`think=true`), the webview groups thinking content and **read/search** tool actions into a single **collapsible `<details>` element** called a ThinkingGroup. This keeps the UI compact: reads, searches, and exploratory actions are bundled under the "Thought for Xs" pill.
+
+**What goes INSIDE the ThinkingGroup:**
+- Thinking content sections (`thinkingContent`)
+- Read-only progress groups: `Reading files`, `Exploring workspace`, `Searching codebase`
+
+**What goes OUTSIDE the ThinkingGroup (at thread level):**
+- Write progress groups: `Writing files`, `Modifying files`, `Creating files`
+- Text blocks (streamed text is always at thread level)
+
+**Block ordering with ThinkingGroup:**
+1. Thread starts with empty text block: `[text]`
+2. Thinking starts: `[text, thinkingGroup{thinking₁}]`
+3. Read tools inside group: `[text, thinkingGroup{thinking₁, tools₁(reads), thinking₂}]`
+4. Write tools close group + appear at thread level: `[text, thinkingGroup{...collapsed}] [tools₂(writes)]`
+5. More thinking + tools: new groups can start for subsequent iterations
+6. Final summary: append/create text block as last entry
+
+### Write Groups Close the ThinkingGroup
+
+When `handleStartProgressGroup` receives a progress group whose title matches the write pattern (`/\b(writ|modif|creat)/i`), it **closes the active ThinkingGroup first** via `closeActiveThinkingGroup()`. This happens in both:
+- **Live handler**: `src/webview/scripts/core/messageHandlers/progress.ts`
+- **History builder**: `src/webview/scripts/core/timelineBuilder.ts`
+
+The `isWriteGroupTitle()` regex matches titles like "Writing files", "Modifying files", "Creating config.ts".
 
 ### Thinking Block UI
 
 When a model supports `think=true`, its internal reasoning is streamed via `streamThinking` messages and rendered as a collapsible `<details>` element:
 
 - **Live streaming**: Content streams in real-time, `<details>` is **open** (not collapsed).
-- **Collapse**: When thinking finishes, the backend sends `collapseThinking` → `collapsed` flips to `true`, `<details>` closes.
+- **Collapse**: When the backend detects native tool_calls during streaming, it sends `collapseThinking` with accurate `durationSeconds` immediately — the thinking header changes from "Thinking..." → "Thought for 8s" right then, without waiting for the stream to end.
+- **Duration accuracy**: `durationSeconds` is computed from `lastThinkingTimestamp - thinkingStartTime` (excludes Ollama's tool_call buffering time). The webview prefers the backend-provided duration; falls back to `Date.now() - startTime` if not provided.
 - **Visual style**: Rendered as a 💭 "Thought" pill. No chevron indicator — just a simple toggle.
-- **History rebuild**: `timelineBuilder.ts` handles `thinkingBlock` UI events by creating `ThinkingBlock` with `collapsed: true` (thinking is always finished in history).
+- **History rebuild**: `timelineBuilder.ts` handles `thinkingBlock` UI events by creating collapsed thinking sections inside ThinkingGroups. Duration is carried in the persisted event payload.
 
 ### First-Chunk Streaming Gate
 
@@ -100,6 +133,38 @@ To prevent incomplete markdown (e.g., `**What` rendering as literal text instead
 - The assistant thread is the only container for tool UI blocks during an assistant response.
 - Never render tool blocks as standalone timeline items outside the assistant thread.
 - Both live handlers and `timelineBuilder` create an initial empty text block for consistency.
+
+## Progress Group Rendering Modes
+
+`ProgressGroup.vue` has two rendering modes controlled by the `isCompletedFileGroup` computed:
+
+### Flat Mode (File Edits)
+When the group is `done` AND every action has both `filePath` and `checkpointId`, the group renders as a flat list of file edits with verb, filename, and `+N -N` diff stats. Clicking a filename opens the diff view.
+
+### Normal Mode (Default)
+For all other groups (reads, searches, commands, mixed operations), the group renders with a collapsible header, status icons, and individual action items.
+
+### ⚠️ `isCompletedFileGroup` Guard (Critical Regression Point)
+```typescript
+const isCompletedFileGroup = computed(() =>
+  props.item.status === 'done' &&
+  props.item.actions.length > 0 &&
+  props.item.actions.every(a => a.filePath && a.checkpointId)
+);
+```
+The `checkpointId` requirement is **critical**. Read actions have `filePath` (for click-to-open) but NOT `checkpointId`. Without this guard, chunked read actions would incorrectly render in flat mode.
+
+### Action Click Handling
+- **With `checkpointId`**: Opens file diff view via `openFileChangeDiff(checkpointId, filePath)`
+- **Without `checkpointId`**: Opens the source file via `openWorkspaceFile(filePath, startLine)` — used for `read_file` chunks
+- **`startLine`**: Optional line number for positioning the cursor (set by chunked read)
+
+### Tree Listing (list_files / search_workspace)
+Actions with multi-line `detail` (containing `\n`) render as a tree with connectors:
+- `├` for intermediary entries, `└` for the last entry
+- Folders are bold and clickable → `revealInExplorer(fullPath)`
+- Files are clickable → `openWorkspaceFile(fullPath)`
+- `detail` format: `"summary\tbasePath\n📁 name\n📄 name\tsize"` — basePath is tab-separated on the first line for path construction
 
 ## UI Event Persistence
 
@@ -296,11 +361,33 @@ The widget is pinned to the bottom of the chat (below the input area), not embed
 
 | Action | Handler | Effect |
 |--------|---------|--------|
-| Agent writes files | `handleFilesChanged()` | Creates/merges block in `filesChangedBlocks` by `checkpointId` |
+| Agent writes files | `handleFilesChanged()` | Creates/merges block in `filesChangedBlocks` by `checkpointId`; re-requests stats on re-edits |
 | Stats arrive | `handleFilesDiffStats()` | Populates `additions`/`deletions` on matching files |
-| Single keep/undo | `handleFileChangeResult()` | Splices file out of block; removes block if empty |
-| Keep All / Undo All | `handleKeepUndoResult()` | Removes entire block |
+| Single keep/undo (click) | `FilesChanged.vue` click handler | **Optimistic UI**: `removeFileOptimistic()` removes file immediately, recalculates totals, cleans up empty checkpointIds/block. THEN sends `keepFile`/`undoFile` to backend. |
+| Single keep/undo (response) | `handleFileChangeResult()` | **Safety net only**: removes file if still present (usually already gone from optimistic removal) |
+| Keep All / Undo All (click) | `FilesChanged.vue` click handler | **Optimistic UI**: `filesChangedBlocks.value = []` immediately, then sends backend message |
+| Keep All / Undo All (response) | `handleKeepUndoResult()` | Removes block (usually already cleared by optimistic UI) |
+| Re-edit detected | `handleFilesChanged()` | When all incoming files already exist (`added=false`), still sends `requestFilesDiffStats` to refresh stale stats |
 | Session cleared | `handleClearMessages()` | Sets `filesChangedBlocks.value = []` |
+
+### ⚠️ Optimistic UI Pattern (Keep/Undo)
+
+The filesChanged widget uses **optimistic UI** for keep/undo operations. The file is removed from the widget **immediately in the click handler** (inside the Vue component), before the backend round-trip completes. This guarantees Vue reactivity, since the mutation happens in a synchronous component method.
+
+**Why not rely on the message handler?** Three approaches were attempted for handling removal in the `handleFileChangeResult` response handler:
+1. `filter()` + reassignment — failed in practice
+2. Fully immutable object replacement — failed in practice
+3. `triggerRef()` — failed in practice
+
+All three suffered from Vue reactivity quirks with deeply nested reactive arrays inside `ref()`. The optimistic approach bypasses the problem entirely.
+
+**`FilesChanged.vue` → `removeFileOptimistic()`** handles:
+- Removing the file from `block.files` via `splice()`
+- Recalculating `totalAdditions` / `totalDeletions`
+- Cleaning up `checkpointIds` when no files reference a checkpoint
+- Clearing `filesChangedBlocks.value = []` when the block becomes empty
+
+**`handleFileChangeResult`** is retained as a **safety net** for edge cases (e.g., session restore where the optimistic handler wasn't active).
 
 ### History Restoration
 

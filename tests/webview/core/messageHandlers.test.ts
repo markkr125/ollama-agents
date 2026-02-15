@@ -45,6 +45,66 @@ describe('streaming handlers', () => {
     const thread = state.timeline.value[0] as any;
     expect(thread.blocks[0].content).toBe('Hello World');
   });
+
+  // Regression: Vue reactivity bug — activeStreamBlock must reference the
+  // Proxy-wrapped object returned by the reactive array, not the raw object
+  // that was pushed. Without the fix, writes to .content bypass the Proxy's
+  // set trap and the reactive array never reflects the updated content.
+  test('many consecutive streamChunks all reflect on the reactive timeline (reactivity regression)', async () => {
+    const state = await import('../../../src/webview/scripts/core/state');
+    const handlers = await import('../../../src/webview/scripts/core/messageHandlers/streaming');
+
+    state.timeline.value = [];
+    state.currentStreamIndex.value = null;
+    state.currentAssistantThreadId.value = null;
+
+    // Simulate 10 accumulated chunks — each grows by one word.
+    // The bug caused only the first chunk to be visible because
+    // activeStreamBlock pointed to the raw object, not the Proxy.
+    const words = ['The', 'quick', 'brown', 'fox', 'jumps', 'over', 'the', 'lazy', 'dog', '.'];
+    for (let i = 0; i < words.length; i++) {
+      const accumulated = words.slice(0, i + 1).join(' ');
+      handlers.handleStreamChunk({ type: 'streamChunk', content: accumulated });
+
+      // After EVERY chunk, the reactive timeline must reflect the update
+      const thread = state.timeline.value[0] as any;
+      expect(thread.blocks[0].content).toBe(accumulated);
+    }
+
+    // Final content must be the full sentence
+    const thread = state.timeline.value[0] as any;
+    expect(thread.blocks.length).toBe(1);
+    expect(thread.blocks[0].content).toBe('The quick brown fox jumps over the lazy dog .');
+  });
+
+  test('streamChunk after thinking reset creates new block with reactive content (reactivity regression)', async () => {
+    const state = await import('../../../src/webview/scripts/core/state');
+    const handlers = await import('../../../src/webview/scripts/core/messageHandlers/streaming');
+
+    state.timeline.value = [];
+    state.currentStreamIndex.value = null;
+    state.currentAssistantThreadId.value = null;
+
+    // First iteration: stream some text
+    handlers.handleStreamChunk({ type: 'streamChunk', content: 'First answer' });
+
+    // Thinking triggers a new iteration, resetting activeStreamBlock
+    handlers.handleStreamThinking({ type: 'streamThinking', content: 'Planning...' });
+    handlers.handleCollapseThinking({ type: 'collapseThinking' });
+
+    // Second iteration: stream text into a NEW block
+    // With the bug, the new block's .content writes would be invisible
+    handlers.handleStreamChunk({ type: 'streamChunk', content: 'A' });
+    handlers.handleStreamChunk({ type: 'streamChunk', content: 'AB' });
+    handlers.handleStreamChunk({ type: 'streamChunk', content: 'ABC' });
+
+    const thread = state.timeline.value[0] as any;
+    // Should have: text("First answer"), thinkingGroup, text("ABC")
+    const textBlocks = thread.blocks.filter((b: any) => b.type === 'text');
+    expect(textBlocks.length).toBe(2);
+    expect(textBlocks[0].content).toBe('First answer');
+    expect(textBlocks[1].content).toBe('ABC');
+  });
 });
 
 describe('progress group handlers', () => {
@@ -610,7 +670,7 @@ describe('connectionTestResult handler', () => {
 });
 
 describe('thinking block handlers', () => {
-  test('handleStreamThinking creates thinking block in assistant thread', async () => {
+  test('handleStreamThinking creates thinkingGroup in assistant thread', async () => {
     const state = await import('../../../src/webview/scripts/core/state');
     const handlers = await import('../../../src/webview/scripts/core/messageHandlers/streaming');
 
@@ -622,14 +682,16 @@ describe('thinking block handlers', () => {
 
     expect(state.timeline.value.length).toBe(1);
     const thread = state.timeline.value[0] as any;
-    // Should have: empty text block + thinking block
-    const thinkingBlocks = thread.blocks.filter((b: any) => b.type === 'thinking');
-    expect(thinkingBlocks.length).toBe(1);
-    expect(thinkingBlocks[0].content).toBe('Let me think...');
-    expect(thinkingBlocks[0].collapsed).toBe(false);
+    const groups = thread.blocks.filter((b: any) => b.type === 'thinkingGroup');
+    expect(groups.length).toBe(1);
+    expect(groups[0].sections.length).toBe(1);
+    expect(groups[0].sections[0].type).toBe('thinkingContent');
+    expect(groups[0].sections[0].content).toBe('Let me think...');
+    expect(groups[0].collapsed).toBe(false);
+    expect(groups[0].streaming).toBe(true);
   });
 
-  test('handleStreamThinking updates existing uncollapsed thinking block', async () => {
+  test('handleStreamThinking updates existing thinkingContent section in group', async () => {
     const state = await import('../../../src/webview/scripts/core/state');
     const handlers = await import('../../../src/webview/scripts/core/messageHandlers/streaming');
 
@@ -641,13 +703,14 @@ describe('thinking block handlers', () => {
     handlers.handleStreamThinking({ type: 'streamThinking', content: 'Step 1\nStep 2' });
 
     const thread = state.timeline.value[0] as any;
-    const thinkingBlocks = thread.blocks.filter((b: any) => b.type === 'thinking');
-    // Should still be one block, updated
-    expect(thinkingBlocks.length).toBe(1);
-    expect(thinkingBlocks[0].content).toBe('Step 1\nStep 2');
+    const groups = thread.blocks.filter((b: any) => b.type === 'thinkingGroup');
+    // Should still be one group with one section, updated
+    expect(groups.length).toBe(1);
+    expect(groups[0].sections.length).toBe(1);
+    expect(groups[0].sections[0].content).toBe('Step 1\nStep 2');
   });
 
-  test('handleCollapseThinking collapses uncollapsed thinking blocks', async () => {
+  test('handleCollapseThinking does not collapse the group (only marks round done)', async () => {
     const state = await import('../../../src/webview/scripts/core/state');
     const handlers = await import('../../../src/webview/scripts/core/messageHandlers/streaming');
 
@@ -658,14 +721,16 @@ describe('thinking block handlers', () => {
     handlers.handleStreamThinking({ type: 'streamThinking', content: 'My reasoning' });
 
     const thread = state.timeline.value[0] as any;
-    const thinkingBlock = thread.blocks.find((b: any) => b.type === 'thinking');
-    expect(thinkingBlock.collapsed).toBe(false);
+    const group = thread.blocks.find((b: any) => b.type === 'thinkingGroup');
+    expect(group.collapsed).toBe(false);
+    expect(group.streaming).toBe(true);
 
     handlers.handleCollapseThinking({ type: 'collapseThinking' });
-    expect(thinkingBlock.collapsed).toBe(true);
+    // Group stays open — only closeActiveThinkingGroup/finalMessage closes it
+    expect(group.collapsed).toBe(false);
   });
 
-  test('new streamThinking after collapse creates a new block', async () => {
+  test('new streamThinking after collapse creates a new section in same group', async () => {
     const state = await import('../../../src/webview/scripts/core/state');
     const handlers = await import('../../../src/webview/scripts/core/messageHandlers/streaming');
 
@@ -681,12 +746,15 @@ describe('thinking block handlers', () => {
     handlers.handleStreamThinking({ type: 'streamThinking', content: 'Second thought' });
 
     const thread = state.timeline.value[0] as any;
-    const thinkingBlocks = thread.blocks.filter((b: any) => b.type === 'thinking');
-    expect(thinkingBlocks.length).toBe(2);
-    expect(thinkingBlocks[0].content).toBe('First thought');
-    expect(thinkingBlocks[0].collapsed).toBe(true);
-    expect(thinkingBlocks[1].content).toBe('Second thought');
-    expect(thinkingBlocks[1].collapsed).toBe(false);
+    const groups = thread.blocks.filter((b: any) => b.type === 'thinkingGroup');
+    // One group with two thinkingContent sections
+    expect(groups.length).toBe(1);
+    expect(groups[0].sections.length).toBe(2);
+    expect(groups[0].sections[0].type).toBe('thinkingContent');
+    expect(groups[0].sections[0].content).toBe('First thought');
+    expect(groups[0].sections[1].type).toBe('thinkingContent');
+    expect(groups[0].sections[1].content).toBe('Second thought');
+    expect(groups[0].streaming).toBe(true);
   });
 });
 
@@ -723,5 +791,107 @@ describe('warning banner handler', () => {
 
     expect(state.warningBanner.visible).toBe(false);
     expect(state.warningBanner.message).toBe('');
+  });
+});
+
+describe('chunked read_file handlers', () => {
+  test('handleShowToolAction preserves startLine on action items', async () => {
+    const state = await import('../../../src/webview/scripts/core/state');
+    const handlers = await import('../../../src/webview/scripts/core/messageHandlers/progress');
+
+    state.timeline.value = [];
+    state.currentProgressIndex.value = null;
+    state.currentStreamIndex.value = null;
+    state.currentAssistantThreadId.value = null;
+
+    handlers.handleStartProgressGroup({ type: 'startProgressGroup', title: 'Reading file' });
+    handlers.handleShowToolAction({
+      type: 'showToolAction',
+      status: 'success',
+      icon: '📄',
+      text: 'Read main.ts',
+      detail: 'lines 1–100',
+      filePath: 'src/main.ts',
+      startLine: 1
+    });
+
+    const thread = state.timeline.value[0] as any;
+    const group = thread.blocks[1].tools[0];
+    expect(group.actions[0].startLine).toBe(1);
+    expect(group.actions[0].filePath).toBe('src/main.ts');
+  });
+
+  test('handleShowToolAction preserves filePath without checkpointId for reads', async () => {
+    const state = await import('../../../src/webview/scripts/core/state');
+    const handlers = await import('../../../src/webview/scripts/core/messageHandlers/progress');
+
+    state.timeline.value = [];
+    state.currentProgressIndex.value = null;
+    state.currentStreamIndex.value = null;
+    state.currentAssistantThreadId.value = null;
+
+    handlers.handleStartProgressGroup({ type: 'startProgressGroup', title: 'Reading' });
+    handlers.handleShowToolAction({
+      type: 'showToolAction',
+      status: 'success',
+      icon: '📄',
+      text: 'Read config.ts',
+      detail: 'lines 1–50',
+      filePath: 'src/config.ts',
+      startLine: 1
+    });
+
+    const thread = state.timeline.value[0] as any;
+    const action = thread.blocks[1].tools[0].actions[0];
+    expect(action.filePath).toBe('src/config.ts');
+    expect(action.checkpointId).toBeUndefined();
+    expect(action.startLine).toBe(1);
+  });
+
+  test('multiple chunk success actions create separate action items', async () => {
+    const state = await import('../../../src/webview/scripts/core/state');
+    const handlers = await import('../../../src/webview/scripts/core/messageHandlers/progress');
+
+    state.timeline.value = [];
+    state.currentProgressIndex.value = null;
+    state.currentStreamIndex.value = null;
+    state.currentAssistantThreadId.value = null;
+
+    handlers.handleStartProgressGroup({ type: 'startProgressGroup', title: 'Reading file.ts' });
+
+    // Chunk 1 running then success
+    handlers.handleShowToolAction({
+      type: 'showToolAction', status: 'running', icon: '📄',
+      text: 'Reading file.ts', detail: 'lines 1–100',
+      filePath: 'src/file.ts', startLine: 1
+    });
+    handlers.handleShowToolAction({
+      type: 'showToolAction', status: 'success', icon: '📄',
+      text: 'Read file.ts', detail: 'lines 1–100',
+      filePath: 'src/file.ts', startLine: 1
+    });
+
+    // Chunk 2 running then success
+    handlers.handleShowToolAction({
+      type: 'showToolAction', status: 'running', icon: '📄',
+      text: 'Reading file.ts', detail: 'lines 101–200',
+      filePath: 'src/file.ts', startLine: 101
+    });
+    handlers.handleShowToolAction({
+      type: 'showToolAction', status: 'success', icon: '📄',
+      text: 'Read file.ts', detail: 'lines 101–200',
+      filePath: 'src/file.ts', startLine: 101
+    });
+
+    handlers.handleFinishProgressGroup({ type: 'finishProgressGroup' });
+
+    const thread = state.timeline.value[0] as any;
+    const group = thread.blocks[1].tools[0];
+    expect(group.status).toBe('done');
+    expect(group.actions.length).toBe(2);
+    expect(group.actions[0].text).toBe('Read file.ts');
+    expect(group.actions[0].detail).toBe('lines 1–100');
+    expect(group.actions[1].text).toBe('Read file.ts');
+    expect(group.actions[1].detail).toBe('lines 101–200');
   });
 });

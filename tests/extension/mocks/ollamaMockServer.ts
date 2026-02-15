@@ -2,7 +2,9 @@ import * as http from 'http';
 
 export type OllamaMockScenario =
   | { type: 'static' }
-  | { type: 'chatEcho' };
+  | { type: 'chatEcho' }
+  | { type: 'chatMultiChunk'; chunks: string[] }
+  | { type: 'chatHang' };
 
 export interface OllamaMockServer {
   baseUrl: string;
@@ -79,6 +81,33 @@ export async function startOllamaMockServer(
             { model: parsed.model, message: { role: 'assistant', content: content.slice(0, 4) }, done: false },
             { model: parsed.model, message: { role: 'assistant', content: content.slice(4) }, done: true }
           ]);
+          return;
+        }
+
+        if (scenario.type === 'chatMultiChunk') {
+          const objs = scenario.chunks.map((c, i) => ({
+            model: parsed.model,
+            message: { role: 'assistant', content: c },
+            done: i === scenario.chunks.length - 1
+          }));
+          writeNDJSON(res, objs);
+          return;
+        }
+
+        // Sends one chunk then holds the connection open indefinitely.
+        // Used to test that AbortSignal terminates the stream immediately.
+        if (scenario.type === 'chatHang') {
+          res.statusCode = 200;
+          res.setHeader('Content-Type', 'application/x-ndjson');
+          res.setHeader('Cache-Control', 'no-cache');
+          res.write(JSON.stringify({
+            model: parsed.model,
+            message: { role: 'assistant', content: 'partial' },
+            done: false
+          }) + '\n');
+          // Deliberately never call res.end() — the connection stays open
+          // until the client aborts or the server shuts down.
+          req.on('close', () => { try { res.end(); } catch {} });
           return;
         }
 

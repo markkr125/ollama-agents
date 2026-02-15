@@ -9,6 +9,7 @@ import { CompletionProvider } from './providers/completionProvider';
 import { disposeDatabaseService, getDatabaseService } from './services/database/databaseService';
 import { ModelManager } from './services/model/modelManager';
 import { OllamaClient } from './services/model/ollamaClient';
+import { OriginalContentProvider } from './services/originalContentProvider';
 import { PendingEditDecorationProvider } from './services/pendingEditDecorationProvider';
 import { PendingEditReviewService } from './services/review/pendingEditReviewService';
 import { TokenManager } from './services/tokenManager';
@@ -132,6 +133,13 @@ function registerFileDecorations(context: vscode.ExtensionContext, s: ServiceCon
 
 function registerReviewService(context: vscode.ExtensionContext, s: ServiceContainer): void {
   context.subscriptions.push(s.pendingEditReviewService);
+
+  // Register content provider for the multi-diff "View All Edits" feature
+  const databaseService = getDatabaseService();
+  const originalContentProvider = new OriginalContentProvider(databaseService);
+  context.subscriptions.push(
+    vscode.workspace.registerTextDocumentContentProvider('ollama-original', originalContentProvider)
+  );
 
   context.subscriptions.push(
     vscode.commands.registerCommand('ollamaCopilot.reviewNextFile', () => s.pendingEditReviewService.navigateFile('next')),

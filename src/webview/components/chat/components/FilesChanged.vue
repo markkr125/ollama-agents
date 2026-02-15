@@ -13,6 +13,7 @@
       <span class="files-changed-actions" @click.stop>
         <button class="fc-btn fc-btn-keep" title="Keep all changes" @click="handleKeepAll">Keep All</button>
         <button class="fc-btn fc-btn-undo" title="Undo all changes" @click="handleUndoAll">Undo All</button>
+        <button class="fc-btn fc-btn-view-all" title="View all edits" @click="handleViewAllEdits">⧉</button>
       </span>
     </div>
 
@@ -25,20 +26,23 @@
         @click="handleOpenReview(file.path, file.checkpointId)"
       >
         <span class="file-ext-badge" :class="fileExtClass(file.path)">{{ fileExt(file.path) }}</span>
-        <span class="file-name" :title="file.path">{{ fileName(file.path) }}</span>
-        <span v-if="fileDir(file.path)" class="file-dir">{{ fileDir(file.path) }}</span>
+        <span class="file-identity" :title="file.path">
+          <span class="file-name">{{ fileName(file.path) }}</span>
+          <span v-if="fileDir(file.path)" class="file-dir">{{ fileDir(file.path) }}</span>
+        </span>
         <span v-if="file.additions != null" class="file-stats">
           <span class="stat-add">+{{ file.additions }}</span>
           <span class="stat-del">-{{ file.deletions }}</span>
         </span>
-        <span class="file-actions" @click.stop>
-          <button class="fc-file-btn" title="Keep this file" @click="handleKeepFile(file.path, file.checkpointId)">✓</button>
-          <button class="fc-file-btn" title="Undo this file" @click="handleUndoFile(file.path, file.checkpointId)">↩</button>
+          <span class="file-actions" @click.stop>
+          <button class="fc-file-btn fc-file-btn--keep" title="Keep this file" @click="handleKeepFile(file.path, file.checkpointId)">✓</button>
+          <button class="fc-file-btn fc-file-btn--undo" title="Undo this file" @click="handleUndoFile(file.path, file.checkpointId)">⟲</button>
+          <button class="fc-file-btn fc-file-btn--diff" title="View diff" @click="handleOpenReview(file.path, file.checkpointId)">🗎</button>
         </span>
       </div>
     </div>
 
-    <div v-if="block.totalChanges" class="files-changed-nav" @click.stop>
+    <div v-if="block.totalChanges && block.totalChanges > 1" class="files-changed-nav" @click.stop>
       <span class="fc-nav-label">Change {{ block.currentChange ?? 0 }} of {{ block.totalChanges }}</span>
       <button class="fc-nav-arrow-btn" title="Previous change" @click="handleNavPrev">←</button>
       <button class="fc-nav-arrow-btn" title="Next change" @click="handleNavNext">→</button>
@@ -47,7 +51,8 @@
 </template>
 
 <script setup lang="ts">
-import { keepAllChanges, keepFile, navigateNextChange, navigatePrevChange, openFileChangeReview, undoAllChanges, undoFile } from '../../../scripts/core/actions';
+import { keepAllChanges, keepFile, navigateNextChange, navigatePrevChange, openFileChangeReview, undoAllChanges, undoFile, viewAllEdits } from '../../../scripts/core/actions';
+import { filesChangedBlocks } from '../../../scripts/core/state';
 import type { AssistantThreadFilesChangedBlock } from '../../../scripts/core/types';
 
 const props = defineProps<{
@@ -93,20 +98,62 @@ const handleOpenReview = (filePath: string, checkpointId: string) => {
   openFileChangeReview(checkpointId, filePath);
 };
 
+/**
+ * Optimistic UI: remove a file from the block immediately on click,
+ * before the backend round-trip. Recalculates totals and cleans up
+ * empty checkpointIds / block.
+ */
+const removeFileOptimistic = (filePath: string, checkpointId: string) => {
+  const idx = props.block.files.findIndex(f => f.path === filePath && f.checkpointId === checkpointId);
+  if (idx < 0) return;
+
+  props.block.files.splice(idx, 1);
+
+  // Recalculate totals
+  let totalAdd = 0, totalDel = 0;
+  for (const f of props.block.files) {
+    totalAdd += f.additions ?? 0;
+    totalDel += f.deletions ?? 0;
+  }
+  props.block.totalAdditions = totalAdd;
+  props.block.totalDeletions = totalDel;
+
+  // Clean up checkpointId if no files reference it
+  if (!props.block.files.some(f => f.checkpointId === checkpointId)) {
+    const cidx = props.block.checkpointIds.indexOf(checkpointId);
+    if (cidx >= 0) props.block.checkpointIds.splice(cidx, 1);
+  }
+
+  // Remove block entirely if empty
+  if (props.block.files.length === 0) {
+    filesChangedBlocks.value = [];
+  }
+};
+
 const handleKeepFile = (filePath: string, checkpointId: string) => {
+  removeFileOptimistic(filePath, checkpointId);
   keepFile(checkpointId, filePath);
 };
 
 const handleUndoFile = (filePath: string, checkpointId: string) => {
+  removeFileOptimistic(filePath, checkpointId);
   undoFile(checkpointId, filePath);
 };
 
 const handleKeepAll = () => {
-  keepAllChanges(props.block.checkpointIds);
+  const cpIds = [...props.block.checkpointIds];
+  filesChangedBlocks.value = [];
+  keepAllChanges(cpIds);
 };
 
 const handleUndoAll = () => {
-  undoAllChanges(props.block.checkpointIds);
+  const cpIds = [...props.block.checkpointIds];
+  filesChangedBlocks.value = [];
+  undoAllChanges(cpIds);
+};
+
+const handleViewAllEdits = () => {
+  if (props.block.checkpointIds.length) viewAllEdits([...props.block.checkpointIds]);
 };
 
 const handleNavPrev = () => {

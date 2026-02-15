@@ -24,9 +24,21 @@ export const listFilesTool: Tool = {
 
     try {
       const entries = await vscode.workspace.fs.readDirectory(uri);
-      return entries
-        .map(([name, type]) => `${type === vscode.FileType.Directory ? '📁' : '📄'} ${name}`)
-        .join('\n');
+      const lines: string[] = [];
+      for (const [name, type] of entries) {
+        if (type === vscode.FileType.Directory) {
+          lines.push(`📁 ${name}`);
+        } else {
+          try {
+            const fileUri = vscode.Uri.joinPath(uri, name);
+            const stat = await vscode.workspace.fs.stat(fileUri);
+            lines.push(`📄 ${name}\t${stat.size}`);
+          } catch {
+            lines.push(`📄 ${name}`);
+          }
+        }
+      }
+      return lines.join('\n');
     } catch (error: any) {
       throw new Error(`Failed to list directory: ${error.message}`);
     }

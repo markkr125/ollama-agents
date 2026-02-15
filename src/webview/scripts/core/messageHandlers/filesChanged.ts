@@ -1,3 +1,4 @@
+import { triggerRef } from 'vue';
 import { filesChangedBlocks, vscode } from '../state';
 import type { AssistantThreadFilesChangedBlock, FileChangeFileItem } from '../types';
 
@@ -18,6 +19,7 @@ export const handleFilesChanged = (msg: any) => {
 
   // Merge files: add any not already in the block (by path)
   let added = false;
+  const incomingPaths = new Set((msg.files || []).map((f: any) => f.path));
   for (const f of msg.files || []) {
     const exists = block.files.some((existing: FileChangeFileItem) => existing.path === f.path);
     if (!exists) {
@@ -33,8 +35,12 @@ export const handleFilesChanged = (msg: any) => {
     }
   }
 
-  // Request diff stats for this checkpoint
-  if (added && checkpointId) {
+  // Detect re-edits: if any incoming file already existed with stats populated,
+  // the agent re-edited it — stats are stale and need refreshing.
+  const hasReEditedFiles = !added && incomingPaths.size > 0;
+
+  // Request diff stats for this checkpoint — on new files OR re-edits
+  if ((added || hasReEditedFiles) && checkpointId) {
     block.statsLoading = true;
     vscode.postMessage({ type: 'requestFilesDiffStats', checkpointId });
   }
@@ -73,31 +79,42 @@ export const handleFilesDiffStats = (msg: any) => {
 
   recalcBlockTotals(block);
   block.statsLoading = false;
+  triggerRef(filesChangedBlocks);
 };
 
 /**
- * Handle 'fileChangeResult' — remove a single resolved file.
+ * Handle 'fileChangeResult' — safety net for removing a resolved file.
+ *
+ * In the normal flow the file is already removed optimistically by the
+ * component click handler (FilesChanged.vue → removeFileOptimistic).
+ * This handler acts as a fallback for edge cases (e.g. session restore).
  */
 export const handleFileChangeResult = (msg: any) => {
   const block = getTheBlock();
   if (!block) return;
 
+  const idx = block.files.findIndex(f => f.path === msg.filePath && f.checkpointId === msg.checkpointId);
+  if (idx < 0) return; // Already removed by optimistic update
+
   if (msg.success) {
-    const idx = block.files.findIndex(f => f.path === msg.filePath && f.checkpointId === msg.checkpointId);
-    if (idx >= 0) {
-      block.files.splice(idx, 1);
-    }
-
-    // Remove the checkpointId if no more files from it
-    cleanupCheckpointId(block, msg.checkpointId);
-
-    if (block.files.length === 0) {
-      removeBlock();
-      return;
-    }
-
-    recalcBlockTotals(block);
+    block.files.splice(idx, 1);
+  } else {
+    block.files[idx] = { ...block.files[idx], status: msg.action === 'kept' ? 'kept' : 'undone' } as FileChangeFileItem;
   }
+
+  // Clean up checkpointIds
+  if (!block.files.some(f => f.checkpointId === msg.checkpointId)) {
+    const cidx = block.checkpointIds.indexOf(msg.checkpointId);
+    if (cidx >= 0) block.checkpointIds.splice(cidx, 1);
+  }
+
+  if (block.files.length === 0) {
+    filesChangedBlocks.value = [];
+    return;
+  }
+
+  recalcBlockTotals(block);
+  triggerRef(filesChangedBlocks);
 };
 
 /**
@@ -108,14 +125,15 @@ export const handleKeepUndoResult = (msg: any) => {
   if (!block) return;
 
   if (msg.success) {
-    // Remove all files belonging to this checkpoint
     block.files = block.files.filter(f => f.checkpointId !== msg.checkpointId);
-    cleanupCheckpointId(block, msg.checkpointId);
+    const cidx = block.checkpointIds.indexOf(msg.checkpointId);
+    if (cidx >= 0) block.checkpointIds.splice(cidx, 1);
 
     if (block.files.length === 0) {
-      removeBlock();
+      filesChangedBlocks.value = [];
     } else {
       recalcBlockTotals(block);
+      triggerRef(filesChangedBlocks);
     }
   }
 };
@@ -179,14 +197,13 @@ export function updateBlockStatus(block: AssistantThreadFilesChangedBlock): void
 
 /** Remove the ONE block. */
 export function removeBlock(): void {
-  filesChangedBlocks.value.splice(0, filesChangedBlocks.value.length);
+  filesChangedBlocks.value = [];
 }
 
 /** Remove a checkpointId from the block if no files reference it. */
 function cleanupCheckpointId(block: AssistantThreadFilesChangedBlock, checkpointId: string): void {
   if (!block.files.some(f => f.checkpointId === checkpointId)) {
-    const idx = block.checkpointIds.indexOf(checkpointId);
-    if (idx >= 0) block.checkpointIds.splice(idx, 1);
+    block.checkpointIds = block.checkpointIds.filter(id => id !== checkpointId);
   }
 }
 

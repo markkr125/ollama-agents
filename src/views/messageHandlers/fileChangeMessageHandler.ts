@@ -1,3 +1,4 @@
+import * as vscode from 'vscode';
 import { AgentChatExecutor } from '../../services/agent/agentChatExecutor';
 import { PendingEditReviewService } from '../../services/review/pendingEditReviewService';
 import { ChatSessionController } from '../chatSessionController';
@@ -9,7 +10,8 @@ import { IMessageHandler, WebviewMessageEmitter } from '../chatTypes';
 export class FileChangeMessageHandler implements IMessageHandler {
   readonly handledTypes = [
     'openFileChangeDiff', 'openFileChangeReview', 'requestFilesDiffStats',
-    'keepFile', 'undoFile', 'keepAllChanges', 'undoAllChanges'
+    'keepFile', 'undoFile', 'keepAllChanges', 'undoAllChanges',
+    'openWorkspaceFile', 'revealInExplorer', 'viewAllEdits'
   ] as const;
 
   constructor(
@@ -50,6 +52,15 @@ export class FileChangeMessageHandler implements IMessageHandler {
       case 'undoAllChanges':
         await this.handleUndoAllChanges(data.checkpointId, data.sessionId);
         break;
+      case 'openWorkspaceFile':
+        await this.handleOpenWorkspaceFile(data.path, data.line);
+        break;
+      case 'revealInExplorer':
+        await this.handleRevealInExplorer(data.path);
+        break;
+      case 'viewAllEdits':
+        await this.handleViewAllEdits(data.checkpointIds);
+        break;
     }
   }
 
@@ -76,31 +87,51 @@ export class FileChangeMessageHandler implements IMessageHandler {
   private async handleKeepFile(checkpointId: string, filePath: string, sessionId?: string) {
     if (!checkpointId || !filePath) return;
     const resolvedSessionId = sessionId || this.sessionController.getCurrentSessionId();
-    const result = await this.agentExecutor.keepFile(checkpointId, filePath);
-    this.reviewService?.removeFileFromReview(filePath);
-    const payload = { checkpointId, filePath, action: 'kept', success: result.success };
+    let success = false;
+    try {
+      const result = await this.agentExecutor.keepFile(checkpointId, filePath);
+      success = result.success;
+      this.reviewService?.removeFileFromReview(filePath);
+    } catch (err: any) {
+      console.warn('[FileChangeHandler] keepFile failed:', err);
+    }
+    const payload = { checkpointId, filePath, action: 'kept', success };
     await this.agentExecutor.persistUiEvent(resolvedSessionId, 'fileChangeResult', payload);
     this.emitter.postMessage({ type: 'fileChangeResult', ...payload, sessionId: resolvedSessionId });
+    this.sendReviewPosition(checkpointId);
     await this.sessionController.sendSessionsList();
   }
 
   private async handleUndoFile(checkpointId: string, filePath: string, sessionId?: string) {
     if (!checkpointId || !filePath) return;
     const resolvedSessionId = sessionId || this.sessionController.getCurrentSessionId();
-    const result = await this.agentExecutor.undoFile(checkpointId, filePath);
-    this.reviewService?.removeFileFromReview(filePath);
-    const payload = { checkpointId, filePath, action: 'undone', success: result.success };
+    let success = false;
+    try {
+      const result = await this.agentExecutor.undoFile(checkpointId, filePath);
+      success = result.success;
+      this.reviewService?.removeFileFromReview(filePath);
+    } catch (err: any) {
+      console.warn('[FileChangeHandler] undoFile failed:', err);
+    }
+    const payload = { checkpointId, filePath, action: 'undone', success };
     await this.agentExecutor.persistUiEvent(resolvedSessionId, 'fileChangeResult', payload);
     this.emitter.postMessage({ type: 'fileChangeResult', ...payload, sessionId: resolvedSessionId });
+    this.sendReviewPosition(checkpointId);
     await this.sessionController.sendSessionsList();
   }
 
   private async handleKeepAllChanges(checkpointId: string, sessionId?: string) {
     if (!checkpointId) return;
     const resolvedSessionId = sessionId || this.sessionController.getCurrentSessionId();
-    const result = await this.agentExecutor.keepAllChanges(checkpointId);
-    this.reviewService?.closeReview();
-    const payload = { checkpointId, action: 'kept', success: result.success };
+    let success = false;
+    try {
+      const result = await this.agentExecutor.keepAllChanges(checkpointId);
+      success = result.success;
+      this.reviewService?.closeReview();
+    } catch (err: any) {
+      console.warn('[FileChangeHandler] keepAllChanges failed:', err);
+    }
+    const payload = { checkpointId, action: 'kept', success };
     await this.agentExecutor.persistUiEvent(resolvedSessionId, 'keepUndoResult', payload);
     this.emitter.postMessage({ type: 'keepUndoResult', ...payload, sessionId: resolvedSessionId });
     await this.sessionController.sendSessionsList();
@@ -109,11 +140,77 @@ export class FileChangeMessageHandler implements IMessageHandler {
   private async handleUndoAllChanges(checkpointId: string, sessionId?: string) {
     if (!checkpointId) return;
     const resolvedSessionId = sessionId || this.sessionController.getCurrentSessionId();
-    const result = await this.agentExecutor.undoAllChanges(checkpointId);
-    this.reviewService?.closeReview();
-    const payload = { checkpointId, action: 'undone', success: result.success, errors: result.errors };
+    let success = false;
+    let errors: string[] | undefined;
+    try {
+      const result = await this.agentExecutor.undoAllChanges(checkpointId);
+      success = result.success;
+      errors = result.errors;
+      this.reviewService?.closeReview();
+    } catch (err: any) {
+      console.warn('[FileChangeHandler] undoAllChanges failed:', err);
+    }
+    const payload = { checkpointId, action: 'undone', success, errors };
     await this.agentExecutor.persistUiEvent(resolvedSessionId, 'keepUndoResult', payload);
     this.emitter.postMessage({ type: 'keepUndoResult', ...payload, sessionId: resolvedSessionId });
     await this.sessionController.sendSessionsList();
+  }
+
+  /**
+   * Send updated review change position to the webview after a file is
+   * removed from review (keep/undo). Ensures the "Change X of Y" counter
+   * reflects the reduced hunk count immediately.
+   */
+  private sendReviewPosition(checkpointId: string): void {
+    if (!this.reviewService) return;
+    const pos = this.reviewService.getChangePosition(checkpointId);
+    if (pos) {
+      this.emitter.postMessage({
+        type: 'reviewChangePosition',
+        checkpointId,
+        current: pos.current,
+        total: pos.total,
+        filePath: pos.filePath
+      });
+    }
+  }
+
+  private async handleViewAllEdits(checkpointIds: string[]) {
+    if (!checkpointIds?.length) return;
+    try {
+      await this.agentExecutor.openAllEdits(checkpointIds);
+    } catch (err: any) {
+      console.warn('[FileChangeHandler] Failed to open all edits:', err);
+    }
+  }
+
+  private async handleOpenWorkspaceFile(relativePath: string, line?: number) {
+    if (!relativePath) return;
+    const workspaceFolders = vscode.workspace.workspaceFolders;
+    if (!workspaceFolders?.length) return;
+    const fileUri = vscode.Uri.joinPath(workspaceFolders[0].uri, relativePath);
+    try {
+      const doc = await vscode.workspace.openTextDocument(fileUri);
+      const options: vscode.TextDocumentShowOptions = { preview: true };
+      if (typeof line === 'number' && line > 0) {
+        const pos = new vscode.Position(line - 1, 0);
+        options.selection = new vscode.Range(pos, pos);
+      }
+      await vscode.window.showTextDocument(doc, options);
+    } catch (err: any) {
+      console.warn('[FileChangeHandler] Failed to open file:', relativePath, err);
+    }
+  }
+
+  private async handleRevealInExplorer(relativePath: string) {
+    if (!relativePath) return;
+    const workspaceFolders = vscode.workspace.workspaceFolders;
+    if (!workspaceFolders?.length) return;
+    const uri = vscode.Uri.joinPath(workspaceFolders[0].uri, relativePath);
+    try {
+      await vscode.commands.executeCommand('revealInExplorer', uri);
+    } catch (err: any) {
+      console.warn('[FileChangeHandler] Failed to reveal in explorer:', relativePath, err);
+    }
   }
 }

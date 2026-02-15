@@ -28,6 +28,15 @@ How to add a new test to Ollama Copilot. Covers both test harnesses.
 | Lives in `src/webview/scripts/core/*` (state, actions, computed, handlers) | Webview (Vitest) | `tests/webview/core/` |
 | Is a Vue component | Webview (Vitest) | `tests/webview/components/` |
 
+### ⚠️ Both Harnesses When Spanning Backend + Frontend
+
+When a feature or bug fix touches both backend (`src/services/`, `src/agent/`, `src/views/`, `src/utils/`) **and** frontend (`src/webview/`), you MUST write tests in **both** harnesses. This is the most commonly neglected rule.
+
+- **Extension host test**: Verify the backend logic (correct data emitted, correct persistence order, correct tool execution).
+- **Webview test**: Verify the UI consumes the data correctly (correct rendering, no duplicates, live/history parity).
+
+**Never skip one harness** just because the other "seems sufficient". Vitest tests cannot catch backend emission bugs, and Mocha tests cannot catch UI state/rendering bugs.
+
 ---
 
 ## Step 2 — Create the Test File

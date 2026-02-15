@@ -3,6 +3,7 @@ import { SessionManager } from '../../agent/sessionManager';
 import { ToolRegistry } from '../../agent/toolRegistry';
 import { getConfig } from '../../config/settings';
 import { ExecutorConfig } from '../../types/agent';
+import { OllamaError } from '../../types/ollama';
 import { MessageRecord } from '../../types/session';
 import { extractToolCalls, removeToolCalls } from '../../utils/toolCallParser';
 import { WebviewMessageEmitter } from '../../views/chatTypes';
@@ -36,6 +37,7 @@ export class AgentChatExecutor {
   private readonly summaryBuilder: AgentSummaryBuilder;
   readonly checkpointManager: CheckpointManager;
   private editManager: EditManager;
+  private _onFileWritten?: (checkpointId: string) => void;
 
   constructor(
     private readonly client: OllamaClient,
@@ -69,7 +71,8 @@ export class AgentChatExecutor {
       this.emitter,
       this.approvalManager,
       persistFn,
-      this.outputChannel
+      this.outputChannel,
+      this.client
     );
 
     this.checkpointManager = new CheckpointManager(
@@ -91,7 +94,8 @@ export class AgentChatExecutor {
       this.checkpointManager,
       this.decorationProvider,
       persistFn,
-      this.refreshExplorer
+      this.refreshExplorer,
+      (checkpointId: string) => this._onFileWritten?.(checkpointId)
     );
 
     this.summaryBuilder = new AgentSummaryBuilder(this.client, this.databaseService, this.emitter);
@@ -103,6 +107,11 @@ export class AgentChatExecutor {
 
   handleToolApprovalResponse(approvalId: string, approved: boolean, command?: string): void {
     this.approvalManager.handleResponse(approvalId, approved, command);
+  }
+
+  /** Register a callback invoked after each successful file write (e.g. to trigger CodeLens review). */
+  set onFileWritten(cb: ((checkpointId: string) => void) | undefined) {
+    this._onFileWritten = cb;
   }
 
   /** Open diff for a cached file-edit approval entry. */
@@ -142,6 +151,10 @@ export class AgentChatExecutor {
 
   async computeFilesDiffStats(checkpointId: string): Promise<Array<{ path: string; additions: number; deletions: number; action: string }>> {
     return this.checkpointManager.computeFilesDiffStats(checkpointId);
+  }
+
+  async openAllEdits(checkpointIds: string[]): Promise<void> {
+    return this.checkpointManager.openAllEdits(checkpointIds);
   }
 
   // -------------------------------------------------------------------------
@@ -203,7 +216,7 @@ export class AgentChatExecutor {
 
     const useNativeTools = !!capabilities?.tools;
     const { agent: agentConfig } = getConfig();
-    const useThinking = agentConfig.enableThinking && useNativeTools;
+    let useThinking = agentConfig.enableThinking && useNativeTools;
 
     const workspacePath = agentSession.workspace?.uri?.fsPath || '';
     const systemContent = useNativeTools
@@ -227,6 +240,7 @@ export class AgentChatExecutor {
     let accumulatedExplanation = '';
     let hasWrittenFiles = false;
     let hasPersistedIterationText = false;
+    let consecutiveNoToolIterations = 0;
 
     let currentCheckpointId: string | undefined;
     try {
@@ -251,9 +265,26 @@ export class AgentChatExecutor {
           chatRequest.think = true;
         }
 
-        const streamResult = await this.streamProcessor.streamIteration(
-          chatRequest, sessionId, model, iteration, useNativeTools, token
-        );
+        const thinkingStartTime = Date.now();
+        let streamResult;
+        try {
+          streamResult = await this.streamProcessor.streamIteration(
+            chatRequest, sessionId, model, iteration, useNativeTools, token, thinkingStartTime
+          );
+        } catch (thinkErr: any) {
+          // Ollama returns 400 when `think: true` is sent to models that don't
+          // support thinking. Detect this, disable thinking, and retry.
+          if (useThinking && thinkErr instanceof OllamaError && thinkErr.statusCode === 400) {
+            useThinking = false;
+            delete chatRequest.think;
+            this.outputChannel?.appendLine(`[Iteration ${iteration}] Model does not support thinking — retrying without think:true`);
+            streamResult = await this.streamProcessor.streamIteration(
+              chatRequest, sessionId, model, iteration, useNativeTools, token, thinkingStartTime
+            );
+          } else {
+            throw thinkErr;
+          }
+        }
 
         let { response } = streamResult;
         const { thinkingContent, nativeToolCalls } = streamResult;
@@ -280,15 +311,24 @@ export class AgentChatExecutor {
         // --- 3. Persist thinking block (BEFORE text and tools — order matters for history) ---
         const displayThinking = thinkingContent.replace(/\[TASK_COMPLETE\]/gi, '').trim();
         if (displayThinking) {
-          await this.persistUiEvent(sessionId, 'thinkingBlock', { content: displayThinking });
-          this.emitter.postMessage({ type: 'collapseThinking', sessionId });
+          // Use the timestamp of the last thinking token for accurate duration.
+          // Without this, the duration includes Ollama's tool_call buffering
+          // time (can be 60-80s for large files) which inflates the counter.
+          const thinkingEndTime = streamResult.lastThinkingTimestamp || Date.now();
+          const durationSeconds = Math.round((thinkingEndTime - thinkingStartTime) / 1000);
+          await this.persistUiEvent(sessionId, 'thinkingBlock', { content: displayThinking, durationSeconds });
+          // Only send collapseThinking if the stream processor didn't already
+          // (it sends one early when native tool_calls are detected)
+          if (!streamResult.thinkingCollapsed) {
+            this.emitter.postMessage({ type: 'collapseThinking', sessionId, durationSeconds });
+          }
         }
 
         // --- 4. Process per-iteration delta text ---
         const cleanedText = useNativeTools ? response.trim() : removeToolCalls(response);
-        const iterationDelta = cleanedText.trim();
+        const iterationDelta = cleanedText.replace(/\[TASK_COMPLETE\]/gi, '').trim();
 
-        if (iterationDelta && !iterationDelta.includes('[TASK_COMPLETE]')) {
+        if (iterationDelta) {
           if (accumulatedExplanation) {
             accumulatedExplanation += '\n\n';
           }
@@ -335,9 +375,20 @@ export class AgentChatExecutor {
         this.outputChannel.appendLine('---');
 
         if (toolCalls.length === 0) {
+          consecutiveNoToolIterations++;
           const noToolMsg: any = { role: 'assistant', content: response };
           if (thinkingContent) noToolMsg.thinking = thinkingContent;
           messages.push(noToolMsg);
+
+          // If the model responds with text but no tools for 2+ consecutive
+          // iterations, treat it as done — the model has answered and isn't
+          // going to use tools. Without this, the loop sends "Continue with
+          // the task" forever.
+          if (consecutiveNoToolIterations >= 2) {
+            this.outputChannel.appendLine(`[Iteration ${iteration}] Breaking: ${consecutiveNoToolIterations} consecutive no-tool iterations`);
+            break;
+          }
+
           if (iteration < config.maxIterations - 1) {
             messages.push({
               role: 'user',
@@ -347,10 +398,18 @@ export class AgentChatExecutor {
           continue;
         }
 
+        // Tools found — reset the no-tool counter
+        consecutiveNoToolIterations = 0;
+
         // --- 7. Execute tool batch ---
         const groupTitle = getProgressGroupTitle(toolCalls);
-        this.emitter.postMessage({ type: 'startProgressGroup', title: groupTitle, sessionId });
-        await this.persistUiEvent(sessionId, 'startProgressGroup', { title: groupTitle });
+        const isTerminalOnly = toolCalls.every(t => t.name === 'run_terminal_command' || t.name === 'run_command');
+
+        // Skip progress group wrapper for terminal-only batches — the approval card is sufficient
+        if (!isTerminalOnly) {
+          this.emitter.postMessage({ type: 'startProgressGroup', title: groupTitle, sessionId });
+          await this.persistUiEvent(sessionId, 'startProgressGroup', { title: groupTitle });
+        }
 
         // Push assistant message to conversation history
         const assistantMsg: any = { role: 'assistant', content: response };
@@ -360,15 +419,17 @@ export class AgentChatExecutor {
 
         const batchResult = await this.toolRunner.executeBatch(
           toolCalls, context, sessionId, model, groupTitle,
-          currentCheckpointId, agentSession, useNativeTools, token
+          currentCheckpointId, agentSession, useNativeTools, token, messages
         );
 
         if (batchResult.wroteFiles) {
           hasWrittenFiles = true;
         }
 
-        this.emitter.postMessage({ type: 'finishProgressGroup', sessionId });
-        await this.persistUiEvent(sessionId, 'finishProgressGroup', {});
+        if (!isTerminalOnly) {
+          this.emitter.postMessage({ type: 'finishProgressGroup', sessionId });
+          await this.persistUiEvent(sessionId, 'finishProgressGroup', {});
+        }
 
         // Feed tool results back into conversation history
         if (useNativeTools) {

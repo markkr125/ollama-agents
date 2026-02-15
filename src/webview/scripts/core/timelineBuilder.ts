@@ -3,6 +3,7 @@ import { filesChangedBlocks } from './state';
 import type {
   AssistantThreadFilesChangedBlock,
   AssistantThreadItem,
+  AssistantThreadThinkingGroupBlock,
   AssistantThreadToolsBlock,
   CommandApprovalItem,
   FileEditApprovalItem,
@@ -21,6 +22,13 @@ class TimelineBuilder {
   private currentThread: AssistantThreadItem | null = null;
   private currentGroup: ProgressItem | null = null;
 
+  /**
+   * The active thinking group being built during history reconstruction.
+   * Mirrors `activeThinkingGroup` in live streaming state but is local
+   * to the builder instance.
+   */
+  private currentThinkingGroup: AssistantThreadThinkingGroupBlock | null = null;
+
   // -----------------------------------------------------------------------
   // Public entry point
   // -----------------------------------------------------------------------
@@ -29,6 +37,8 @@ class TimelineBuilder {
     for (const m of messages) {
       this.processMessage(m);
     }
+    // Close any open thinking group at end of build
+    this.closeThinkingGroup();
     filesChangedBlocks.value = this.restoredFcBlocks;
     return this.items;
   }
@@ -44,6 +54,7 @@ class TimelineBuilder {
   }
 
   private handleUserMessage(m: any): void {
+    this.closeThinkingGroup();
     this.items.push({
       id: m.id || `msg_${Date.now()}_${Math.random()}`,
       type: 'message',
@@ -103,20 +114,118 @@ class TimelineBuilder {
   }
 
   // -----------------------------------------------------------------------
+  // Thinking group helpers
+  // -----------------------------------------------------------------------
+
+  /**
+   * Close the active thinking group, if any.
+   *
+   * The group only contains thinkingContent + tools sections — text content
+   * is always placed at thread level (never inside the group).
+   * So closing is just: set collapsed, sum durations, null out ref.
+   */
+  private closeThinkingGroup(): void {
+    if (!this.currentThinkingGroup) return;
+
+    this.currentThinkingGroup.streaming = false;
+    this.currentThinkingGroup.collapsed = true;
+    let total = 0;
+    for (const s of this.currentThinkingGroup.sections) {
+      if (s.type === 'thinkingContent' && s.durationSeconds) {
+        total += s.durationSeconds;
+      }
+    }
+    this.currentThinkingGroup.totalDurationSeconds = total || undefined;
+    this.currentThinkingGroup = null;
+  }
+
+  /**
+   * Get or create a tools block inside the current thinking group's sections.
+   * Reuses the last section if it's already a tools block.
+   */
+  private ensureToolsBlockInGroup(): AssistantThreadToolsBlock {
+    const group = this.currentThinkingGroup!;
+    const lastSection = group.sections[group.sections.length - 1];
+    if (lastSection && lastSection.type === 'tools') {
+      return lastSection;
+    }
+    const block: AssistantThreadToolsBlock = { type: 'tools', tools: [] };
+    group.sections.push(block);
+    return block;
+  }
+
+  /**
+   * Resolve the correct tools block: inside the thinking group if active,
+   * otherwise at thread level.
+   */
+  private resolveToolsBlock(): AssistantThreadToolsBlock {
+    if (this.currentThinkingGroup) {
+      return this.ensureToolsBlockInGroup();
+    }
+    return this.ensureToolsBlock();
+  }
+
+  /**
+   * Search all tools blocks in the thread (both thinking group sections and
+   * thread-level) for an approval card.
+   */
+  private findApprovalInAllBlocks(type: string, approvalId: string): CommandApprovalItem | FileEditApprovalItem | undefined {
+    const thread = this.ensureThread();
+    for (const block of thread.blocks) {
+      if (block.type === 'tools') {
+        const found = block.tools.find(item => item.type === type && item.id === approvalId);
+        if (found) return found as CommandApprovalItem | FileEditApprovalItem;
+      }
+      if (block.type === 'thinkingGroup') {
+        for (const section of block.sections) {
+          if (section.type === 'tools') {
+            const found = section.tools.find(item => item.type === type && item.id === approvalId);
+            if (found) return found as CommandApprovalItem | FileEditApprovalItem;
+          }
+        }
+      }
+    }
+    return undefined;
+  }
+
+  // -----------------------------------------------------------------------
   // Individual UI event handlers
   // -----------------------------------------------------------------------
 
   private handleThinkingBlock(payload: any): void {
     const thread = this.ensureThread();
-    thread.blocks.push({
-      type: 'thinking',
-      content: payload?.content || '',
-      collapsed: true
-    });
+
+    if (this.currentThinkingGroup) {
+      // Existing group — add a new thinkingContent section (new thinking round)
+      this.currentThinkingGroup.sections.push({
+        type: 'thinkingContent',
+        content: payload?.content || '',
+        durationSeconds: payload?.durationSeconds
+      });
+    } else {
+      // Create a new thinking group
+      this.currentThinkingGroup = {
+        type: 'thinkingGroup',
+        sections: [{
+          type: 'thinkingContent',
+          content: payload?.content || '',
+          durationSeconds: payload?.durationSeconds
+        }],
+        collapsed: true,
+        streaming: false
+      };
+      thread.blocks.push(this.currentThinkingGroup);
+    }
   }
 
   private handleStartProgressGroup(payload: any, messageId: string): void {
-    const toolsBlock = this.ensureToolsBlock();
+    // Write actions go at thread level — not buried inside the thinking group
+    const title = payload?.title || '';
+    if (/\b(writ|modif|creat)/i.test(title) && this.currentThinkingGroup) {
+      this.closeThinkingGroup();
+    }
+
+    const toolsBlock = this.resolveToolsBlock();
     this.currentGroup = {
       id: payload?.groupId || `progress_${messageId}`,
       type: 'progress',
@@ -129,7 +238,7 @@ class TimelineBuilder {
   }
 
   private handleShowToolAction(payload: any, messageId: string): void {
-    const toolsBlock = this.ensureToolsBlock();
+    const toolsBlock = this.resolveToolsBlock();
     if (!this.currentGroup) {
       this.currentGroup = {
         id: `progress_${messageId}`,
@@ -151,7 +260,8 @@ class TimelineBuilder {
       text: actionText,
       detail: payload?.detail || null,
       filePath: payload?.filePath || undefined,
-      checkpointId: payload?.checkpointId || undefined
+      checkpointId: payload?.checkpointId || undefined,
+      startLine: payload?.startLine || undefined
     };
 
     if (status !== 'running' && status !== 'pending') {
@@ -200,6 +310,7 @@ class TimelineBuilder {
   }
 
   private handleRequestToolApproval(payload: any, messageId: string): void {
+    // Approval cards always go to thread-level tools block (outside thinking group)
     const toolsBlock = this.ensureToolsBlock();
     if (this.currentGroup) {
       this.currentGroup.actions.push({
@@ -231,33 +342,26 @@ class TimelineBuilder {
       const actionId = `action_${payload?.approvalId}`;
       const existingAction = this.currentGroup.actions.find(a => a.id === actionId);
       if (existingAction) {
-        const isError = payload?.status === 'skipped' || payload?.status === 'error';
-        existingAction.status = isError ? 'error' : 'success';
-        existingAction.detail = payload?.command?.substring(0, 60) || existingAction.detail;
-        if (isError) this.currentGroup.status = 'error';
-      }
-    }
-
-    // Find and update existing approval card
-    const approvalId = payload?.approvalId;
-    let found = false;
-    for (const block of this.ensureThread().blocks) {
-      if (block.type === 'tools') {
-        const existing = block.tools.find(
-          item => item.type === 'commandApproval' && item.id === approvalId
-        ) as CommandApprovalItem | undefined;
-        if (existing) {
-          existing.status = payload?.status || existing.status;
-          existing.output = payload?.output ?? existing.output;
-          existing.exitCode = payload?.exitCode ?? existing.exitCode;
-          if (payload?.command) existing.command = payload.command;
-          found = true;
-          break;
+        if (payload?.status === 'running') {
+          existingAction.status = 'running';
+        } else {
+          const isError = payload?.status === 'skipped' || payload?.status === 'error';
+          existingAction.status = isError ? 'error' : 'success';
+          existingAction.detail = payload?.command?.substring(0, 60) || existingAction.detail;
+          if (isError) this.currentGroup.status = 'error';
         }
       }
     }
 
-    if (!found) {
+    // Find and update existing approval card (search all blocks including groups)
+    const approvalId = payload?.approvalId;
+    const existing = this.findApprovalInAllBlocks('commandApproval', approvalId) as CommandApprovalItem | undefined;
+    if (existing) {
+      existing.status = payload?.status || existing.status;
+      existing.output = payload?.output ?? existing.output;
+      existing.exitCode = payload?.exitCode ?? existing.exitCode;
+      if (payload?.command) existing.command = payload.command;
+    } else {
       const tb = this.ensureToolsBlock();
       tb.tools.push({
         id: approvalId || `approval_${messageId}`,
@@ -276,6 +380,7 @@ class TimelineBuilder {
   }
 
   private handleRequestFileEditApproval(payload: any, messageId: string): void {
+    // Approval cards always go to thread-level tools block
     const toolsBlock = this.ensureToolsBlock();
     toolsBlock.tools.push({
       id: payload?.id || `file_approval_${messageId}`,
@@ -292,22 +397,11 @@ class TimelineBuilder {
 
   private handleFileEditApprovalResult(payload: any, messageId: string): void {
     const approvalId = payload?.approvalId;
-    let found = false;
-    for (const block of this.ensureThread().blocks) {
-      if (block.type === 'tools') {
-        const existing = block.tools.find(
-          item => item.type === 'fileEditApproval' && item.id === approvalId
-        ) as FileEditApprovalItem | undefined;
-        if (existing) {
-          existing.status = payload?.status || existing.status;
-          existing.autoApproved = !!payload?.autoApproved;
-          found = true;
-          break;
-        }
-      }
-    }
-
-    if (!found) {
+    const existing = this.findApprovalInAllBlocks('fileEditApproval', approvalId) as FileEditApprovalItem | undefined;
+    if (existing) {
+      existing.status = payload?.status || existing.status;
+      existing.autoApproved = !!payload?.autoApproved;
+    } else {
       const tb = this.ensureToolsBlock();
       tb.tools.push({
         id: approvalId || `file_approval_${messageId}`,
@@ -333,7 +427,7 @@ class TimelineBuilder {
         collapsed: false,
         actions: []
       };
-      const tb = this.ensureToolsBlock();
+      const tb = this.resolveToolsBlock();
       tb.tools.push(this.currentGroup);
     }
     this.currentGroup.actions.push({
@@ -456,9 +550,18 @@ class TimelineBuilder {
 
   private appendText(content: string, model?: string): void {
     if (!content) return;
+
+    // Text content signals the end of a thinking+tools cycle.
+    // Close the active thinking group so the next thinkingBlock creates a NEW group.
+    // This gives: [group₁: thinking+tools] text₁ [group₂: thinking+tools] text₂
+    this.closeThinkingGroup();
+
     const thread = this.ensureThread(model);
     const lastBlock = thread.blocks[thread.blocks.length - 1];
-    if (lastBlock && lastBlock.type === 'text') {
+    // When a thinking group is active, each iteration's text is a separate
+    // block (matches live streaming where streamThinking resets the target).
+    // For non-thinking models, merge consecutive text blocks.
+    if (lastBlock && lastBlock.type === 'text' && !this.currentThinkingGroup) {
       lastBlock.content = lastBlock.content ? `${lastBlock.content}\n\n${content}` : content;
     } else {
       thread.blocks.push({ type: 'text', content });

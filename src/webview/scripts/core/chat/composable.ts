@@ -65,7 +65,7 @@ export function useChatPage(props: ChatPageProps) {
   const handleApproveCommand = (approvalId: string, command: string) => {
     const item = findCommandApprovalItem(approvalId);
     if (item) {
-      item.status = 'approved';
+      item.status = 'running';
       item.command = command;
     }
     props.approveCommand(approvalId, command);

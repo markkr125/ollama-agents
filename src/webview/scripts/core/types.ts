@@ -32,11 +32,35 @@ export type AssistantThreadThinkingBlock = {
   type: 'thinking';
   content: string;
   collapsed: boolean;
+  startTime?: number;
+  durationSeconds?: number;
 };
 
 export type AssistantThreadToolsBlock = {
   type: 'tools';
   tools: Array<ProgressItem | CommandApprovalItem | FileEditApprovalItem>;
+};
+
+/**
+ * A section inside a ThinkingGroupBlock. Contains only thinking content
+ * and tool progress — text content is always at thread level.
+ */
+export type ThinkingGroupSection =
+  | { type: 'thinkingContent'; content: string; durationSeconds?: number; startTime?: number }
+  | AssistantThreadToolsBlock;
+
+/**
+ * Groups consecutive thinking rounds and tool progress groups into a single
+ * collapsible block. Only created for thinking models.
+ * Text content is never placed inside — it streams directly to thread-level blocks.
+ * Approval cards intentionally break out to thread-level blocks.
+ */
+export type AssistantThreadThinkingGroupBlock = {
+  type: 'thinkingGroup';
+  sections: ThinkingGroupSection[];
+  collapsed: boolean;
+  streaming: boolean;
+  totalDurationSeconds?: number;
 };
 
 export type FileChangeFileItem = {
@@ -66,7 +90,7 @@ export type AssistantThreadItem = {
   id: string;
   type: 'assistantThread';
   role: 'assistant';
-  blocks: Array<AssistantThreadTextBlock | AssistantThreadThinkingBlock | AssistantThreadToolsBlock>;
+  blocks: Array<AssistantThreadTextBlock | AssistantThreadThinkingBlock | AssistantThreadToolsBlock | AssistantThreadThinkingGroupBlock>;
   model?: string;
 };
 
@@ -78,6 +102,7 @@ export type ActionItem = {
   detail?: string | null;
   filePath?: string;
   checkpointId?: string;
+  startLine?: number;
 };
 
 export type ProgressItem = {
@@ -97,7 +122,7 @@ export type CommandApprovalItem = {
   cwd?: string;
   severity: 'critical' | 'high' | 'medium';
   reason?: string;
-  status: 'pending' | 'approved' | 'skipped';
+  status: 'pending' | 'running' | 'approved' | 'skipped';
   timestamp: number;
   output?: string;
   exitCode?: number | null;
@@ -190,6 +215,7 @@ export type ShowToolActionMessage = {
   detail?: string | null;
   filePath?: string;
   checkpointId?: string;
+  startLine?: number;
 };
 
 export type ToolApprovalResultMessage = {
@@ -241,6 +267,7 @@ export type StreamThinkingMessage = {
 export type CollapseThinkingMessage = {
   type: 'collapseThinking';
   sessionId?: string;
+  durationSeconds?: number;
 };
 
 export type ShowWarningBannerMessage = {

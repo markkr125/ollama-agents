@@ -154,7 +154,13 @@ export class CheckpointManager {
    */
   async undoFile(checkpointId: string, filePath: string): Promise<{ success: boolean }> {
     const snapshot = await this.databaseService.getSnapshotForFile(checkpointId, filePath);
-    if (!snapshot || snapshot.original_content === null) {
+    if (!snapshot) {
+      return { success: false };
+    }
+
+    // For created files, original_content is null — undo means delete the file.
+    // For modified files, original_content must be present to revert.
+    if (snapshot.action !== 'created' && snapshot.original_content === null) {
       return { success: false };
     }
 
@@ -172,7 +178,7 @@ export class CheckpointManager {
           doc.positionAt(0),
           doc.positionAt(doc.getText().length)
         );
-        edit.replace(uri, fullRange, snapshot.original_content);
+        edit.replace(uri, fullRange, snapshot.original_content!);
         await vscode.workspace.applyEdit(edit);
         await doc.save();
       }
@@ -376,6 +382,46 @@ export class CheckpointManager {
     }
 
     await this.databaseService.updateCheckpointStatus(checkpointId, newStatus);
+  }
+
+  /**
+   * Open the multi-diff editor showing all pending file changes across the
+   * given checkpoints. Uses the `ollama-original:` URI scheme (registered
+   * globally in extension.ts) for the "before" side and the on-disk file
+   * for the "after" side.
+   */
+  async openAllEdits(checkpointIds: string[]): Promise<void> {
+    const workspaceRoot = this.getWorkspaceRoot();
+    const changes: [vscode.Uri, vscode.Uri, vscode.Uri][] = [];
+    const seen = new Set<string>();
+
+    for (const cpId of checkpointIds) {
+      const snapshots = await this.databaseService.getFileSnapshots(cpId);
+      for (const snap of snapshots) {
+        if (snap.file_status !== 'pending' || seen.has(snap.file_path)) continue;
+        seen.add(snap.file_path);
+
+        const absPath = path.join(workspaceRoot, snap.file_path);
+        const fileUri = vscode.Uri.file(absPath);
+        const originalUri = vscode.Uri.from({
+          scheme: 'ollama-original',
+          path: absPath,
+          query: `ckpt=${encodeURIComponent(cpId)}&rel=${encodeURIComponent(snap.file_path)}`
+        });
+        changes.push([fileUri, originalUri, fileUri]);
+      }
+    }
+
+    if (changes.length === 0) {
+      vscode.window.showInformationMessage('No pending changes to review.');
+      return;
+    }
+
+    await vscode.commands.executeCommand(
+      'vscode.changes',
+      `Suggested Edits (${changes.length} file${changes.length !== 1 ? 's' : ''})`,
+      changes
+    );
   }
 
   private getWorkspaceRoot(): string {

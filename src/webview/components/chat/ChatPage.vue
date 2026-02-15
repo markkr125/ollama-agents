@@ -41,14 +41,78 @@
               <details
                 v-else-if="block.type === 'thinking'"
                 class="thinking-block"
+                :class="{ 'is-streaming': !block.collapsed }"
                 :open="!block.collapsed"
               >
                 <summary>
-                  <span class="thinking-icon">💭</span>
-                  Thought
+                  <span class="thinking-chevron">▼</span>
+                  <span v-if="!block.collapsed" class="thinking-spinner"></span>
+                  <span v-else class="thinking-check">✓</span>
+                  <span class="thinking-title">
+                    <template v-if="!block.collapsed">Thinking…</template>
+                    <template v-else-if="block.durationSeconds">Thought for {{ block.durationSeconds }}s</template>
+                    <template v-else>Thought</template>
+                  </span>
                 </summary>
-                <div class="thinking-block-content">
+                <div class="thinking-block-content progress-actions">
                   <MarkdownBlock :content="block.content" />
+                </div>
+              </details>
+
+              <!-- Thinking Group: groups thinking content + tool calls into a single collapsible -->
+              <details
+                v-else-if="block.type === 'thinkingGroup'"
+                class="thinking-block thinking-group"
+                :class="{ 'is-streaming': block.streaming }"
+                :open="!block.collapsed"
+              >
+                <summary>
+                  <span class="thinking-chevron">▼</span>
+                  <span v-if="block.streaming" class="thinking-spinner"></span>
+                  <span v-else class="thinking-check">✓</span>
+                  <span class="thinking-title">
+                    <template v-if="block.streaming">Thinking…</template>
+                    <template v-else-if="block.totalDurationSeconds">Thought for {{ block.totalDurationSeconds }}s</template>
+                    <template v-else>Thought</template>
+                  </span>
+                </summary>
+                <div class="thinking-block-content thinking-group-content">
+                  <template v-for="(section, sIndex) in block.sections" :key="`${item.id}-${bIndex}-s${sIndex}`">
+                    <div v-if="section.type === 'thinkingContent'" class="thinking-group-thinking">
+                      <MarkdownBlock :content="section.content" />
+                    </div>
+                    <div v-else-if="section.type === 'tools'" class="assistant-tools">
+                      <template v-for="toolItem in section.tools" :key="toolItem.id">
+                        <template v-if="toolItem.type === 'commandApproval'">
+                          <CommandApproval
+                            :item="toolItem"
+                            :on-approve="handleApproveCommand"
+                            :on-skip="handleSkipCommand"
+                            :auto-approve-enabled="autoApproveCommands"
+                            :on-toggle-auto-approve="toggleAutoApproveCommands"
+                          />
+                        </template>
+                        <template v-else-if="toolItem.type === 'fileEditApproval'">
+                          <FileEditApproval
+                            :item="toolItem"
+                            :on-approve="handleApproveFileEdit"
+                            :on-skip="handleSkipFileEdit"
+                            :on-open-diff="handleOpenFileDiff"
+                            :auto-approve-enabled="autoApproveSensitiveEdits"
+                            :on-toggle-auto-approve="toggleAutoApproveSensitiveEdits"
+                          />
+                        </template>
+                        <ProgressGroup
+                          v-else-if="toolItem.type === 'progress'"
+                          :item="toolItem"
+                          :toggleProgress="toggleProgress"
+                          :progressStatus="progressStatus"
+                          :progressStatusClass="progressStatusClass"
+                          :actionStatusClass="actionStatusClass"
+                        />
+                      </template>
+                    </div>
+                  </template>
                 </div>
               </details>
 

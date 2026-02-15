@@ -110,8 +110,9 @@ export class AgentSummaryBuilder {
 
     // Post final message to webview
     const finalMessageContent = hasPersistedIterationText ? (summaryPrefix.trim() || '') : summary;
-    if (finalMessageContent) {
-      this.emitter.postMessage({ type: 'finalMessage', content: finalMessageContent, model, sessionId });
+    const cleanedFinal = (finalMessageContent || '').replace(/\[TASK_COMPLETE\]/gi, '').trim();
+    if (cleanedFinal) {
+      this.emitter.postMessage({ type: 'finalMessage', content: cleanedFinal, model, sessionId });
     }
 
     // Persist + post filesChanged

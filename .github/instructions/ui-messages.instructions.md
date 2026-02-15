@@ -14,7 +14,7 @@ description: "Backend-to-frontend and frontend-to-backend message protocol for t
 | `showThinking` | `{message, sessionId}` | Show loading state for a session |
 | `hideThinking` | `{sessionId}` | Hide loading state for a session |
 | `startProgressGroup` | `{title, sessionId}` | Start collapsible group |
-| `showToolAction` | `{status, icon, text, detail, sessionId}` | Add/update action in group |
+| `showToolAction` | `{status, icon, text, detail, filePath?, checkpointId?, startLine?, sessionId}` | Add/update action in group |
 | `finishProgressGroup` | `{sessionId}` | Mark group complete |
 | `requestToolApproval` | `{id, command, cwd, severity, reason, sessionId}` | Show terminal command approval card |
 | `toolApprovalResult` | `{approvalId, status, output, command?, autoApproved?, sessionId}` | Update terminal command approval status |
@@ -23,7 +23,7 @@ description: "Backend-to-frontend and frontend-to-backend message protocol for t
 | `sessionApprovalSettings` | `{sessionId, autoApproveCommands?, autoApproveSensitiveEdits?, sessionSensitiveFilePatterns?}` | Push per-session approval toggles |
 | `streamChunk` | `{content, model?, sessionId}` | Stream assistant response (accumulated, not delta) |
 | `streamThinking` | `{content, sessionId}` | Stream thinking content (accumulated, not delta) |
-| `collapseThinking` | `{sessionId}` | Collapse the currently open thinking block |
+| `collapseThinking` | `{sessionId, durationSeconds?}` | Collapse the currently open thinking block (with optional accurate duration) |
 | `thinkingBlock` | `{content, sessionId}` | Persisted thinking block (used in history rebuild) |
 | `showWarningBanner` | `{message, sessionId}` | Show a warning banner in the chat (e.g., model lacks tool support) |
 | `finalMessage` | `{content, model?, sessionId}` | Finalize response scoped to a session |
@@ -93,6 +93,8 @@ description: "Backend-to-frontend and frontend-to-backend message protocol for t
 | `openFileChangeReview` | `{checkpointId, filePath}` | Open inline review (CodeLens) for a file |
 | `navigateReviewPrev` | `{checkpointIds}` | Navigate to previous change (hunk-level, cross-file) |
 | `navigateReviewNext` | `{checkpointIds}` | Navigate to next change (hunk-level, cross-file) |
+| `openWorkspaceFile` | `{path, line?}` | Open a workspace file in the editor, optionally at a specific line |
+| `revealInExplorer` | `{path}` | Reveal a folder/file in the VS Code file explorer sidebar |
 
 ## Session-Concurrent Streaming
 
@@ -145,6 +147,8 @@ Widget requests diff stats
 **⚠️ The webview does NOT send `sessionId`** in keep/undo messages. The backend MUST resolve it via `this.sessionController.getCurrentSessionId()`. Without this, `persistUiEvent` silently skips (see Pitfall #13 in `copilot-instructions.md`).
 
 **History restoration**: `timelineBuilder.ts` handles `filesChanged`, `fileChangeResult`, and `keepUndoResult` events by building/merging/removing standalone `filesChangedBlocks`. Multiple incremental `filesChanged` events with the same `checkpointId` must be **merged** (not duplicated) — see Pitfall #14.
+
+**Fallback for missing `__ui__` events**: `chatSessionController.ensureFilesChangedWidget()` fires after `loadSessionMessages`. If no `filesChanged` `__ui__` event exists in the session's messages but the DB has pending checkpoints with pending file_snapshots, it posts synthetic `filesChanged` messages. This handles old sessions or sessions where `persistUiEvent` silently skipped due to undefined `sessionId` (Pitfall #13). See the full flow diagram in `extension-architecture.instructions.md` → "Diff Stats Flow".
 
 - **`src/views/chatView.ts`**
   - Webview lifecycle + MessageRouter wiring only

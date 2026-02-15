@@ -2,7 +2,10 @@ import { structuredPatch } from 'diff';
 import * as path from 'path';
 import * as vscode from 'vscode';
 import { ToolRegistry } from '../../agent/toolRegistry';
+import { resolveWorkspacePath } from '../../agent/tools/pathUtils';
+import { CHUNK_SIZE, countFileLines, readFileChunk } from '../../agent/tools/readFile';
 import { PersistUiEventFn } from '../../types/agent';
+import { ChatMessage } from '../../types/ollama';
 import { ToolExecution } from '../../types/session';
 import { WebviewMessageEmitter } from '../../views/chatTypes';
 import { getToolActionInfo, getToolSuccessInfo } from '../../views/toolUIFormatter';
@@ -42,7 +45,8 @@ export class AgentToolRunner {
     private readonly checkpointManager: CheckpointManager,
     private readonly decorationProvider: PendingEditDecorationProvider,
     private readonly persistUiEvent: PersistUiEventFn,
-    private readonly refreshExplorer: () => void
+    private readonly refreshExplorer: () => void,
+    private readonly onFileWritten?: (checkpointId: string) => void
   ) {}
 
   /**
@@ -58,7 +62,8 @@ export class AgentToolRunner {
     currentCheckpointId: string | undefined,
     agentSession: any,
     useNativeTools: boolean,
-    token: vscode.CancellationToken
+    token: vscode.CancellationToken,
+    messages?: ChatMessage[]
   ): Promise<ToolBatchResult> {
     const nativeResults: ToolBatchResult['nativeResults'] = [];
     const xmlResults: string[] = [];
@@ -70,8 +75,48 @@ export class AgentToolRunner {
       const { actionText, actionDetail, actionIcon } = getToolActionInfo(toolCall.name, toolCall.args);
       const isTerminalCommand = toolCall.name === 'run_terminal_command' || toolCall.name === 'run_command';
       const isFileEdit = toolCall.name === 'write_file' || toolCall.name === 'create_file';
+      const isReadFile = toolCall.name === 'read_file';
 
-      // Show "running" status for generic tools (terminal/file handlers show their own)
+      // --- Chunked read_file handling ---
+      // ALL read_file calls go through chunked streaming to avoid loading
+      // the entire file into memory. Each chunk gets its own UI action.
+      if (isReadFile) {
+        try {
+          const result = await this.executeChunkedRead(toolCall, context, sessionId, model, groupTitle, agentSession, useNativeTools);
+          if (useNativeTools) {
+            nativeResults.push({ role: 'tool', content: result, tool_name: toolCall.name });
+          } else {
+            xmlResults.push(`Tool result for ${toolCall.name}:\n${result}`);
+          }
+        } catch (error: any) {
+          const errorPayload = {
+            status: 'error' as const,
+            icon: actionIcon,
+            text: actionText,
+            detail: error.message
+          };
+          this.emitter.postMessage({ type: 'showToolAction', ...errorPayload, sessionId });
+          await this.persistUiEvent(sessionId, 'showToolAction', errorPayload);
+          agentSession.errors.push(error.message);
+          if (sessionId) {
+            await this.databaseService.addMessage(sessionId, 'tool', `Error: ${error.message}`, {
+              model, toolName: toolCall.name,
+              toolInput: JSON.stringify(toolCall.args),
+              toolOutput: `Error: ${error.message}`,
+              progressTitle: groupTitle
+            });
+          }
+          if (useNativeTools) {
+            nativeResults.push({ role: 'tool', content: `Error: ${error.message}`, tool_name: toolCall.name });
+          } else {
+            xmlResults.push(`Tool ${toolCall.name} failed: ${error.message}`);
+          }
+        }
+        continue;
+      }
+
+      // Show "running" status for generic tools (terminal handler shows its own;
+      // file edit handler emits its own with correct Creating/Editing verb)
       if (!isTerminalCommand && !isFileEdit) {
         this.emitter.postMessage({
           type: 'showToolAction',
@@ -92,7 +137,7 @@ export class AgentToolRunner {
         const result: ToolExecution = isTerminalCommand
           ? await this.terminalHandler.execute(toolCall.name, toolCall.args, context, sessionId, actionText, actionIcon, token)
           : isFileEdit
-            ? await this.fileEditHandler.execute(toolCall.name, toolCall.args, context, sessionId, actionText, actionIcon, token)
+            ? await this.fileEditHandler.execute(toolCall.name, toolCall.args, context, sessionId, actionText, actionIcon, token, model, messages)
             : await this.toolRegistry.execute(toolCall.name, toolCall.args, context);
         agentSession.toolCalls.push(result);
 
@@ -125,6 +170,9 @@ export class AgentToolRunner {
                 status: 'pending',
                 sessionId
               });
+
+              // Trigger inline review (CodeLens) immediately after each write
+              this.onFileWritten?.(currentCheckpointId);
             }
           }
         }
@@ -161,11 +209,14 @@ export class AgentToolRunner {
             text: isFileEditSkipped ? 'Edit skipped' : 'Command skipped',
             detail: 'Skipped by user'
           };
-          this.emitter.postMessage({ type: 'showToolAction', ...skipPayload, sessionId });
-          await this.persistUiEvent(sessionId, 'showToolAction', skipPayload);
+          // Terminal commands already show skip in the approval card
+          if (!isSkipped) {
+            this.emitter.postMessage({ type: 'showToolAction', ...skipPayload, sessionId });
+            await this.persistUiEvent(sessionId, 'showToolAction', skipPayload);
+          }
         } else {
           // Build success action with diff stats
-          const { actionText: successText, actionDetail: successDetail, filePath: successFilePath } =
+          const { actionText: successText, actionDetail: successDetail, filePath: successFilePath, startLine: successStartLine } =
             getToolSuccessInfo(toolCall.name, toolCall.args, result.output);
 
           let diffDetail = successDetail;
@@ -181,10 +232,14 @@ export class AgentToolRunner {
             text: successText,
             detail: diffDetail,
             ...(successFilePath ? { filePath: successFilePath } : {}),
-            ...(successFilePath && currentCheckpointId ? { checkpointId: currentCheckpointId } : {})
+            ...(successFilePath && currentCheckpointId ? { checkpointId: currentCheckpointId } : {}),
+            ...(successStartLine != null ? { startLine: successStartLine } : {})
           };
-          this.emitter.postMessage({ type: 'showToolAction', ...actionPayload, sessionId });
-          await this.persistUiEvent(sessionId, 'showToolAction', actionPayload);
+          // Terminal commands already show result in the approval card
+          if (!isTerminalCommand) {
+            this.emitter.postMessage({ type: 'showToolAction', ...actionPayload, sessionId });
+            await this.persistUiEvent(sessionId, 'showToolAction', actionPayload);
+          }
         }
 
         // Feed tool result back to LLM
@@ -194,15 +249,17 @@ export class AgentToolRunner {
           xmlResults.push(`Tool result for ${toolCall.name}:\n${result.output}`);
         }
       } catch (error: any) {
-        // Error UI + persistence
+        // Error UI + persistence (skip for terminal — approval card shows errors)
         const errorPayload = {
           status: 'error' as const,
           icon: actionIcon,
           text: actionText,
           detail: error.message
         };
-        this.emitter.postMessage({ type: 'showToolAction', ...errorPayload, sessionId });
-        await this.persistUiEvent(sessionId, 'showToolAction', errorPayload);
+        if (!isTerminalCommand) {
+          this.emitter.postMessage({ type: 'showToolAction', ...errorPayload, sessionId });
+          await this.persistUiEvent(sessionId, 'showToolAction', errorPayload);
+        }
         agentSession.errors.push(error.message);
 
         if (sessionId) {
@@ -229,6 +286,77 @@ export class AgentToolRunner {
     }
 
     return { nativeResults, xmlResults, wroteFiles };
+  }
+
+  // -------------------------------------------------------------------------
+  // Chunked read_file — streams a file in CHUNK_SIZE-line chunks, emitting
+  // a UI action for each chunk. Returns the concatenated content.
+  // -------------------------------------------------------------------------
+
+  private async executeChunkedRead(
+    toolCall: { name: string; args: any },
+    context: any,
+    sessionId: string,
+    model: string,
+    groupTitle: string,
+    agentSession: any,
+    _useNativeTools: boolean
+  ): Promise<string> {
+    const relativePath = toolCall.args?.path || toolCall.args?.file || toolCall.args?.filePath;
+    if (!relativePath || typeof relativePath !== 'string') {
+      throw new Error('Missing required argument: path');
+    }
+    const absPath = resolveWorkspacePath(relativePath, context.workspace);
+    const fileName = relativePath.split('/').pop() || relativePath;
+    const totalLines = await countFileLines(absPath);
+
+    const chunks: string[] = [];
+    for (let start = 1; start <= totalLines; start += CHUNK_SIZE) {
+      const end = Math.min(start + CHUNK_SIZE - 1, totalLines);
+
+      // Emit "running" for this chunk
+      const runPayload = {
+        status: 'running' as const,
+        icon: '📄',
+        text: `Reading ${fileName}`,
+        detail: `lines ${start}–${end}`,
+        filePath: relativePath,
+        startLine: start
+      };
+      this.emitter.postMessage({ type: 'showToolAction', ...runPayload, sessionId });
+
+      // Streaming read of just this chunk
+      const chunkContent = await readFileChunk(absPath, start, end);
+      chunks.push(chunkContent);
+
+      // Emit "success" for this chunk
+      const successPayload = {
+        status: 'success' as const,
+        icon: '📄',
+        text: `Read ${fileName}`,
+        detail: `lines ${start}–${end}`,
+        filePath: relativePath,
+        startLine: start
+      };
+      this.emitter.postMessage({ type: 'showToolAction', ...successPayload, sessionId });
+      await this.persistUiEvent(sessionId, 'showToolAction', successPayload);
+    }
+
+    const combined = chunks.join('\n');
+
+    // Persist the combined result to DB as a single tool message
+    if (sessionId) {
+      await this.databaseService.addMessage(sessionId, 'tool', combined, {
+        model,
+        toolName: toolCall.name,
+        toolInput: JSON.stringify(toolCall.args),
+        toolOutput: combined,
+        progressTitle: groupTitle
+      });
+    }
+
+    agentSession.toolCalls.push({ tool: toolCall.name, input: toolCall.args, output: combined });
+    return combined;
   }
 
   // -------------------------------------------------------------------------

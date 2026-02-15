@@ -1,14 +1,52 @@
 import { scrollToBottom } from '../actions/index';
-import { currentProgressIndex, currentSessionId } from '../state';
-import type { ActionItem, ProgressItem, ShowToolActionMessage, StartProgressGroupMessage } from '../types';
+import { activeThinkingGroup, currentProgressIndex, currentSessionId } from '../state';
+import type { ActionItem, AssistantThreadToolsBlock, ProgressItem, ShowToolActionMessage, StartProgressGroupMessage } from '../types';
+import { closeActiveThinkingGroup } from './streaming';
 import { ensureAssistantThread, getOrCreateToolsBlock } from './threadUtils';
+
+/** Detect progress group titles that indicate file-write operations. */
+const isWriteGroupTitle = (title: string): boolean =>
+  /\b(writ|modif|creat)/i.test(title);
+
+/**
+ * Get or create a tools block inside the active thinking group's sections.
+ * Reuses the last section if it's already a tools block.
+ */
+const getOrCreateToolsBlockInGroup = (): AssistantThreadToolsBlock => {
+  const group = activeThinkingGroup.value!;
+  const lastSection = group.sections[group.sections.length - 1];
+  if (lastSection && lastSection.type === 'tools') {
+    return lastSection;
+  }
+  const block: AssistantThreadToolsBlock = { type: 'tools', tools: [] };
+  group.sections.push(block);
+  return block;
+};
+
+/**
+ * Resolve the correct tools block: inside the thinking group if active,
+ * otherwise at thread level.
+ */
+const resolveToolsBlock = (): AssistantThreadToolsBlock => {
+  if (activeThinkingGroup.value) {
+    return getOrCreateToolsBlockInGroup();
+  }
+  const thread = ensureAssistantThread();
+  return getOrCreateToolsBlock(thread);
+};
 
 export const handleStartProgressGroup = (msg: StartProgressGroupMessage) => {
   if (msg.sessionId && msg.sessionId !== currentSessionId.value) {
     return;
   }
-  const thread = ensureAssistantThread();
-  const toolsBlock = getOrCreateToolsBlock(thread);
+  ensureAssistantThread();
+
+  // Write actions go at thread level — not buried inside the thinking group
+  if (isWriteGroupTitle(msg.title || '') && activeThinkingGroup.value) {
+    closeActiveThinkingGroup();
+  }
+
+  const toolsBlock = resolveToolsBlock();
   const group: ProgressItem = {
     id: `progress_${Date.now()}`,
     type: 'progress',
@@ -26,8 +64,8 @@ export const handleShowToolAction = (msg: ShowToolActionMessage) => {
   if (msg.sessionId && msg.sessionId !== currentSessionId.value) {
     return;
   }
-  const thread = ensureAssistantThread();
-  const toolsBlock = getOrCreateToolsBlock(thread);
+  ensureAssistantThread();
+  const toolsBlock = resolveToolsBlock();
 
   // Find last progress group in current tools block (more reliable than global index)
   let group: ProgressItem | null = null;
@@ -71,7 +109,8 @@ export const handleShowToolAction = (msg: ShowToolActionMessage) => {
     text: actionText,
     detail: msg.detail || null,
     ...(msg.filePath ? { filePath: msg.filePath } : {}),
-    ...(msg.checkpointId ? { checkpointId: msg.checkpointId } : {})
+    ...(msg.checkpointId ? { checkpointId: msg.checkpointId } : {}),
+    ...(msg.startLine != null ? { startLine: msg.startLine } : {})
   };
   if (action.status !== 'running' && action.status !== 'pending') {
     // Final state (success/error) - update existing or push
@@ -105,8 +144,8 @@ export const handleFinishProgressGroup = (msg: any) => {
   if (msg.sessionId && msg.sessionId !== currentSessionId.value) {
     return;
   }
-  const thread = ensureAssistantThread();
-  const toolsBlock = getOrCreateToolsBlock(thread);
+  ensureAssistantThread();
+  const toolsBlock = resolveToolsBlock();
   if (currentProgressIndex.value !== null) {
     const group = toolsBlock.tools[currentProgressIndex.value] as ProgressItem;
     const hasError = group.actions.some(action => action.status === 'error');
@@ -127,8 +166,8 @@ export const handleShowError = (msg: any) => {
   if (msg.sessionId && msg.sessionId !== currentSessionId.value) {
     return;
   }
-  const thread = ensureAssistantThread();
-  const toolsBlock = getOrCreateToolsBlock(thread);
+  ensureAssistantThread();
+  const toolsBlock = resolveToolsBlock();
   if (currentProgressIndex.value === null) {
     const group: ProgressItem = {
       id: `progress_${Date.now()}`,
