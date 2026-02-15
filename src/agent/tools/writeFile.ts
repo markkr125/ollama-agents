@@ -1,6 +1,6 @@
 import * as vscode from 'vscode';
 import { Tool } from '../../types/agent';
-import { resolveWorkspacePath } from './pathUtils';
+import { resolveMultiRootPath } from './pathUtils';
 
 /**
  * write_file — Write content to a file relative to the workspace.
@@ -34,7 +34,7 @@ export const writeFileTool: Tool = {
     if (!relativePath || typeof relativePath !== 'string') {
       throw new Error('Missing required argument: path (file path relative to workspace)');
     }
-    const filePath = resolveWorkspacePath(relativePath, context.workspace);
+    const filePath = resolveMultiRootPath(relativePath, context.workspace, context.workspaceFolders);
     const uri = vscode.Uri.file(filePath);
 
     try {

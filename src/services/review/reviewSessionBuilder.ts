@@ -1,6 +1,6 @@
 import { structuredPatch } from 'diff';
-import * as path from 'path';
 import * as vscode from 'vscode';
+import { resolveMultiRootPath } from '../../agent/tools/pathUtils';
 import { DatabaseService } from '../database/databaseService';
 import { FileReviewState, ReviewHunk, ReviewSession } from './reviewTypes';
 
@@ -23,7 +23,8 @@ export class ReviewSessionBuilder {
    */
   async buildSession(checkpointIds: string[]): Promise<ReviewSession | null> {
     const sortedIds = [...checkpointIds].sort();
-    const workspaceRoot = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath || '';
+    const workspaceFolders = vscode.workspace.workspaceFolders;
+    const primaryFolder = workspaceFolders?.[0];
     const files: FileReviewState[] = [];
     const seenFiles = new Set<string>();
 
@@ -34,7 +35,9 @@ export class ReviewSessionBuilder {
         if (seenFiles.has(snap.file_path)) continue;
         seenFiles.add(snap.file_path);
 
-        const absPath = path.join(workspaceRoot, snap.file_path);
+        const absPath = primaryFolder
+          ? resolveMultiRootPath(snap.file_path, primaryFolder, workspaceFolders)
+          : snap.file_path;
         const uri = vscode.Uri.file(absPath);
 
         let currentContent = '';

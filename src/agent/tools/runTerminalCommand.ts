@@ -1,4 +1,5 @@
 import { Tool } from '../../types/agent';
+import { resolveMultiRootPath } from './pathUtils';
 
 /**
  * run_terminal_command — Execute a shell command in the workspace terminal.
@@ -19,7 +20,9 @@ export const runTerminalCommandTool: Tool = {
       throw new Error('Terminal manager not available for this session.');
     }
 
-    const cwd = params.cwd || context.workspace.uri.fsPath;
+    const cwd = params.cwd
+      ? resolveMultiRootPath(params.cwd, context.workspace, context.workspaceFolders)
+      : context.workspace.uri.fsPath;
     const result = await context.terminalManager.executeCommand(
       context.sessionId,
       params.command,

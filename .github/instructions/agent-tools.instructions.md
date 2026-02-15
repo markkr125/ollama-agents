@@ -256,13 +256,22 @@ Manages tool registration, lookup, and execution. The registry itself is a slim 
 ```
 src/agent/tools/
 ├── index.ts              # Barrel export — builtInTools[] array
-├── pathUtils.ts          # resolveWorkspacePath() shared utility
+├── pathUtils.ts          # resolveWorkspacePath(), resolveMultiRootPath() shared utility
+├── symbolResolver.ts     # Shared position resolution for LSP tools
 ├── readFile.ts           # read_file tool
 ├── writeFile.ts          # write_file tool
-├── searchWorkspace.ts    # search_workspace tool
+├── searchWorkspace.ts    # search_workspace tool (ripgrep-based)
 ├── listFiles.ts          # list_files tool
 ├── runTerminalCommand.ts # run_terminal_command tool
-└── getDiagnostics.ts     # get_diagnostics tool
+├── getDiagnostics.ts     # get_diagnostics tool
+├── getDocumentSymbols.ts # get_document_symbols tool (LSP)
+├── findDefinition.ts     # find_definition tool (LSP)
+├── findReferences.ts     # find_references tool (LSP)
+├── findImplementations.ts # find_implementations tool (LSP)
+├── findSymbol.ts         # find_symbol tool (LSP)
+├── getHoverInfo.ts       # get_hover_info tool (LSP)
+├── getCallHierarchy.ts   # get_call_hierarchy tool (LSP)
+└── getTypeHierarchy.ts   # get_type_hierarchy tool (LSP)
 ```
 
 ### Shared Types (`src/types/agent.ts`)
@@ -275,15 +284,29 @@ All core agent types are centralised in `src/types/agent.ts`:
 
 `toolRegistry.ts` and `agentTerminalHandler.ts` re-export these types for backward compatibility.
 
-**Built-in Tools (6 total):**
+**Built-in Tools (14 total):**
+
+*Core tools:*
 | Tool | Description |
 |------|-------------|
 | `read_file` | Read file contents (streaming, chunked in 100-line blocks via `countFileLines` + `readFileChunk`; see `src/agent/tools/readFile.ts`) |
 | `write_file` | Write/create file (handles both) |
 | `list_files` | List directory contents (output includes `basePath` for click handling) |
-| `search_workspace` | Search for text in files |
+| `search_workspace` | Search for text or regex patterns in files (ripgrep-based; supports `isRegex` flag for case-insensitive, alternatives, wildcards) |
 | `run_terminal_command` | Execute shell commands |
 | `get_diagnostics` | Get file errors/warnings |
+
+*LSP-powered code intelligence tools (all delegate to `vscode.commands.executeCommand` → active language server):*
+| Tool | VS Code Command | Description |
+|------|----------------|-------------|
+| `get_document_symbols` | `vscode.executeDocumentSymbolProvider` | File outline — classes, functions, methods with line ranges + nesting. Cheapest way to understand file structure. |
+| `find_definition` | `vscode.executeDefinitionProvider` | Go-to-definition — follow a function/method call to its source across files. |
+| `find_references` | `vscode.executeReferenceProvider` | Find all usages of a symbol across the workspace, grouped by file (capped at 30). |
+| `find_implementations` | `vscode.executeImplementationProvider` | Find concrete implementations of interfaces/abstract classes/methods. |
+| `find_symbol` | `vscode.executeWorkspaceSymbolProvider` | Search symbols (functions, classes) by name across workspace using the language server index. |
+| `get_hover_info` | `vscode.executeHoverProvider` | Type signatures, JSDoc/docstrings, and parameter info for any symbol. |
+| `get_call_hierarchy` | `vscode.prepareCallHierarchy` + `provideIncomingCalls`/`provideOutgoingCalls` | Call chain tracing — incoming (who calls this?) and/or outgoing (what does this call?). |
+| `get_type_hierarchy` | `vscode.prepareTypeHierarchy` + `provideSupertypes`/`provideSubtypes` | Inheritance chain — supertypes and subtypes of a class/interface. |
 
 **Tool Call Format (in LLM responses):**
 ```xml
@@ -337,6 +360,123 @@ The parser handles various LLM quirks that smaller models (like devstral-small) 
 
 Tools in `toolRegistry.ts` also accept multiple argument names for the file path:
 - `path`, `file`, or `filePath` are all valid for `read_file`, `write_file`, `get_diagnostics`
+
+## Path Resolution (`src/agent/tools/pathUtils.ts`)
+
+All built-in tools resolve file paths through `resolveWorkspacePath()` (single-root) or `resolveMultiRootPath()` (multi-root capable).
+
+### `resolveMultiRootPath` — Folder-Name Prefix Stripping
+
+`vscode.workspace.asRelativePath(path, true)` returns paths prefixed with the workspace folder name (e.g. `"demo-project/rss-fetch.ts"` for a workspace at `/home/user/demo-project/`). When this value is used as a relative path and joined with the folder's URI, the folder name doubles:
+
+```
+"demo-project/rss-fetch.ts" joined with /home/user/demo-project/
+ → /home/user/demo-project/demo-project/rss-fetch.ts  ← WRONG (ENOENT)
+```
+
+`resolveMultiRootPath` handles this in its **single-root fast path**:
+
+1. Checks if `relativePath` starts with `folderName + '/'`
+2. Constructs both the prefixed path (`folder/folderName/rest`) and the stripped path (`folder/rest`)
+3. Uses `fs.existsSync()` to disambiguate:
+   - If the prefixed path **doesn't exist** but the stripped path **does** → use stripped (it was a folder-name prefix)
+   - If the prefixed path **does exist** → keep it (there's a real subdirectory with that name)
+4. This guard prevents breaking projects that actually have a subdirectory named the same as the workspace folder
+
+**Multi-root path** has a separate handling: step 4 of the resolution order interprets the first path segment as a workspace folder **name** and strips it.
+
+### `search_workspace` — Regex Support & Output Format
+
+The tool supports both plain-text and regex searches via the `isRegex` parameter. The LLM is guided toward regex through:
+
+1. **Tool description**: Explains when to use `isRegex=true` (uncertain casing, alternatives, wildcards)
+2. **Schema**: `query` and `isRegex` field descriptions mention `(?i)`, `|`, `.*` syntax
+3. **System prompt**: Both native tool-calling and XML fallback system prompts include a `SEARCH TIPS` section with concrete examples
+
+**Output format** (consumed by `toolUIFormatter.ts` for UI rendering):
+```
+── src/services/myService.ts ──
+  10: context line before
+→ 11: matching line here
+  12: context line after
+
+── src/utils/helper.ts ──
+→ 5: another match
+```
+
+- `── file ──` headers mark file boundaries
+- `→ N:` marks matching lines (with line number)
+- Indented lines without `→` are context lines
+
+The UI formatter (`getToolSuccessInfo` for `search_workspace`) parses this format into a structured listing with `📄 path\tmatchCount` entries, displayed in the progress group as a clickable file tree.
+
+## LSP-Powered Code Intelligence Tools
+
+The agent has 8 tools that delegate to VS Code's built-in Language Server Protocol commands (`vscode.commands.executeCommand`). These work for **any language** that has a VS Code extension with LSP support (TypeScript, Python, Java, Rust, etc.) — the agent gets "go to definition", "find references", "document outline", type info, and call hierarchy for free with zero custom parsing.
+
+### Why LSP Tools Matter
+
+Without LSP tools, the agent can only do text search (`search_workspace`) and manual file reading (`read_file`). With them:
+- **`get_document_symbols`** gives the agent a file's structure (classes, functions, line ranges) in one call vs reading the entire file
+- **`find_definition`** lets the agent follow function calls across files — the single most important tool for deep code understanding
+- **`find_references`** shows impact surface before modifying shared code
+- **`find_symbol`** finds a class/function by name without knowing which file it's in (uses the language server's semantic index, not raw text search)
+- **`get_hover_info`** gives type signatures + JSDoc without navigating to definition files
+- **`get_call_hierarchy`** traces call chains — incoming (who calls this?) and outgoing (what does this call?)
+- **`find_implementations`** finds concrete classes implementing an interface
+- **`get_type_hierarchy`** shows inheritance chains — supertypes and subtypes
+
+### Shared Position Resolution (`symbolResolver.ts`)
+
+Multiple LSP tools need to convert `{path, symbolName?, line?, character?}` into a precise `{uri, position}`. This is centralised in `src/agent/tools/symbolResolver.ts`:
+
+**Resolution strategy:**
+1. If `line` + `character` are both provided → use directly (1-based → 0-based conversion)
+2. If `symbolName` is provided → search the document text for the symbol
+   - If `line` is also given → prefer the occurrence closest to that line
+   - Falls back to case-insensitive search if exact match not found
+3. If only `line` is given → use with character 0
+
+**Why symbolName?** LLMs are better at naming symbols than specifying exact positions. The agent can say `find_definition({path: "src/main.ts", symbolName: "handleRequest"})` instead of needing to know the exact line/column.
+
+**Exported utilities:**
+| Function | Purpose |
+|----------|---------|
+| `resolveSymbolPosition(params, workspace, allFolders)` | Path + name/position → `{ uri, position }` |
+| `readContextAroundLocation(uri, line, contextLines)` | Read surrounding lines (with `→` marker on target line) |
+| `formatLocation(location, contextLines)` | Format a `Location`/`LocationLink` to readable string |
+
+### Execution Routing
+
+All LSP tools (and all other non-terminal, non-file-edit tools) go through the standard `ToolRegistry.execute()` path with **no special routing** in `agentToolRunner.ts`. Unlike `write_file` (approval) or `run_terminal_command` (safety), these are read-only and need no approval flow.
+
+### LSP Tool Availability
+
+LSP results depend on having an active language server for the file type:
+- TypeScript/JavaScript: Built-in TS server — always available
+- Python, Java, Rust, etc.: Requires the user to have the language extension installed
+- Plain text files or unsupported languages: Tools return "No X found" messages (graceful degradation, not errors)
+
+### Progress Group Titles for LSP Tools
+
+`getProgressGroupTitle()` in `toolUIFormatter.ts` categorizes LSP tool batches:
+- `find_definition`, `find_references`, `find_implementations`, `get_hover_info`, `get_call_hierarchy`, `get_type_hierarchy` → **"Analyzing code"**
+- `find_symbol` (grouped with `search_workspace`) → **"Searching codebase"**
+- `get_document_symbols` (without writes) → **"Inspecting file structure"**
+
+### System Prompt Guidance
+
+Both native tool-calling and XML fallback system prompts include a `CODE NAVIGATION STRATEGY` section that tells the LLM **when** to use each tool:
+- Use `get_document_symbols` before reading large files
+- Use `find_definition` to follow function calls
+- Use `find_references` before modifying shared code
+- Use `find_symbol` when you don't know which file a symbol is in
+- Use `get_hover_info` for type/signature inspection
+- Use `get_call_hierarchy` for call chain tracing
+- Use `find_implementations` for interface/abstract implementations
+- Use `get_type_hierarchy` for inheritance chains
+
+This guidance is in `buildAgentSystemPrompt()` in `agentChatExecutor.ts`.
 
 ## Streaming Behavior
 

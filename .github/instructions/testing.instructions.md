@@ -21,7 +21,7 @@ This repo uses two complementary test harnesses:
 - Location:
   - Test harness + mocks: `tests/extension/`
   - Test suites: `tests/extension/suite/`
-    - `tests/extension/suite/agent/` for agent tool tests (toolRegistry, readFile)
+    - `tests/extension/suite/agent/` for agent tool tests (toolRegistry, readFile, codeIntelligenceTools)
     - `tests/extension/suite/utils/` for pure utilities (toolCallParser, commandSafety, toolUIFormatter)
     - `tests/extension/suite/services/` for service-level integration tests
 
@@ -215,10 +215,34 @@ The following test suites exist in `tests/extension/suite/`:
 - get_diagnostics: accepts multiple path argument names
 - Tool registration: verifies all expected tools are registered
 
+**`agent/pathUtils.test.ts`** (22 tests) - Tests path resolution utilities:
+- `resolveWorkspacePath`: joins relative to workspace root, returns absolute as-is
+- `resolveMultiRootPath`:
+  - Absolute path passthrough
+  - Single-root fast path (undefined allFolders, single-entry allFolders)
+  - Primary folder resolution: existing file, ambiguous file (primary wins)
+  - Secondary/tertiary folder resolution: file not in primary, unique file
+  - Folder-name prefix resolution: `backend/src/server.ts` → secondaryDir/src/server.ts
+  - Fallback for new files (defaults to primary, deeply nested)
+  - Edge cases: empty path, trailing separator, dot-relative
+
+**`agent/multiRootTools.test.ts`** (17 tests) - Integration tests for multi-root workspace:
+- read_file: primary by relative, secondary by relative, folder-name prefix, unique path, primary-wins, absolute path
+- list_files: roots listing, folder-name prefix, primary src
+- write_file: new file defaults to primary, overwrites in correct folder
+- search_workspace: finds across both folders, unique to secondary, unique to primary
+- get_diagnostics: secondary folder path, folder-name prefixed path
+
 **`agent/readFile.test.ts`** (13 tests) - Tests streaming file I/O helpers:
 - `CHUNK_SIZE` is 100
 - `countFileLines`: small file, single-line no trailing newline, empty file (0 lines), 200-line file, nonexistent file rejects with ENOENT
 - `readFileChunk`: first chunk of multi-line file, second chunk, full file range, single-line range, early stop (does not read beyond `endLine`), nonexistent file rejects, exactly `CHUNK_SIZE` lines, `CHUNK_SIZE + 1` lines boundary
+
+**`agent/codeIntelligenceTools.test.ts`** (26 tests) - Tests LSP-powered code intelligence tools:
+- Creates a temp TypeScript file with known symbols (interface, functions, class hierarchy)
+- Each of the 8 LSP tools (`get_document_symbols`, `find_definition`, `find_references`, `find_symbol`, `get_hover_info`, `get_call_hierarchy`, `find_implementations`, `get_type_hierarchy`) has tests for: normal execution, missing/empty results, missing required parameters
+- Tests run in Extension Development Host (real VS Code APIs, TS server active)
+- Mocked: `vscode.commands.executeCommand` stubs return controlled results
 
 **`utils/toolUIFormatter.test.ts`** (29 tests) - Tests tool UI text generation:
 - `getProgressGroupTitle`: single read shows filename, multiple reads show comma-separated, >5 reads → "Reading multiple files", deduplication, `file` arg variant, read+write → "Modifying files", search/write/list/command titles, empty args fallback

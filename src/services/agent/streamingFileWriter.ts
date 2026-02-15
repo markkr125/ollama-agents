@@ -1,3 +1,4 @@
+import * as fs from 'fs';
 import * as path from 'path';
 import * as vscode from 'vscode';
 
@@ -36,7 +37,7 @@ export class StreamingFileWriter implements vscode.Disposable {
     const workspaceFolders = vscode.workspace.workspaceFolders;
     if (!workspaceFolders?.length) return;
 
-    const absPath = path.join(workspaceFolders[0].uri.fsPath, relativePath);
+    const absPath = this.resolveAcrossFolders(relativePath, workspaceFolders);
     const fileUri = vscode.Uri.file(absPath);
 
     // Find the editor showing this file
@@ -105,5 +106,38 @@ export class StreamingFileWriter implements vscode.Disposable {
   /** Clean up resources. */
   dispose(): void {
     this.activeFiles.clear();
+  }
+
+  // -----------------------------------------------------------------------
+  // Internal helpers
+  // -----------------------------------------------------------------------
+
+  /**
+   * Resolve a relative path by trying each workspace folder in order.
+   * Falls back to the first folder for new files.
+   */
+  private resolveAcrossFolders(
+    relativePath: string,
+    folders: readonly vscode.WorkspaceFolder[]
+  ): string {
+    if (path.isAbsolute(relativePath)) return relativePath;
+
+    for (const folder of folders) {
+      const candidate = path.join(folder.uri.fsPath, relativePath);
+      if (fs.existsSync(candidate)) return candidate;
+    }
+
+    // Try first segment as folder name
+    const segments = relativePath.split(/[/\\]/);
+    if (segments.length > 1) {
+      for (const folder of folders) {
+        if (folder.name === segments[0]) {
+          const candidate = path.join(folder.uri.fsPath, segments.slice(1).join(path.sep));
+          if (fs.existsSync(candidate)) return candidate;
+        }
+      }
+    }
+
+    return path.join(folders[0].uri.fsPath, relativePath);
   }
 }

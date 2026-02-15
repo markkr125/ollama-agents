@@ -1,51 +1,51 @@
 import {
-    applySearchResults,
-    applySettings,
-    clearToken,
-    scrollToBottom,
-    setGenerating,
-    showStatus,
-    updateInitState,
-    updateThinking
+  applySearchResults,
+  applySettings,
+  clearToken,
+  scrollToBottom,
+  setGenerating,
+  showStatus,
+  updateInitState,
+  updateThinking
 } from '../actions/index';
 import {
-    autoApproveCommands,
-    autoApproveConfirmVisible,
-    autoApproveSensitiveEdits,
-    capabilityCheckProgress,
-    connectionStatus,
-    contextList,
-    currentAssistantThreadId,
-    currentMode,
-    currentModel,
-    currentPage,
-    currentProgressIndex,
-    currentSessionId,
-    currentStreamIndex,
-    dbMaintenanceStatus,
-    deletingSessionIds,
-    deletionProgress,
-    filesChangedBlocks,
-    hasToken,
-    isFirstRun,
-    isSearching,
-    modelInfo,
-    modelOptions,
-    recreateMessagesStatus,
-    scrollTargetMessageId,
-    selectedSessionIds,
-    selectionMode,
-    sessions,
-    sessionsCursor,
-    sessionSensitiveFilePatterns,
-    sessionsHasMore,
-    sessionsInitialLoaded,
-    sessionsLoading,
-    settings,
-    temperatureSlider,
-    timeline,
-    vscode,
-    warningBanner
+  autoApproveCommands,
+  autoApproveConfirmVisible,
+  autoApproveSensitiveEdits,
+  capabilityCheckProgress,
+  connectionStatus,
+  contextList,
+  currentAssistantThreadId,
+  currentMode,
+  currentModel,
+  currentPage,
+  currentProgressIndex,
+  currentSessionId,
+  currentStreamIndex,
+  dbMaintenanceStatus,
+  deletingSessionIds,
+  deletionProgress,
+  filesChangedBlocks,
+  hasToken,
+  isFirstRun,
+  isSearching,
+  modelInfo,
+  modelOptions,
+  recreateMessagesStatus,
+  scrollTargetMessageId,
+  selectedSessionIds,
+  selectionMode,
+  sessions,
+  sessionsCursor,
+  sessionSensitiveFilePatterns,
+  sessionsHasMore,
+  sessionsInitialLoaded,
+  sessionsLoading,
+  settings,
+  temperatureSlider,
+  timeline,
+  vscode,
+  warningBanner
 } from '../state';
 import { buildTimelineFromMessages } from '../timelineBuilder';
 import type { InitMessage, LoadSessionMessagesMessage, SearchResultGroup } from '../types';
@@ -219,8 +219,9 @@ export const handleGenerationStopped = (msg: any) => {
   if (!msg.sessionId || msg.sessionId === currentSessionId.value) {
     setGenerating(false);
     currentAssistantThreadId.value = null;
-    // Close any open thinking group and reset stream state
-    closeActiveThinkingGroup();
+    // Finalize the thinking group but keep it OPEN so tool results remain
+    // visible and clickable after generation ends (don't collapse).
+    closeActiveThinkingGroup(/* collapse */ false);
     resetActiveStreamBlock();
   }
 };

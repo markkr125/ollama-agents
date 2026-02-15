@@ -1,8 +1,7 @@
 import { structuredPatch } from 'diff';
-import * as path from 'path';
 import * as vscode from 'vscode';
 import { ToolRegistry } from '../../agent/toolRegistry';
-import { resolveWorkspacePath } from '../../agent/tools/pathUtils';
+import { resolveMultiRootPath } from '../../agent/tools/pathUtils';
 import { CHUNK_SIZE, countFileLines, readFileChunk } from '../../agent/tools/readFile';
 import { PersistUiEventFn } from '../../types/agent';
 import { ChatMessage } from '../../types/ollama';
@@ -155,7 +154,7 @@ export class AgentToolRunner {
 
             const relPath = String(toolCall.args?.path || toolCall.args?.file || '');
             if (relPath) {
-              const absPath = path.join(context.workspace?.uri?.fsPath || '', relPath);
+              const absPath = resolveMultiRootPath(relPath, context.workspace, context.workspaceFolders);
               this.decorationProvider.markPending(vscode.Uri.file(absPath));
             }
 
@@ -306,7 +305,7 @@ export class AgentToolRunner {
     if (!relativePath || typeof relativePath !== 'string') {
       throw new Error('Missing required argument: path');
     }
-    const absPath = resolveWorkspacePath(relativePath, context.workspace);
+    const absPath = resolveMultiRootPath(relativePath, context.workspace, context.workspaceFolders);
     const fileName = relativePath.split('/').pop() || relativePath;
     const totalLines = await countFileLines(absPath);
 
@@ -374,7 +373,7 @@ export class AgentToolRunner {
       const snapshot = await this.databaseService.getSnapshotForFile(checkpointId, relPath);
       if (!snapshot) return fallback;
 
-      const absPath = path.join(context.workspace?.uri?.fsPath || '', relPath);
+      const absPath = resolveMultiRootPath(relPath, context.workspace, context.workspaceFolders);
       const currentData = await vscode.workspace.fs.readFile(vscode.Uri.file(absPath));
       const currentContent = new TextDecoder().decode(currentData);
       const original = snapshot.original_content ?? '';

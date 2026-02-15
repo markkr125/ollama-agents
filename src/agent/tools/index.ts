@@ -7,7 +7,15 @@
  */
 
 import { Tool } from '../../types/agent';
+import { findDefinitionTool } from './findDefinition';
+import { findImplementationsTool } from './findImplementations';
+import { findReferencesTool } from './findReferences';
+import { findSymbolTool } from './findSymbol';
+import { getCallHierarchyTool } from './getCallHierarchy';
 import { getDiagnosticsTool } from './getDiagnostics';
+import { getDocumentSymbolsTool } from './getDocumentSymbols';
+import { getHoverInfoTool } from './getHoverInfo';
+import { getTypeHierarchyTool } from './getTypeHierarchy';
 import { listFilesTool } from './listFiles';
 import { readFileTool } from './readFile';
 import { runTerminalCommandTool } from './runTerminalCommand';
@@ -22,6 +30,30 @@ export const builtInTools: Tool[] = [
   listFilesTool,
   runTerminalCommandTool,
   getDiagnosticsTool,
+  getDocumentSymbolsTool,
+  findDefinitionTool,
+  findReferencesTool,
+  findImplementationsTool,
+  findSymbolTool,
+  getHoverInfoTool,
+  getCallHierarchyTool,
+  getTypeHierarchyTool,
 ];
 
-export { getDiagnosticsTool, listFilesTool, readFileTool, runTerminalCommandTool, searchWorkspaceTool, writeFileTool };
+export {
+    findDefinitionTool,
+    findImplementationsTool,
+    findReferencesTool,
+    findSymbolTool,
+    getCallHierarchyTool,
+    getDiagnosticsTool,
+    getDocumentSymbolsTool,
+    getHoverInfoTool,
+    getTypeHierarchyTool,
+    listFilesTool,
+    readFileTool,
+    runTerminalCommandTool,
+    searchWorkspaceTool,
+    writeFileTool
+};
+

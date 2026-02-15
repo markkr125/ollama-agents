@@ -1,6 +1,6 @@
 import * as vscode from 'vscode';
 import { Tool } from '../../types/agent';
-import { resolveWorkspacePath } from './pathUtils';
+import { resolveMultiRootPath } from './pathUtils';
 
 /**
  * list_files — List files in a directory relative to the workspace.
@@ -16,8 +16,21 @@ export const listFilesTool: Tool = {
     required: []
   },
   execute: async (params, context) => {
+    // In multi-root workspaces with no path specified, list all workspace roots
+    if (!params.path) {
+      const allFolders = context.workspaceFolders;
+      if (allFolders && allFolders.length > 1) {
+        const parts: string[] = ['Workspace folders:'];
+        for (const folder of allFolders) {
+          parts.push(`📁 ${folder.name}/  (${folder.uri.fsPath})`);
+        }
+        parts.push('\nTo list files in a specific folder, use: list_files path="<folder_name>"');
+        return parts.join('\n');
+      }
+    }
+
     const dirPath = params.path
-      ? resolveWorkspacePath(params.path, context.workspace)
+      ? resolveMultiRootPath(params.path, context.workspace, context.workspaceFolders)
       : context.workspace.uri.fsPath;
 
     const uri = vscode.Uri.file(dirPath);

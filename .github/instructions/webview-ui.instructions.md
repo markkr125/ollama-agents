@@ -89,7 +89,7 @@ For thinking models (`think=true`), the webview groups thinking content and **re
 
 **What goes INSIDE the ThinkingGroup:**
 - Thinking content sections (`thinkingContent`)
-- Read-only progress groups: `Reading files`, `Exploring workspace`, `Searching codebase`
+- Read-only progress groups: `Reading files`, `Exploring workspace`, `Searching codebase`, `Analyzing code`, `Inspecting file structure`
 
 **What goes OUTSIDE the ThinkingGroup (at thread level):**
 - Write progress groups: `Writing files`, `Modifying files`, `Creating files`
@@ -120,6 +120,27 @@ When a model supports `think=true`, its internal reasoning is streamed via `stre
 - **Duration accuracy**: `durationSeconds` is computed from `lastThinkingTimestamp - thinkingStartTime` (excludes Ollama's tool_call buffering time). The webview prefers the backend-provided duration; falls back to `Date.now() - startTime` if not provided.
 - **Visual style**: Rendered as a 💭 "Thought" pill. No chevron indicator — just a simple toggle.
 - **History rebuild**: `timelineBuilder.ts` handles `thinkingBlock` UI events by creating collapsed thinking sections inside ThinkingGroups. Duration is carried in the persisted event payload.
+
+### `closeActiveThinkingGroup(collapse)` — End-of-Generation Behavior
+
+`closeActiveThinkingGroup()` in `streaming.ts` finalizes the active ThinkingGroup. It accepts an optional `collapse` parameter:
+
+```typescript
+export const closeActiveThinkingGroup = (collapse = true) => { ... }
+```
+
+- **`collapse = true` (default)**: Collapses the `<details>` element. Used when a write group starts (see above) or when clearing messages.
+- **`collapse = false`**: Keeps the `<details>` element **open**. Used at generation-end so tool results inside the thinking group remain visible and clickable.
+
+**Call sites:**
+| Caller | `collapse` value | Reason |
+|--------|-----------------|--------|
+| `handleStartProgressGroup` (write group) | `true` (default) | Thinking is done, collapse before showing writes |
+| `handleGenerationStopped` | `false` | Keep last thinking group open for user interaction |
+| `handleFinalMessage` | `false` | Keep last thinking group open for user interaction |
+| `handleClearMessages` | `true` (default) | Clearing everything — collapse doesn't matter |
+
+**Why this matters**: Without `collapse = false` at generation-end, all tool action groups inside the last thinking group would collapse into a "Thought for Xs" pill. Users reported the scroll area shrinking and action groups becoming unclickable — the thinking group `<details>` was collapsing and hiding all its children.
 
 ### First-Chunk Streaming Gate
 
@@ -165,6 +186,30 @@ Actions with multi-line `detail` (containing `\n`) render as a tree with connect
 - Folders are bold and clickable → `revealInExplorer(fullPath)`
 - Files are clickable → `openWorkspaceFile(fullPath)`
 - `detail` format: `"summary\tbasePath\n📁 name\n📄 name\tsize"` — basePath is tab-separated on the first line for path construction
+
+**Search results** use a similar listing format but without `basePath` (file paths are already relative):
+- Format: `"fileCount\n📄 path\tmatchCount"` — no basePath tab on summary line
+- Each `📄 path` entry is clickable → `openWorkspaceFile(path)`
+- The tab-separated value after the path (e.g. "3 matches") renders as muted text, not as a numeric size
+
+### ⚠️ Folder-Name Prefix in Clickable Paths
+
+Both `list_files` and `search_workspace` produce relative paths via `vscode.workspace.asRelativePath(path, true)`. In **single-root** workspaces, this prepends the folder name (e.g. `"demo-project/src/file.ts"` for a workspace at `/home/user/demo-project/`).
+
+When the user clicks a file in the listing, the webview sends `{ type: 'openWorkspaceFile', path: 'demo-project/src/file.ts' }` to the backend. The handler in `fileChangeMessageHandler.ts` must strip this prefix before joining with the folder URI — otherwise the path doubles:
+
+```typescript
+// fileChangeMessageHandler.ts
+private stripFolderPrefix(relativePath: string, folder: vscode.WorkspaceFolder): string {
+  const prefix = folder.name + '/';
+  if (relativePath.startsWith(prefix)) {
+    return relativePath.slice(prefix.length);
+  }
+  return relativePath;
+}
+```
+
+Both `handleOpenWorkspaceFile` and `handleRevealInExplorer` call `stripFolderPrefix()` before `Uri.joinPath`. They also iterate all workspace folders to find the actual file, so multi-root workspaces work correctly.
 
 ## UI Event Persistence
 

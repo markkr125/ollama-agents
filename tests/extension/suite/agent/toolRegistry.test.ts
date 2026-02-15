@@ -207,6 +207,14 @@ suite('toolRegistry', () => {
       assert.ok(toolNames.includes('search_workspace'));
       assert.ok(toolNames.includes('run_terminal_command'));
       assert.ok(toolNames.includes('get_diagnostics'));
+      assert.ok(toolNames.includes('get_document_symbols'));
+      assert.ok(toolNames.includes('find_definition'));
+      assert.ok(toolNames.includes('find_references'));
+      assert.ok(toolNames.includes('find_symbol'));
+      assert.ok(toolNames.includes('get_hover_info'));
+      assert.ok(toolNames.includes('get_call_hierarchy'));
+      assert.ok(toolNames.includes('find_implementations'));
+      assert.ok(toolNames.includes('get_type_hierarchy'));
     });
 
     test('returns error for unknown tool', async () => {

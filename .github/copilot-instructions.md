@@ -140,6 +140,8 @@ These are the mistakes most frequently made when editing this codebase. **Check 
 | 22 | `handleFilesChanged` only requesting stats when `added=true` | When the agent re-edits an already-tracked file, the incoming `filesChanged` event contains the same file paths. Since no NEW file is added (`added` stays `false`), `requestFilesDiffStats` is never sent and the widget shows stale `+N -N` counts from the first edit. | Detect re-edits: `const hasReEditedFiles = !added && incomingPaths.size > 0;`. Send `requestFilesDiffStats` on EITHER `added` OR `hasReEditedFiles`. |
 | 23 | Keep/Undo not updating "Change X of Y" counter | `handleKeepFile`/`handleUndoFile` remove the file from the review session via `removeFileFromReview()` but never send a `reviewChangePosition` message. The counter stays stale until the user clicks another file. | `fileChangeMessageHandler.ts` has a `sendReviewPosition(checkpointId)` helper that queries `reviewService.getChangePosition()` and posts `reviewChangePosition`. Called after BOTH `handleKeepFile` and `handleUndoFile`. |
 | 24 | `startReviewForCheckpoint` always setting `currentFileIndex = 0` | When a new file is written while the user is viewing a different file, the review session rebuilds and resets `currentFileIndex` to 0. The widget's `activeFilePath` then highlights the wrong file. | `startReviewForCheckpoint` now iterates `vscode.window.visibleTextEditors`, matches against review file URIs, and sets `currentFileIndex` to the focused/visible editor. Prefers `activeTextEditor`; falls back to any visible match. |
+| 25 | `asRelativePath(path, true)` returns folder-name-prefixed paths | `vscode.workspace.asRelativePath(path, true)` returns `"folderName/file.ts"`. Joining this with `folder.uri` via `Uri.joinPath` or `path.join` doubles the folder name: `…/folderName/folderName/file.ts` → `ENOENT`. Affects both agent tools (`resolveMultiRootPath` in `pathUtils.ts`) and UI file opening (`handleOpenWorkspaceFile`/`handleRevealInExplorer` in `fileChangeMessageHandler.ts`). | **Agent tools**: `resolveMultiRootPath` strips the folder-name prefix in single-root mode with an `fs.existsSync` guard (keeps real subdirectories with the same name). **UI handlers**: `stripFolderPrefix()` helper strips the prefix before `Uri.joinPath`. Both iterate workspace folders to find the actual file. |
+| 26 | `closeActiveThinkingGroup()` collapsing at end of generation | The function defaults to `collapse = true`, which hides all tool action groups inside the thinking group's `<details>` element. At end of generation, this makes the scroll area shrink and action groups become unclickable. | Pass `collapse = false` at end-of-generation call sites (`handleGenerationStopped`, `handleFinalMessage`). The default `collapse = true` is correct when a write group starts or when clearing messages. |
 
 ---
 
@@ -172,13 +174,22 @@ src/
 │   ├── toolRegistry.ts   # ToolRegistry class — registration, lookup, execution
 │   └── tools/            # Individual tool implementations (one file per tool)
 │       ├── index.ts           # Barrel export + builtInTools[]
-│       ├── pathUtils.ts       # resolveWorkspacePath shared utility
+│       ├── pathUtils.ts       # resolveWorkspacePath / resolveMultiRootPath shared utility
+│       ├── symbolResolver.ts  # Shared position resolution for LSP tools
 │       ├── readFile.ts        # read_file tool
 │       ├── writeFile.ts       # write_file tool
-│       ├── searchWorkspace.ts # search_workspace tool
+│       ├── searchWorkspace.ts # search_workspace tool (ripgrep-powered)
 │       ├── listFiles.ts       # list_files tool
 │       ├── runTerminalCommand.ts # run_terminal_command tool
-│       └── getDiagnostics.ts  # get_diagnostics tool
+│       ├── getDiagnostics.ts  # get_diagnostics tool
+│       ├── getDocumentSymbols.ts  # get_document_symbols (LSP)
+│       ├── findDefinition.ts      # find_definition (LSP)
+│       ├── findReferences.ts      # find_references (LSP)
+│       ├── findSymbol.ts          # find_symbol (LSP)
+│       ├── getHoverInfo.ts        # get_hover_info (LSP)
+│       ├── getCallHierarchy.ts    # get_call_hierarchy (LSP)
+│       ├── findImplementations.ts # find_implementations (LSP)
+│       └── getTypeHierarchy.ts    # get_type_hierarchy (LSP)
 ├── config/
 │   └── settings.ts       # Configuration helpers
 ├── modes/                # Different interaction modes
@@ -460,11 +471,46 @@ The agent executor is **decomposed into focused sub-handlers** — each owning a
 
 ---
 
+## ⚠️ CRITICAL RULE #4: Document As You Build
+
+**Every feature addition, behavior change, or improvement MUST include corresponding updates to instructions and skills files.** Code changes without documentation updates are incomplete — treat docs the same as tests: the work is not done until both are updated.
+
+### What to Update
+
+When you add or change code, ask: *"Would an LLM editing this area next week need to know about this change?"* If yes, update the docs.
+
+| What Changed | Update These Files |
+|---|---|
+| New agent tool | `agent-tools.instructions.md` (tool table + section), `copilot-instructions.md` (architecture tree + key files table), `docs/chat-and-modes.md` (available tools table), `add-agent-tool` skill (if new patterns) |
+| New message type | `ui-messages.instructions.md` (message tables), `webview-ui.instructions.md` (if UI structure affected) |
+| New setting | `extension-architecture.instructions.md`, `docs/configuration.md` |
+| New/changed UI behavior | `webview-ui.instructions.md`, `ui-messages.instructions.md` |
+| New test patterns | `testing.instructions.md` (test catalog + conventions) |
+| New database table/column | `database-rules.instructions.md` (schema section) |
+| New service or file | `copilot-instructions.md` (architecture tree), relevant scoped instructions |
+| New pitfall discovered | `copilot-instructions.md` (Common Pitfalls table — assign next number) |
+| Changed instructions/skills | `copilot-instructions.md` (preamble table if scope/description changed) |
+
+### How to Find the Right File
+
+1. Check the **preamble table** at the top of this file — it maps `applyTo` globs to instruction files
+2. Check the **Key Files for Common Tasks** table at the bottom — it maps tasks to files + skills
+3. When in doubt, update BOTH the scoped instruction file AND this root file
+
+### Rules
+
+- **Update the relevant scoped file** (`.github/instructions/*.instructions.md` or `.github/skills/*/SKILL.md`), not just this root file
+- **Do not defer documentation** — update docs in the same session as the code change, not "later"
+- **Run `npm run lint:docs`** after any docs/instructions/skills change to verify structure
+- **Keep the preamble table in sync** if you add, rename, or change the scope of an instruction or skill file
+
+---
+
 ## Development Guidelines
 
 ### Critical Meta (Non-Negotiable)
 
-- Keep instructions up to date whenever behavior, message payloads, settings, storage, or UI contracts change. Update the **relevant scoped file** (`.github/instructions/*.instructions.md` or `.github/skills/*/SKILL.md`), not just this root file.
+- **⚠️ Documentation is mandatory, not optional.** See CRITICAL RULE #4 above. Every code change that affects behavior, APIs, message types, settings, tools, or UI contracts MUST include updates to the relevant `.github/instructions/*.instructions.md`, `.github/skills/*/SKILL.md`, and/or `docs/*.md` files. If you skip this, the next person (human or LLM) working on this code will introduce bugs because they won't know about the change.
 - Build or update automated tests whenever features are added/updated.
   - Use Vitest for webview core logic/components (`tests/webview`).
   - Use `@vscode/test-electron` for VS Code/extension integration (`tests/extension`).
@@ -596,5 +642,10 @@ vsce package
 | Session stats badge (pending +/-) | `src/services/database/sessionIndexService.ts` (`getSessionsPendingStats`) + `src/views/chatSessionController.ts` (`sendSessionsList`) | `database-rules` + `extension-architecture` instructions |
 | Files changed widget | `src/webview/components/chat/components/FilesChanged.vue` + `src/webview/scripts/core/actions/filesChanged.ts` + `src/webview/scripts/core/messageHandlers/filesChanged.ts` | `webview-ui` + `ui-messages` instructions |
 | Checkpoint/snapshot management | `src/services/database/sessionIndexService.ts` (tables) + `src/services/agent/checkpointManager.ts` (lifecycle) | `database-rules` + `agent-tools` instructions |
+| Agent path resolution | `src/agent/tools/pathUtils.ts` (`resolveMultiRootPath`, `resolveWorkspacePath`) | `agent-tools` instructions |
+| LSP code intelligence tools | `src/agent/tools/{findDefinition,findReferences,findSymbol,getDocumentSymbols,getHoverInfo,getCallHierarchy,findImplementations,getTypeHierarchy}.ts` | `agent-tools` instructions |
+| LSP symbol position resolution | `src/agent/tools/symbolResolver.ts` (`resolveSymbolPosition`, `formatLocation`) | `agent-tools` instructions |
+| UI file opening from tool results | `src/views/messageHandlers/fileChangeMessageHandler.ts` (`handleOpenWorkspaceFile`, `stripFolderPrefix`) + `src/webview/components/chat/components/ProgressGroup.vue` (click handlers) | `webview-ui` instructions |
+| Tool UI formatting | `src/views/toolUIFormatter.ts` (maps tool names/output → icons, text, listing format) | `agent-tools` + `webview-ui` instructions |
 | Write/edit instructions | `.github/instructions/` + `.github/skills/` | `copilot-custom-instructions` skill |
 | Add a new test | `tests/extension/suite/` or `tests/webview/` | `add-test` skill |

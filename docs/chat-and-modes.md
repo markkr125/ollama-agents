@@ -50,11 +50,27 @@ The autonomous coding agent. It can read/write files, search your workspace, and
 | `write_file` | Write/modify files |
 | `create_file` | Create new files |
 | `list_files` | List directory contents |
-| `search_workspace` | Search for text in files |
+| `search_workspace` | Search for text or regex patterns in files (supports case-insensitive matching, alternatives, wildcards via `isRegex` flag) |
 | `run_terminal_command` | Execute shell commands |
 | `get_diagnostics` | Get TypeScript/ESLint errors for a file |
+| `get_document_symbols` | Get a file's outline — classes, functions, variables with line ranges |
+| `find_definition` | Go to definition of a symbol (follows function calls across files) |
+| `find_references` | Find all usages of a symbol across the workspace |
+| `find_symbol` | Search for a class/function by name across the workspace |
+| `get_hover_info` | Get type signature and documentation for a symbol |
+| `get_call_hierarchy` | Trace incoming and/or outgoing call chains |
+| `find_implementations` | Find concrete implementations of an interface or abstract class |
+| `get_type_hierarchy` | Show inheritance chains — supertypes and subtypes |
+
+> **Code intelligence tools** (last 8 above) use VS Code's Language Server Protocol — they work for any language with an active LSP extension (TypeScript, Python, Java, Rust, etc.).
 
 **Auto-approve:** You can toggle auto-approve per session for terminal commands and sensitive file edits. Critical commands (`rm -rf`, `sudo`, etc.) always require manual approval regardless of the toggle.
+
+**Tool result display:**
+- **File edits**: When complete, shown as a flat list with filename, verb (Created/Edited), and `+N -N` diff stats. Clicking a filename opens the diff view.
+- **Search results**: Shown as a collapsible group listing matched files with match counts. Clicking a filename opens it in the editor.
+- **Directory listings**: Shown as a tree with folder/file icons. Clicking entries opens files or reveals folders in the explorer.
+- **Terminal commands**: Show the command, exit code, and truncated output.
 
 ## Thinking Blocks
 
@@ -63,7 +79,8 @@ When `ollamaCopilot.agent.enableThinking` is enabled (default: `true`), the exte
 **During live chat:**
 - Thinking tokens stream in real time inside a collapsible `<details>` element labeled "Thought"
 - The block starts open so you can watch the reasoning unfold
-- Once thinking is complete, the block collapses automatically
+- When the model begins using tools, the thinking block collapses with an accurate duration ("Thought for 8s")
+- At the end of generation, the last thinking group stays **open** so tool results remain visible and clickable
 
 **In session history:**
 - Thinking blocks are persisted as `thinkingBlock` UI events

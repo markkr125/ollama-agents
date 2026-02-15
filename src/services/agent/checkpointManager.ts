@@ -1,6 +1,7 @@
 import { structuredPatch } from 'diff';
 import * as path from 'path';
 import * as vscode from 'vscode';
+import { resolveMultiRootPath } from '../../agent/tools/pathUtils';
 import { DatabaseService } from '../database/databaseService';
 import { EditManager } from '../editManager';
 import { PendingEditDecorationProvider } from '../pendingEditDecorationProvider';
@@ -36,7 +37,9 @@ export class CheckpointManager {
       if (!relPath) return;
 
       const workspaceRoot = context.workspace?.uri?.fsPath || '';
-      const absPath = path.join(workspaceRoot, relPath);
+      const absPath = context.workspaceFolders
+        ? resolveMultiRootPath(relPath, context.workspace, context.workspaceFolders)
+        : path.join(workspaceRoot, relPath);
       const uri = vscode.Uri.file(absPath);
 
       let originalContent: string | null = null;
@@ -70,8 +73,7 @@ export class CheckpointManager {
       return;
     }
 
-    const workspaceRoot = this.getWorkspaceRoot();
-    const absPath = path.join(workspaceRoot, filePath);
+    const absPath = this.resolveFilePath(filePath);
     const fileUri = vscode.Uri.file(absPath);
 
     const originalContent = snapshot.original_content ?? '';
@@ -110,8 +112,7 @@ export class CheckpointManager {
       return;
     }
 
-    const workspaceRoot = this.getWorkspaceRoot();
-    const absPath = path.join(workspaceRoot, filePath);
+    const absPath = this.resolveFilePath(filePath);
     const currentUri = vscode.Uri.file(absPath);
 
     const originalContent = snapshot.original_content ?? '';
@@ -141,8 +142,7 @@ export class CheckpointManager {
   async keepFile(checkpointId: string, filePath: string): Promise<{ success: boolean }> {
     await this.databaseService.updateFileSnapshotStatus(checkpointId, filePath, 'kept');
 
-    const workspaceRoot = this.getWorkspaceRoot();
-    const absPath = path.join(workspaceRoot, filePath);
+    const absPath = this.resolveFilePath(filePath);
     this.decorationProvider.clearPending(vscode.Uri.file(absPath));
 
     await this.updateCheckpointStatusFromFiles(checkpointId);
@@ -164,8 +164,7 @@ export class CheckpointManager {
       return { success: false };
     }
 
-    const workspaceRoot = this.getWorkspaceRoot();
-    const absPath = path.join(workspaceRoot, filePath);
+    const absPath = this.resolveFilePath(filePath);
     const uri = vscode.Uri.file(absPath);
 
     try {
@@ -203,8 +202,7 @@ export class CheckpointManager {
   async markFileUndone(checkpointId: string, filePath: string): Promise<void> {
     await this.databaseService.updateFileSnapshotStatus(checkpointId, filePath, 'undone');
 
-    const workspaceRoot = this.getWorkspaceRoot();
-    const absPath = path.join(workspaceRoot, filePath);
+    const absPath = this.resolveFilePath(filePath);
     this.decorationProvider.clearPending(vscode.Uri.file(absPath));
 
     await this.updateCheckpointStatusFromFiles(checkpointId);
@@ -219,12 +217,11 @@ export class CheckpointManager {
    */
   async keepAllChanges(checkpointId: string): Promise<{ success: boolean }> {
     const snapshots = await this.databaseService.getFileSnapshots(checkpointId);
-    const workspaceRoot = this.getWorkspaceRoot();
 
     for (const snap of snapshots) {
       if (snap.file_status === 'pending') {
         await this.databaseService.updateFileSnapshotStatus(checkpointId, snap.file_path, 'kept');
-        const absPath = path.join(workspaceRoot, snap.file_path);
+        const absPath = this.resolveFilePath(snap.file_path);
         this.decorationProvider.clearPending(vscode.Uri.file(absPath));
       }
     }
@@ -239,7 +236,6 @@ export class CheckpointManager {
    */
   async undoAllChanges(checkpointId: string): Promise<{ success: boolean; errors: string[] }> {
     const snapshots = await this.databaseService.getFileSnapshots(checkpointId);
-    const workspaceRoot = this.getWorkspaceRoot();
     const errors: string[] = [];
 
     const edit = new vscode.WorkspaceEdit();
@@ -249,7 +245,7 @@ export class CheckpointManager {
       if (snap.file_status !== 'pending') continue;
       if (snap.original_content === null) continue;
 
-      const absPath = path.join(workspaceRoot, snap.file_path);
+      const absPath = this.resolveFilePath(snap.file_path);
       const uri = vscode.Uri.file(absPath);
 
       try {
@@ -285,7 +281,7 @@ export class CheckpointManager {
     for (const snap of snapshots) {
       if (snap.file_status !== 'pending' || snap.action === 'created') continue;
       try {
-        const absPath = path.join(workspaceRoot, snap.file_path);
+        const absPath = this.resolveFilePath(snap.file_path);
         const doc = vscode.workspace.textDocuments.find(d => d.uri.fsPath === absPath);
         if (doc?.isDirty) await doc.save();
       } catch { /* best effort */ }
@@ -295,7 +291,7 @@ export class CheckpointManager {
     for (const snap of snapshots) {
       if (snap.file_status === 'pending') {
         await this.databaseService.updateFileSnapshotStatus(checkpointId, snap.file_path, 'undone');
-        const absPath = path.join(workspaceRoot, snap.file_path);
+        const absPath = this.resolveFilePath(snap.file_path);
         this.decorationProvider.clearPending(vscode.Uri.file(absPath));
       }
     }
@@ -317,11 +313,10 @@ export class CheckpointManager {
     checkpointId: string
   ): Promise<Array<{ path: string; additions: number; deletions: number; action: string }>> {
     const snapshots = await this.databaseService.getFileSnapshots(checkpointId);
-    const workspaceRoot = this.getWorkspaceRoot();
     const results: Array<{ path: string; additions: number; deletions: number; action: string }> = [];
 
     for (const snap of snapshots) {
-      const absPath = path.join(workspaceRoot, snap.file_path);
+      const absPath = this.resolveFilePath(snap.file_path);
       let currentContent = '';
       try {
         const data = await vscode.workspace.fs.readFile(vscode.Uri.file(absPath));
@@ -391,7 +386,6 @@ export class CheckpointManager {
    * for the "after" side.
    */
   async openAllEdits(checkpointIds: string[]): Promise<void> {
-    const workspaceRoot = this.getWorkspaceRoot();
     const changes: [vscode.Uri, vscode.Uri, vscode.Uri][] = [];
     const seen = new Set<string>();
 
@@ -401,7 +395,7 @@ export class CheckpointManager {
         if (snap.file_status !== 'pending' || seen.has(snap.file_path)) continue;
         seen.add(snap.file_path);
 
-        const absPath = path.join(workspaceRoot, snap.file_path);
+        const absPath = this.resolveFilePath(snap.file_path);
         const fileUri = vscode.Uri.file(absPath);
         const originalUri = vscode.Uri.from({
           scheme: 'ollama-original',
@@ -424,8 +418,13 @@ export class CheckpointManager {
     );
   }
 
-  private getWorkspaceRoot(): string {
+  /**
+   * Resolve a relative file path across all workspace folders (multi-root support).
+   * Falls back to the first workspace folder for new files.
+   */
+  private resolveFilePath(relativePath: string): string {
     const workspaceFolders = vscode.workspace.workspaceFolders;
-    return workspaceFolders?.[0]?.uri.fsPath || '';
+    if (!workspaceFolders?.length) return relativePath;
+    return resolveMultiRootPath(relativePath, workspaceFolders[0], workspaceFolders);
   }
 }

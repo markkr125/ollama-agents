@@ -208,6 +208,7 @@ export class AgentChatExecutor {
   ): Promise<{ summary: string; assistantMessage: MessageRecord; checkpointId?: string }> {
     const context = {
       workspace: agentSession.workspace,
+      workspaceFolders: vscode.workspace.workspaceFolders,
       token,
       outputChannel: this.outputChannel,
       sessionId,
@@ -218,9 +219,16 @@ export class AgentChatExecutor {
     const { agent: agentConfig } = getConfig();
     let useThinking = agentConfig.enableThinking && useNativeTools;
 
-    const workspacePath = agentSession.workspace?.uri?.fsPath || '';
+    const allFolders = vscode.workspace.workspaceFolders || [];
+    const workspaceDescription = allFolders.length > 1
+      ? `This is a multi-root workspace with ${allFolders.length} folders:\n${allFolders.map(f => `  - ${f.name}: ${f.uri.fsPath}`).join('\n')}\nAll file paths are relative to the folder that contains them (or prefixed with the folder name). The primary folder is: ${agentSession.workspace?.uri?.fsPath || ''}.`
+      : `The workspace root is: ${agentSession.workspace?.uri?.fsPath || ''}. All file paths are relative to this workspace.`;
     const systemContent = useNativeTools
-      ? `You are a coding agent. Use the provided tools to complete tasks. The workspace root is: ${workspacePath}. All file paths are relative to this workspace. Terminal commands run in this directory by default. When done, respond with [TASK_COMPLETE].`
+      ? `You are a coding agent. Use the provided tools to complete tasks. ${workspaceDescription} Terminal commands run in the primary workspace directory by default.
+
+SEARCH TIPS: search_workspace supports regex via isRegex=true. Use regex when: you're unsure of exact casing/spelling, you need case-insensitive search ((?i)pattern), you want alternatives (word1|word2), or pattern matching (import.*something). Use plain text for known exact strings.
+
+When done, respond with [TASK_COMPLETE].`
       : this.buildAgentSystemPrompt();
 
     const messages: any[] = [
@@ -507,7 +515,15 @@ export class AgentChatExecutor {
       return `${t.name}: ${t.description}\n${params}`;
     }).join('\n\n');
 
+    // Multi-root workspace description
+    const allFolders = vscode.workspace.workspaceFolders || [];
+    const workspaceInfo = allFolders.length > 1
+      ? `This is a multi-root workspace with ${allFolders.length} folders:\n${allFolders.map(f => `  - ${f.name}: ${f.uri.fsPath}`).join('\n')}\nFile paths can be relative to any workspace folder. When a path is ambiguous, prefix it with the folder name (e.g. "backend/src/app.ts" where "backend" is a folder name).`
+      : `The workspace root is: ${allFolders[0]?.uri?.fsPath || '(unknown)'}. All file paths are relative to this workspace.`;
+
     return `You are a coding agent. You MUST use tools to complete tasks. Never claim to do something without using tools.
+
+${workspaceInfo}
 
 TOOLS:
 ${toolDescriptions}
@@ -518,8 +534,23 @@ FORMAT - Always use this exact format:
 EXAMPLES:
 <tool_call>{"name": "read_file", "arguments": {"path": "package.json"}}</tool_call>
 <tool_call>{"name": "write_file", "arguments": {"path": "file.txt", "content": "new content"}}</tool_call>
+<tool_call>{"name": "find_definition", "arguments": {"path": "src/main.ts", "symbolName": "handleRequest"}}</tool_call>
 
 CRITICAL: To edit a file you must call write_file. Reading alone does NOT change files.
+
+CODE NAVIGATION STRATEGY:
+- Use get_document_symbols to get a file's outline (classes, functions, methods with line ranges) before reading the whole file.
+- Use find_definition to follow a function/method call to its source — this works across files.
+- Use find_references to find all usages of a symbol before modifying it.
+- Use find_symbol to search for a class or function by name when you don't know which file it's in.
+- Use get_hover_info to inspect the type or signature of a symbol without reading definition files.
+- Use get_call_hierarchy to trace call chains — who calls a function, and what does it call.
+- Use find_implementations to find concrete classes that implement an interface or abstract method.
+- Use get_type_hierarchy to understand inheritance chains — what a class extends and what extends it.
+- Use search_workspace for text/regex search with line numbers and context.
+  - Use plain text (default) for known exact strings.
+  - Set isRegex=true when unsure of casing/spelling, for case-insensitive search ((?i)pattern), alternatives (word1|word2|word3), or pattern matching (import.*something).
+- Prefer get_document_symbols + targeted read_file over reading entire large files.
 
 When done: [TASK_COMPLETE]`;
   }

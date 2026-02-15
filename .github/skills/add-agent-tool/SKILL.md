@@ -44,6 +44,10 @@ const filePath = params.path || params.file || params.filePath;
 
 The existing tools `read_file`, `write_file`, and `get_diagnostics` all follow this pattern.
 
+### LSP-Backed Tools (Pattern Reference)
+
+For tools that delegate to VS Code's language server (go-to-definition, find references, etc.), use the shared `symbolResolver.ts` for position resolution and `vscode.commands.executeCommand()` for the LSP command. See `findDefinition.ts` or `getDocumentSymbols.ts` as reference implementations. These tools are read-only and need no special routing — they go through standard `ToolRegistry.execute()`.
+
 ## Step 1b: Register in the Barrel Export
 
 Add the new tool to `src/agent/tools/index.ts`:

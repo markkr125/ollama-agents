@@ -160,7 +160,7 @@ const parseListing = (detail: string): ListingEntry[] => {
     return {
       icon: isFolder ? '📁' : '📄',
       name,
-      size: !isNaN(sizeNum) ? formatSize(sizeNum) : '',
+      size: !isNaN(sizeNum) ? formatSize(sizeNum) : sizeStr,
       type: isFolder ? 'folder' as const : 'file' as const,
       fullPath
     };

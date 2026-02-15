@@ -2,11 +2,19 @@ export function getProgressGroupTitle(toolCalls: Array<{ name: string; args: any
   const readCalls = toolCalls.filter(t => t.name === 'read_file');
   const hasRead = readCalls.length > 0;
   const hasWrite = toolCalls.some(t => t.name === 'write_file' || t.name === 'create_file');
-  const hasSearch = toolCalls.some(t => t.name === 'search_workspace');
+  const hasSearch = toolCalls.some(t => t.name === 'search_workspace' || t.name === 'find_symbol');
   const hasCommand = toolCalls.some(t => t.name === 'run_terminal_command' || t.name === 'run_command');
   const hasListFiles = toolCalls.some(t => t.name === 'list_files');
+  const hasNavigation = toolCalls.some(t =>
+    t.name === 'find_definition' || t.name === 'find_references' ||
+    t.name === 'find_implementations' || t.name === 'get_hover_info' ||
+    t.name === 'get_call_hierarchy' || t.name === 'get_type_hierarchy'
+  );
+  const hasSymbols = toolCalls.some(t => t.name === 'get_document_symbols');
 
+  if (hasNavigation) return 'Analyzing code';
   if (hasSearch) return 'Searching codebase';
+  if (hasSymbols && !hasWrite) return 'Inspecting file structure';
   if (hasWrite && hasRead) return 'Modifying files';
   if (hasWrite) return 'Writing files';
   if (hasRead && !hasWrite && !hasSearch && !hasCommand && !hasListFiles) {
@@ -77,6 +85,54 @@ export function getToolActionInfo(
         actionDetail: (args?.command || '').substring(0, 30),
         actionIcon: '⚡'
       };
+    case 'get_document_symbols':
+      return {
+        actionText: `Symbols in ${path ? fileName : 'file'}`,
+        actionDetail: '',
+        actionIcon: '🏗️'
+      };
+    case 'find_definition':
+      return {
+        actionText: `Definition of ${args?.symbolName || 'symbol'}`,
+        actionDetail: path ? `in ${fileName}` : '',
+        actionIcon: '🎯'
+      };
+    case 'find_references':
+      return {
+        actionText: `References to ${args?.symbolName || 'symbol'}`,
+        actionDetail: path ? `from ${fileName}` : '',
+        actionIcon: '🔗'
+      };
+    case 'find_symbol':
+      return {
+        actionText: `Find symbol "${args?.query || ''}"`,
+        actionDetail: '',
+        actionIcon: '🔍'
+      };
+    case 'get_hover_info':
+      return {
+        actionText: `Type info for ${args?.symbolName || 'symbol'}`,
+        actionDetail: path ? `in ${fileName}` : '',
+        actionIcon: '📝'
+      };
+    case 'get_call_hierarchy':
+      return {
+        actionText: `Call hierarchy of ${args?.symbolName || 'symbol'}`,
+        actionDetail: args?.direction || 'both',
+        actionIcon: '🌳'
+      };
+    case 'find_implementations':
+      return {
+        actionText: `Implementations of ${args?.symbolName || 'symbol'}`,
+        actionDetail: path ? `in ${fileName}` : '',
+        actionIcon: '🧩'
+      };
+    case 'get_type_hierarchy':
+      return {
+        actionText: `Type hierarchy of ${args?.symbolName || 'symbol'}`,
+        actionDetail: args?.direction || 'both',
+        actionIcon: '🏛️'
+      };
     default:
       return {
         actionText: toolName,
@@ -139,14 +195,41 @@ export function getToolSuccessInfo(
       };
     }
     case 'search_workspace': {
-      const matchLines = output?.split('\n').filter(Boolean) || [];
-      const matches = matchLines.length;
+      const rawLines = output?.split('\n') || [];
       const query = args?.query || '';
-      const title = matches > 0 ? `Found ${matches} file${matches !== 1 ? 's' : ''} matching "${query}"` : `No files match "${query}"`;
-      const listing = matches > 0 ? matchLines.join('\n') : '';
+
+      // Parse structured output: "── file ──" headers and "→ N:" match lines
+      const fileMatches = new Map<string, number>();
+      let currentFile = '';
+      for (const line of rawLines) {
+        const fileHeader = line.match(/^── (.+) ──$/);
+        if (fileHeader) {
+          currentFile = fileHeader[1];
+          if (!fileMatches.has(currentFile)) fileMatches.set(currentFile, 0);
+        } else if (line.startsWith('→') && currentFile) {
+          fileMatches.set(currentFile, (fileMatches.get(currentFile) || 0) + 1);
+        }
+      }
+
+      const totalMatches = [...fileMatches.values()].reduce((a, b) => a + b, 0);
+      const fileCount = fileMatches.size;
+
+      if (totalMatches === 0) {
+        return {
+          actionText: `No matches for "${query}"`,
+          actionDetail: ''
+        };
+      }
+
+      // Build parseListing-compatible detail:
+      // Line 1 = summary (shown as muted text)
+      // Remaining = "📄 path\tmatchCount" entries (rendered as listing)
+      const listingLines = [...fileMatches.entries()]
+        .map(([file, count]) => `📄 ${file}\t${count} match${count !== 1 ? 'es' : ''}`);
+
       return {
-        actionText: title,
-        actionDetail: listing
+        actionText: `Found ${totalMatches} match${totalMatches !== 1 ? 'es' : ''} matching "${query}"`,
+        actionDetail: `${fileCount} file${fileCount !== 1 ? 's' : ''}\n${listingLines.join('\n')}`
       };
     }
     case 'run_command':
@@ -157,6 +240,67 @@ export function getToolSuccessInfo(
       return {
         actionText: 'Command completed',
         actionDetail: cmd ? `\`${cmd}\`${exitCode ? ` · exit ${exitCode}` : ''}` : (exitCode ? `exit ${exitCode}` : '')
+      };
+    }
+    case 'get_document_symbols': {
+      const symbolLines = output?.split('\n').filter(Boolean) || [];
+      const count = Math.max(0, symbolLines.length - 1); // minus header line
+      return {
+        actionText: `Found ${count} symbol${count !== 1 ? 's' : ''}`,
+        actionDetail: path ? fileName : '',
+        filePath: path
+      };
+    }
+    case 'find_definition': {
+      const hasResult = output && !output.includes('No definition found');
+      return {
+        actionText: hasResult ? 'Found definition' : 'No definition found',
+        actionDetail: args?.symbolName || '',
+      };
+    }
+    case 'find_references': {
+      const refMatch = output?.match(/Found (\d+) reference/);
+      const refCount = refMatch ? refMatch[1] : '0';
+      return {
+        actionText: `Found ${refCount} reference${refCount !== '1' ? 's' : ''}`,
+        actionDetail: args?.symbolName || '',
+      };
+    }
+    case 'find_symbol': {
+      const symMatch = output?.match(/Found (\d+) symbol/);
+      const symCount = symMatch ? symMatch[1] : '0';
+      return {
+        actionText: `Found ${symCount} symbol${symCount !== '1' ? 's' : ''}`,
+        actionDetail: args?.query || '',
+      };
+    }
+    case 'get_hover_info': {
+      const hasHover = output && !output.includes('No hover information');
+      return {
+        actionText: hasHover ? 'Got type info' : 'No type info available',
+        actionDetail: args?.symbolName || '',
+      };
+    }
+    case 'get_call_hierarchy': {
+      const hasHierarchy = output && !output.includes('No call hierarchy');
+      return {
+        actionText: hasHierarchy ? 'Got call hierarchy' : 'No call hierarchy available',
+        actionDetail: args?.symbolName || '',
+      };
+    }
+    case 'find_implementations': {
+      const implMatch = output?.match(/(\d+) implementation/);
+      const implCount = implMatch ? implMatch[1] : '0';
+      return {
+        actionText: `Found ${implCount} implementation${implCount !== '1' ? 's' : ''}`,
+        actionDetail: args?.symbolName || '',
+      };
+    }
+    case 'get_type_hierarchy': {
+      const hasTypeHierarchy = output && !output.includes('No type hierarchy');
+      return {
+        actionText: hasTypeHierarchy ? 'Got type hierarchy' : 'No type hierarchy available',
+        actionDetail: args?.symbolName || '',
       };
     }
     default:

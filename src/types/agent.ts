@@ -34,7 +34,10 @@ export interface Tool {
  * Runtime context passed to every tool's `execute()` method.
  */
 export interface ToolContext {
+  /** Primary workspace folder (first folder, or the folder the session was started in). */
   workspace: vscode.WorkspaceFolder;
+  /** All workspace folders — for multi-root workspace support. */
+  workspaceFolders?: readonly vscode.WorkspaceFolder[];
   token: vscode.CancellationToken;
   outputChannel: vscode.OutputChannel;
   sessionId?: string;

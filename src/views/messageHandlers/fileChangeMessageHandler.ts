@@ -188,7 +188,24 @@ export class FileChangeMessageHandler implements IMessageHandler {
     if (!relativePath) return;
     const workspaceFolders = vscode.workspace.workspaceFolders;
     if (!workspaceFolders?.length) return;
-    const fileUri = vscode.Uri.joinPath(workspaceFolders[0].uri, relativePath);
+
+    // Try each workspace folder to find the file.
+    // Paths from asRelativePath(path, true) may include a workspace folder name
+    // prefix (e.g. "demo-project/rss-fetch.ts"). Strip it to avoid doubling.
+    let fileUri: vscode.Uri | undefined;
+    for (const folder of workspaceFolders) {
+      const stripped = this.stripFolderPrefix(relativePath, folder);
+      const candidate = vscode.Uri.joinPath(folder.uri, stripped);
+      try {
+        await vscode.workspace.fs.stat(candidate);
+        fileUri = candidate;
+        break;
+      } catch { /* not in this folder */ }
+    }
+    if (!fileUri) {
+      // Fall back to first folder (may create a new file)
+      fileUri = vscode.Uri.joinPath(workspaceFolders[0].uri, relativePath);
+    }
     try {
       const doc = await vscode.workspace.openTextDocument(fileUri);
       const options: vscode.TextDocumentShowOptions = { preview: true };
@@ -202,11 +219,39 @@ export class FileChangeMessageHandler implements IMessageHandler {
     }
   }
 
+  /**
+   * Strip the workspace folder name prefix from a relative path if present.
+   * asRelativePath(path, true) produces "folderName/file.ts" — joining that
+   * with the folder URI would double the folder name.
+   */
+  private stripFolderPrefix(relativePath: string, folder: vscode.WorkspaceFolder): string {
+    const prefix = folder.name + '/';
+    if (relativePath.startsWith(prefix)) {
+      return relativePath.slice(prefix.length);
+    }
+    return relativePath;
+  }
+
   private async handleRevealInExplorer(relativePath: string) {
     if (!relativePath) return;
     const workspaceFolders = vscode.workspace.workspaceFolders;
     if (!workspaceFolders?.length) return;
-    const uri = vscode.Uri.joinPath(workspaceFolders[0].uri, relativePath);
+
+    // Try each workspace folder to find the file.
+    // Strip folder name prefix to avoid doubling (see handleOpenWorkspaceFile).
+    let uri: vscode.Uri | undefined;
+    for (const folder of workspaceFolders) {
+      const stripped = this.stripFolderPrefix(relativePath, folder);
+      const candidate = vscode.Uri.joinPath(folder.uri, stripped);
+      try {
+        await vscode.workspace.fs.stat(candidate);
+        uri = candidate;
+        break;
+      } catch { /* not in this folder */ }
+    }
+    if (!uri) {
+      uri = vscode.Uri.joinPath(workspaceFolders[0].uri, relativePath);
+    }
     try {
       await vscode.commands.executeCommand('revealInExplorer', uri);
     } catch (err: any) {

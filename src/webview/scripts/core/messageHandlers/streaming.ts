@@ -1,13 +1,13 @@
 import { scrollToBottom, startAssistantMessage } from '../actions/index';
 import { activeThinkingGroup, currentAssistantThreadId, currentSessionId, currentStreamIndex } from '../state';
 import type {
-    AssistantThreadTextBlock,
-    AssistantThreadThinkingBlock,
-    AssistantThreadThinkingGroupBlock,
-    CollapseThinkingMessage,
-    StreamChunkMessage,
-    StreamThinkingMessage,
-    ThinkingGroupSection
+  AssistantThreadTextBlock,
+  AssistantThreadThinkingBlock,
+  AssistantThreadThinkingGroupBlock,
+  CollapseThinkingMessage,
+  StreamChunkMessage,
+  StreamThinkingMessage,
+  ThinkingGroupSection
 } from '../types';
 import { ensureAssistantThread } from './threadUtils';
 
@@ -34,18 +34,22 @@ export const resetActiveStreamBlock = () => {
 };
 
 /**
- * Close (collapse) the currently-active thinking group, if any.
+ * Close the currently-active thinking group, if any.
  *
  * The group only contains thinkingContent + tools sections — text content
  * is always streamed directly to thread-level blocks (never inside the group).
- * So closing is just: set collapsed, sum durations, null out refs.
+ * So closing is just: stop streaming, optionally collapse, sum durations, null out refs.
+ *
+ * @param collapse Whether to collapse the `<details>` element. Defaults to `true`.
+ *   Pass `false` when finalizing at generation-end so the user can still see and
+ *   interact with tool results in the last thinking group.
  */
-export const closeActiveThinkingGroup = () => {
+export const closeActiveThinkingGroup = (collapse = true) => {
   const group = activeThinkingGroup.value;
   if (!group) return;
 
   group.streaming = false;
-  group.collapsed = true;
+  group.collapsed = collapse;
   // Sum duration from all thinkingContent sections
   // Also compute duration for any section that hasn't been collapsed yet
   let total = 0;
@@ -129,8 +133,9 @@ export const handleFinalMessage = (msg: StreamChunkMessage) => {
   const thread = ensureAssistantThread(msg.model);
   currentAssistantThreadId.value = thread.id;
 
-  // Close any active thinking group before placing the final message
-  closeActiveThinkingGroup();
+  // Finalize the active thinking group but keep it OPEN so the user
+  // can still see and interact with tool results after generation ends.
+  closeActiveThinkingGroup(/* collapse */ false);
 
   // finalMessage carries ONLY new content (e.g., summary prefix "N files modified").
   // Per-iteration text blocks already exist — append to last text block ONLY if it's

@@ -1,6 +1,7 @@
 import * as path from 'path';
 import * as vscode from 'vscode';
 import { ToolRegistry } from '../../agent/toolRegistry';
+import { resolveMultiRootPath } from '../../agent/tools/pathUtils';
 import { PersistUiEventFn } from '../../types/agent';
 import { ChatMessage, ChatRequest } from '../../types/ollama';
 import { renderDiffHtml } from '../../utils/diffRenderer';
@@ -53,12 +54,9 @@ export class AgentFileEditHandler {
       throw new Error('No file path provided.');
     }
 
-    const filePath = path.join(context.workspace.uri.fsPath, relPath);
+    const filePath = resolveMultiRootPath(relPath, context.workspace, context.workspaceFolders);
     const uri = vscode.Uri.file(filePath);
-    const workspaceRoot = context.workspace?.uri?.fsPath || '';
-    const normalizedRelPath = workspaceRoot
-      ? filePath.replace(workspaceRoot, '').replace(/^\//, '')
-      : relPath;
+    const normalizedRelPath = vscode.workspace.asRelativePath(uri, true);
 
     let originalContent = '';
     try {

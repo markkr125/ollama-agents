@@ -1,7 +1,7 @@
 import * as fs from 'fs';
 import * as readline from 'readline';
 import { Tool } from '../../types/agent';
-import { resolveWorkspacePath } from './pathUtils';
+import { resolveMultiRootPath } from './pathUtils';
 
 const CHUNK_SIZE = 100;
 
@@ -76,7 +76,7 @@ export const readFileTool: Tool = {
     if (!relativePath || typeof relativePath !== 'string') {
       throw new Error('Missing required argument: path (file path relative to workspace)');
     }
-    const absPath = resolveWorkspacePath(relativePath, context.workspace);
+    const absPath = resolveMultiRootPath(relativePath, context.workspace, context.workspaceFolders);
     const total = await countFileLines(absPath);
     return readFileChunk(absPath, 1, total);
   }
