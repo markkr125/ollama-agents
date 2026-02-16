@@ -17,6 +17,7 @@ import { TerminalManager } from '../services/terminalManager';
 import { TokenManager } from '../services/tokenManager';
 import { ChatSessionController } from './chatSessionController';
 import { ViewState, WebviewMessageEmitter } from './chatTypes';
+import { EditorContextTracker } from './editorContextTracker';
 import { ApprovalMessageHandler } from './messageHandlers/approvalMessageHandler';
 import { ChatMessageHandler } from './messageHandlers/chatMessageHandler';
 import { FileChangeMessageHandler } from './messageHandlers/fileChangeMessageHandler';
@@ -38,6 +39,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider, WebviewMess
   private readonly agentExecutor: AgentChatExecutor;
   private readonly terminalManager: TerminalManager;
   private readonly messageRouter: MessageRouter;
+  private editorContextTracker?: EditorContextTracker;
 
   constructor(
     private readonly extensionUri: vscode.Uri,
@@ -194,6 +196,8 @@ export class ChatViewProvider implements vscode.WebviewViewProvider, WebviewMess
     webviewView.onDidDispose(() => {
       this.configChangeDisposable?.dispose();
       this.configChangeDisposable = undefined;
+      this.editorContextTracker?.dispose();
+      this.editorContextTracker = undefined;
       this.terminalManager.dispose();
     });
 
@@ -201,8 +205,12 @@ export class ChatViewProvider implements vscode.WebviewViewProvider, WebviewMess
       if (webviewView.visible) {
         this.settingsHandler.sendSettingsUpdate();
         this.sessionController.sendSessionsList();
+        this.editorContextTracker?.sendNow();
       }
     });
+
+    // Start tracking active editor / selection for implicit context chips
+    this.editorContextTracker = new EditorContextTracker(this);
 
     webviewView.webview.options = {
       enableScripts: true,

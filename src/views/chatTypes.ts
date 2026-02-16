@@ -49,6 +49,9 @@ export interface ChatSession {
 export interface ContextItem {
   fileName: string;
   content: string;
+  kind?: 'explicit' | 'implicit-file' | 'implicit-selection';
+  languageId?: string;
+  lineRange?: string;
 }
 
 export interface WebviewMessageEmitter {

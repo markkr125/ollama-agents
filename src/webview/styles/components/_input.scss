@@ -1,4 +1,4 @@
-/* Input Area */
+/* Input Area — Copilot-style chatbox */
 .input-container {
   border-top: 1px solid var(--surface-border);
   padding: 10px 12px 12px;
@@ -6,40 +6,128 @@
   background: var(--panel-bg);
 }
 
-.context-chips {
-  display: none;
-  flex-wrap: wrap;
-  gap: 6px;
-  margin-bottom: 8px;
-
-  &.visible {
-    display: flex;
-  }
-}
-
-.context-chip {
-  display: flex;
-  align-items: center;
-  gap: 4px;
-  padding: 4px 8px;
-  background: var(--surface-bg);
-  border: 1px solid var(--surface-border);
-  border-radius: 4px;
-  font-size: 11px;
-
-  &-remove {
-    cursor: pointer;
-    opacity: 0.6;
-  }
-}
-
 .input-box {
   background: var(--vscode-input-background);
   border: 1px solid var(--vscode-input-border, transparent);
-  border-radius: 10px;
-  padding: 10px 12px 8px;
+  border-radius: 4px;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+
+  &:focus-within {
+    border-color: var(--vscode-focusBorder);
+  }
 }
 
+/* Attached context area — inside the input box, above textarea */
+.attached-context {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px;
+  padding: 8px 10px 0;
+  min-height: 0;
+}
+
+.context-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 4px 8px;
+  background: transparent;
+  border: 1px solid var(--vscode-chat-requestBorder, var(--vscode-input-background, transparent));
+  border-radius: 4px;
+  font-size: 11px;
+  line-height: 1.4;
+  max-width: 200px;
+  cursor: default;
+
+  .codicon {
+    font-size: 12px;
+    flex-shrink: 0;
+  }
+
+  .file-icon {
+    font-size: 10px;
+    font-weight: 700;
+    font-family: var(--vscode-font-family, 'Segoe UI', sans-serif);
+    flex-shrink: 0;
+    min-width: 14px;
+    text-align: center;
+    letter-spacing: -0.5px;
+  }
+
+  .chip-name {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    min-width: 0;
+  }
+
+  .chip-action {
+    font-size: 11px;
+    cursor: pointer;
+    opacity: 0.6;
+    flex-shrink: 0;
+    margin-left: 2px;
+
+    &:hover {
+      opacity: 1;
+    }
+  }
+
+  /* Implicit file chip */
+  &.implicit {
+    border-style: dashed;
+    cursor: pointer;
+
+    &.disabled {
+      opacity: 0.55;
+      border-color: var(--muted);
+
+      &:hover {
+        opacity: 0.8;
+        border-color: var(--accent);
+      }
+    }
+
+    &.selection {
+      opacity: 1;
+      border-style: solid;
+      border-color: var(--accent);
+      background: color-mix(in srgb, var(--accent) 8%, transparent);
+    }
+  }
+
+  /* Explicit chip */
+  &.explicit {
+    .chip-action {
+      opacity: 0;
+    }
+
+    &:hover .chip-action {
+      opacity: 0.7;
+    }
+  }
+}
+
+.attach-trigger {
+  position: relative;
+  order: -1;
+}
+
+.attach-btn {
+  width: 24px;
+  height: 24px;
+  font-size: 14px;
+  border: 1px solid var(--vscode-chat-requestBorder, var(--vscode-input-background, transparent)) !important;
+
+  .codicon {
+    font-size: 14px;
+  }
+}
+
+/* Textarea */
 textarea {
   width: 100%;
   background: transparent;
@@ -51,65 +139,136 @@ textarea {
   outline: none;
   min-height: 20px;
   line-height: 1.4;
+  padding: 8px 12px;
 }
 
-.input-controls {
+/* Bottom toolbar */
+.input-toolbar {
   display: flex;
   justify-content: space-between;
   align-items: center;
-  margin-top: 6px;
+  padding: 4px 8px 6px;
 
-  &-left {
+  .toolbar-left {
     display: flex;
     align-items: center;
-    gap: 8px;
+    gap: 4px;
+  }
+
+  .toolbar-right {
+    display: flex;
+    align-items: center;
   }
 }
 
+/* Pill picker button */
+.pill-picker {
+  position: relative;
+}
 
-select {
-  background: var(--vscode-dropdown-background, var(--surface-bg));
-  border: 1px solid var(--vscode-dropdown-border, var(--surface-border));
-  color: var(--vscode-dropdown-foreground, var(--fg));
-  padding: 4px 28px 4px 10px;
-  border-radius: 8px;
-  font-size: 12px;
-  line-height: 1.2;
-  min-height: 26px;
+.pill-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 3px 8px;
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: 12px;
+  color: var(--fg);
+  font-family: var(--vscode-font-family);
+  font-size: 11.5px;
   cursor: pointer;
-  appearance: none;
-  background-image:
-    linear-gradient(45deg, transparent 50%, var(--muted) 50%),
-    linear-gradient(135deg, var(--muted) 50%, transparent 50%);
-  background-position:
-    calc(100% - 14px) 55%,
-    calc(100% - 9px) 55%;
-  background-size:
-    5px 5px,
-    5px 5px;
-  background-repeat: no-repeat;
+  line-height: 1.3;
+  white-space: nowrap;
+  max-width: 180px;
+
+  .codicon {
+    font-size: 13px;
+    flex-shrink: 0;
+  }
+
+  .pill-label {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    min-width: 0;
+  }
+
+  .pill-chevron {
+    font-size: 10px;
+    opacity: 0.6;
+  }
 
   &:hover {
-    border-color: var(--vscode-focusBorder);
+    background: var(--hover);
+    border-color: var(--surface-border);
   }
 
-  &:focus {
-    outline: none;
-    box-shadow: 0 0 0 1px var(--vscode-focusBorder);
+  &.open {
+    background: var(--hover);
     border-color: var(--vscode-focusBorder);
   }
 }
 
+/* Tools toggle button */
+.tools-btn {
+  width: 26px;
+  height: 26px;
+  position: relative;
+
+  &.active::after {
+    content: '';
+    position: absolute;
+    top: 4px;
+    right: 4px;
+    width: 5px;
+    height: 5px;
+    background: var(--accent);
+    border-radius: 50%;
+  }
+}
+
+/* Send button — icon only */
 .send-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
   background: var(--btn-bg);
   color: var(--btn-fg);
   border: none;
-  padding: 6px 14px;
   border-radius: 6px;
-  font-size: 12px;
   cursor: pointer;
+
+  .codicon {
+    font-size: 14px;
+  }
 
   &:hover {
     opacity: 0.9;
+  }
+}
+
+/* Icon button base (used in header + input) */
+.icon-btn {
+  background: transparent;
+  border: none;
+  color: var(--fg);
+  width: 28px;
+  height: 28px;
+  border-radius: 4px;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 14px;
+
+  .codicon {
+    font-size: 14px;
+  }
+
+  &:hover {
+    background: var(--hover);
   }
 }

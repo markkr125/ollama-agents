@@ -1,14 +1,14 @@
 import { recalcBlockTotals } from './messageHandlers/filesChanged';
 import { filesChangedBlocks } from './state';
 import type {
-  AssistantThreadFilesChangedBlock,
-  AssistantThreadItem,
-  AssistantThreadThinkingGroupBlock,
-  AssistantThreadToolsBlock,
-  CommandApprovalItem,
-  FileEditApprovalItem,
-  ProgressItem,
-  TimelineItem
+    AssistantThreadFilesChangedBlock,
+    AssistantThreadItem,
+    AssistantThreadThinkingGroupBlock,
+    AssistantThreadToolsBlock,
+    CommandApprovalItem,
+    FileEditApprovalItem,
+    ProgressItem,
+    TimelineItem
 } from './types';
 
 // ---------------------------------------------------------------------------
@@ -109,6 +109,7 @@ class TimelineBuilder {
       case 'filesChanged': this.handleFilesChanged(payload); break;
       case 'fileChangeResult': this.handleFileChangeResult(payload); break;
       case 'keepUndoResult': this.handleKeepUndoResult(payload); break;
+      case 'contextFiles': this.handleContextFiles(payload); break;
       default: break;
     }
   }
@@ -414,6 +415,24 @@ class TimelineBuilder {
         diffHtml: payload?.diffHtml,
         autoApproved: !!payload?.autoApproved
       } as FileEditApprovalItem);
+    }
+  }
+
+  /**
+   * Attach context file references to the most recent user message.
+   * Persisted as a __ui__ event right after the user message.
+   */
+  private handleContextFiles(payload: any): void {
+    const files = payload?.files;
+    if (!Array.isArray(files) || files.length === 0) return;
+
+    // Walk backwards to find the last user message
+    for (let i = this.items.length - 1; i >= 0; i--) {
+      const item = this.items[i];
+      if (item.type === 'message' && item.role === 'user') {
+        item.contextFiles = files;
+        break;
+      }
     }
   }
 

@@ -15,12 +15,19 @@ export type ModelInfo = {
   enabled: boolean;
 };
 
+export type ContextFileRef = {
+  fileName: string;
+  kind?: 'explicit' | 'implicit-file' | 'implicit-selection';
+  lineRange?: string;
+};
+
 export type MessageItem = {
   id: string;
   type: 'message';
   role: 'user' | 'assistant';
   content: string;
   model?: string;
+  contextFiles?: ContextFileRef[];
 };
 
 export type AssistantThreadTextBlock = {

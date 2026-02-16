@@ -21,6 +21,18 @@ export const addContext = () => {
   vscode.postMessage({ type: 'addContext' });
 };
 
+export const addContextFromFile = () => {
+  vscode.postMessage({ type: 'addContextFromFile' });
+};
+
+export const addContextCurrentFile = () => {
+  vscode.postMessage({ type: 'addContextCurrentFile' });
+};
+
+export const addContextFromTerminal = () => {
+  vscode.postMessage({ type: 'addContextFromTerminal' });
+};
+
 export const selectMode = () => {
   vscode.postMessage({ type: 'selectMode', mode: currentMode.value });
 };

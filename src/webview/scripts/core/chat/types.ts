@@ -7,9 +7,14 @@ export type ThinkingState = {
   text: string;
 };
 
+export type ContextItemKind = 'explicit' | 'implicit-file' | 'implicit-selection';
+
 export type ContextItem = {
   fileName: string;
   content: string;
+  kind?: ContextItemKind;
+  languageId?: string;
+  lineRange?: string;
 };
 
 // --- Props interface for ChatPage component ---
@@ -47,6 +52,9 @@ export interface ChatPageProps {
   toggleProgress: (item: ProgressItem) => void;
   actionStatusClass: (status: ActionItem['status']) => Record<string, boolean>;
   addContext: () => void;
+  addContextFromFile: () => void;
+  addContextCurrentFile: () => void;
+  addContextFromTerminal: () => void;
   removeContext: (index: number) => void;
   handleEnter: () => void;
   handleSend: () => void;
@@ -55,4 +63,10 @@ export interface ChatPageProps {
   selectModel: () => void;
   scrollTargetMessageId: string | null;
   clearScrollTarget: () => void;
+  implicitFile: { fileName: string; filePath: string; languageId: string } | null;
+  implicitSelection: { fileName: string; content: string; startLine: number; endLine: number; languageId: string } | null;
+  implicitFileEnabled: boolean;
+  toggleImplicitFile: () => void;
+  promoteImplicitFile: () => void;
+  pinSelection: () => void;
 }

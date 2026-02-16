@@ -538,6 +538,14 @@ EXAMPLES:
 
 CRITICAL: To edit a file you must call write_file. Reading alone does NOT change files.
 
+USER-PROVIDED CONTEXT:
+The user may attach code from their editor to the message. This appears at the start of their message in blocks like:
+  [file.ts:L10-L50] (selected lines 10–50)
+  [file.ts] (whole file)
+The code inside those blocks is ALREADY AVAILABLE to you — do NOT re-read it with read_file.
+Use the provided content directly for analysis, explanation, or edits.
+Only use read_file if you need lines OUTSIDE the provided range, or a different file entirely.
+
 CODE NAVIGATION STRATEGY:
 - Use get_document_symbols to get a file's outline (classes, functions, methods with line ranges) before reading the whole file.
 - Use find_definition to follow a function/method call to its source — this works across files.

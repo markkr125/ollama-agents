@@ -1,3 +1,4 @@
+import * as path from 'path';
 import * as vscode from 'vscode';
 import { GitOperations } from '../../agent/gitOperations';
 import { SessionManager } from '../../agent/sessionManager';
@@ -22,7 +23,8 @@ import { mergeCachedCapabilities, ModelMessageHandler } from './modelMessageHand
  */
 export class ChatMessageHandler implements IMessageHandler {
   readonly handledTypes = [
-    'ready', 'sendMessage', 'stopGeneration', 'selectModel', 'selectMode', 'newChat', 'addContext'
+    'ready', 'sendMessage', 'stopGeneration', 'selectModel', 'selectMode', 'newChat', 'addContext',
+    'addContextFromFile', 'addContextCurrentFile', 'addContextFromTerminal'
   ] as const;
 
   private cancellationTokenSource?: vscode.CancellationTokenSource;
@@ -80,6 +82,15 @@ export class ChatMessageHandler implements IMessageHandler {
       }
       case 'addContext':
         await this.handleAddContext();
+        break;
+      case 'addContextFromFile':
+        await this.handleAddContextFromFile();
+        break;
+      case 'addContextCurrentFile':
+        await this.handleAddContextCurrentFile();
+        break;
+      case 'addContextFromTerminal':
+        await this.handleAddContextFromTerminal();
         break;
     }
   }
@@ -171,7 +182,7 @@ export class ChatMessageHandler implements IMessageHandler {
     if (editor) {
       const selection = editor.selection;
       const text = editor.document.getText(selection.isEmpty ? undefined : selection);
-      const fileName = editor.document.fileName.split('/').pop() || 'file';
+      const fileName = vscode.workspace.asRelativePath(editor.document.uri, true);
       const lineInfo = selection.isEmpty ? '' : `:${selection.start.line + 1}`;
 
       this.emitter.postMessage({
@@ -182,6 +193,76 @@ export class ChatMessageHandler implements IMessageHandler {
         }
       });
     }
+  }
+
+  /** Open a file picker and add selected files to context. */
+  private async handleAddContextFromFile() {
+    const uris = await vscode.window.showOpenDialog({
+      canSelectMany: true,
+      openLabel: 'Add to Context',
+      filters: { 'All Files': ['*'] },
+      defaultUri: vscode.workspace.workspaceFolders?.[0]?.uri,
+    });
+    if (!uris || uris.length === 0) return;
+
+    for (const uri of uris) {
+      try {
+        const doc = await vscode.workspace.openTextDocument(uri);
+        const content = doc.getText().substring(0, 8000);
+        const fileName = vscode.workspace.asRelativePath(uri, true);
+        this.emitter.postMessage({
+          type: 'addContextItem',
+          context: { fileName, content, languageId: doc.languageId }
+        });
+      } catch {
+        // skip binary / unreadable files
+      }
+    }
+  }
+
+  /** Add the entire active file to context (not just the selection). */
+  private async handleAddContextCurrentFile() {
+    const editor = vscode.window.activeTextEditor;
+    if (!editor) return;
+    const doc = editor.document;
+    const fileName = vscode.workspace.asRelativePath(doc.uri, true);
+    this.emitter.postMessage({
+      type: 'addContextItem',
+      context: {
+        fileName,
+        content: doc.getText().substring(0, 8000),
+        languageId: doc.languageId
+      }
+    });
+  }
+
+  /** Read the active terminal buffer and add to context. */
+  private async handleAddContextFromTerminal() {
+    const terminal = vscode.window.activeTerminal;
+    if (!terminal) {
+      this.emitter.postMessage({
+        type: 'addContextItem',
+        context: { fileName: 'Terminal (empty)', content: 'No active terminal.' }
+      });
+      return;
+    }
+    // Use the shellIntegration API to get recent output, else fall back to name
+    let content = `Terminal: ${terminal.name}\n(Terminal buffer cannot be read via the API. Copy/paste the relevant output.)`;
+    // If VS Code ≥ 1.93 shellIntegration is available, try to read last command output
+    try {
+      const si = (terminal as any).shellIntegration;
+      if (si?.history) {
+        const entries = [...si.history].slice(-5);
+        content = entries.map((e: any) =>
+          `$ ${e.command}\n${e.output?.join('\n') ?? ''}`
+        ).join('\n\n');
+      }
+    } catch { /* fallback is fine */ }
+
+    this.emitter.postMessage({
+      type: 'addContextItem',
+      context: { fileName: `Terminal: ${terminal.name}`, content: content.substring(0, 8000) }
+    });
   }
 
   private stopGeneration(sessionId?: string) {
@@ -238,7 +319,38 @@ export class ChatMessageHandler implements IMessageHandler {
 
     let contextStr = '';
     if (contextItems && contextItems.length > 0) {
-      contextStr = contextItems.map(c => `[${c.fileName}]\n\`\`\`\n${c.content}\n\`\`\``).join('\n\n');
+      // Resolve __implicit_file__ markers — the webview sends this placeholder
+      // for implicit file context; we read the actual content here.
+      const resolved = await Promise.all(contextItems.map(async (c) => {
+        if (c.content === '__implicit_file__') {
+          try {
+            // Try matching the active editor by relative path or basename
+            const editor = vscode.window.activeTextEditor;
+            if (editor) {
+              const editorRelative = vscode.workspace.asRelativePath(editor.document.uri, true);
+              const editorBasename = path.basename(editor.document.uri.fsPath);
+              if (c.fileName === editorRelative || c.fileName === editorBasename) {
+                return { ...c, content: editor.document.getText().substring(0, 8000) };
+              }
+            }
+            // Fallback: search workspace for the file by relative path or basename
+            const searchPattern = c.fileName.includes('/') ? c.fileName : `**/${c.fileName}`;
+            const uris = await vscode.workspace.findFiles(searchPattern, undefined, 1);
+            if (uris.length > 0) {
+              const doc = await vscode.workspace.openTextDocument(uris[0]);
+              return { ...c, content: doc.getText().substring(0, 8000) };
+            }
+          } catch { /* use marker as-is */ }
+        }
+        return c;
+      }));
+      contextStr = resolved.map(c => {
+        const hasLineRange = /:\s*L\d+/.test(c.fileName);
+        const label = hasLineRange
+          ? `User's selected code from ${c.fileName} (already provided — do not re-read):`
+          : `Contents of ${c.fileName} (already provided — do not re-read):`;
+        return `${label}\n\`\`\`\n${c.content}\n\`\`\``;
+      }).join('\n\n');
     }
 
     const fullPrompt = contextStr ? `${contextStr}\n\n${text}` : text;
@@ -255,8 +367,26 @@ export class ChatMessageHandler implements IMessageHandler {
       await this.sessionController.sendSessionsList();
     }
 
+    // Build context file references for UI display (names only, no content)
+    const contextFiles = contextItems?.map(c => ({
+      fileName: c.fileName,
+      kind: c.kind,
+      lineRange: c.lineRange,
+    })).filter(f => f.fileName) || [];
+
     const chatMessage: ChatMessage = { role: 'user', content: text, timestamp: userMessage.timestamp };
-    this.emitter.postMessage({ type: 'addMessage', message: chatMessage, sessionId: sessionIdAtStart });
+    this.emitter.postMessage({ type: 'addMessage', message: chatMessage, contextFiles, sessionId: sessionIdAtStart });
+
+    // Persist context file references as a __ui__ event so session history can reconstruct them
+    if (contextFiles.length > 0) {
+      try {
+        await this.databaseService.addMessage(sessionIdAtStart, 'tool', '', {
+          toolName: '__ui__',
+          toolOutput: JSON.stringify({ eventType: 'contextFiles', payload: { files: contextFiles } })
+        });
+      } catch { /* non-fatal */ }
+    }
+
     this.emitter.postMessage({ type: 'generationStarted', sessionId: sessionIdAtStart });
 
     if (!this.state.currentModel) {
@@ -296,20 +426,6 @@ export class ChatMessageHandler implements IMessageHandler {
     const agentSession = this.sessionManager.createSession(prompt, this.state.currentModel, workspace);
 
     this.emitter.postMessage({ type: 'showThinking', message: 'Analyzing request...', sessionId });
-
-    const hasGit = await this.gitOps.validateGit();
-    if (hasGit) {
-      try {
-        const currentBranch = await this.gitOps.getCurrentBranch(workspace);
-        const newBranch = await this.gitOps.createBranch(currentBranch, prompt, workspace);
-        agentSession.branch = newBranch;
-
-        // Persist git branch action so history matches live chat
-        await this.agentExecutor.persistGitBranchAction(sessionId, newBranch);
-      } catch {
-        // Continue without branch
-      }
-    }
 
     const config: ExecutorConfig = { maxIterations: getConfig().agent.maxIterations, toolTimeout: getConfig().agent.toolTimeout, temperature: 0.7 };
 

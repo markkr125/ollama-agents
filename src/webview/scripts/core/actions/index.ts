@@ -29,6 +29,7 @@ export {
     undoFile,
     viewAllEdits
 } from './filesChanged';
+export { getEffectiveContext, pinSelection, promoteImplicitFile, toggleImplicitFile } from './implicitContext';
 export { handleEnter, handleSend, removeContext, resizeInputField } from './input';
 export { formatMarkdown, statusClass } from './markdown';
 export { clearScrollTarget, resizeInput, scrollToBottom } from './scroll';
@@ -37,6 +38,9 @@ export {
 } from './search';
 export {
     addContext,
+    addContextCurrentFile,
+    addContextFromFile,
+    addContextFromTerminal,
     clearSelection,
     deleteSelectedSessions,
     deleteSession,

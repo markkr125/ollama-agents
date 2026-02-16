@@ -259,6 +259,60 @@ Users can edit terminal commands before approval. The edited command must be sen
 
 ---
 
+## Chat Input Architecture
+
+The chat input area (`ChatInput.vue`) follows the VS Code Copilot design:
+
+### Layout (top to bottom inside `.input-box`)
+
+1. **Attached context area** — Implicit context chips (file, selection) + explicit context chips + attach button
+2. **Textarea** — Auto-resizing input
+3. **Bottom toolbar** — Mode pill picker, model pill picker, tools button (agent mode), send button
+
+### Implicit Context (EditorContextTracker)
+
+The backend sends `editorContext` messages whenever the active editor or selection changes:
+- `EditorContextTracker` (`src/views/editorContextTracker.ts`) listens to `onDidChangeActiveTextEditor` and `onDidChangeTextEditorSelection` (debounced 500ms)
+- Also fires on `onDidChangeVisibility` (webview panel becomes visible)
+- Webview stores in `implicitFile` and `implicitSelection` refs (`state.ts`)
+
+**Implicit file chip behavior** (mirrors VS Code Copilot):
+- **Agent mode**: Faded chip with `(+)` button — click to promote to explicit context
+- **Non-agent modes**: Active chip — file content auto-included in message sent to model
+- User can toggle (disable/re-enable) via click
+- Deduplication: hidden if the same file already exists in explicit context
+
+**Implicit selection chip**:
+- Always active (not faded), shown with line range
+- Pin button adds it to explicit context + clears the implicit chip
+- Always included in every message regardless of mode
+
+**On send** (`handleSend` in `actions/input.ts`):
+- Explicit context items are always sent
+- Implicit selection is always included (content attached directly)
+- Implicit file is included in non-agent modes only (content placeholder `__implicit_file__` → backend resolves via `chatMessageHandler.ts`)
+
+### Reusable Sub-Components
+
+| Component | File | Purpose |
+|-----------|------|---------|
+| `PillPicker.vue` | `src/webview/components/chat/components/PillPicker.vue` | Compact pill button → opens `DropdownMenu` for mode/model selection |
+| `DropdownMenu.vue` | `src/webview/components/chat/components/DropdownMenu.vue` | Floating dropdown menu (teleported to body), keyboard-navigable, VS Code menu theming |
+
+### Attach Menu (Multi-Source Context)
+
+The attach button (`codicon-attach`) opens a `DropdownMenu` with:
+- **Files** → posts `addContextFromFile` → backend opens file picker dialog
+- **Current File** → posts `addContextCurrentFile` → backend reads entire active file
+- **Terminal** → posts `addContextFromTerminal` → backend reads terminal buffer (ShellIntegration API when available)
+
+### Icons
+
+All icons use `@vscode/codicons` (CSS font imported in `main.ts`). No emoji fallbacks remain in the chat UI.
+Key codicon mappings: `codicon-hubot` (agent), `codicon-list-tree` (plan), `codicon-comment-discussion` (ask), `codicon-edit` (edit), `codicon-server` (model), `codicon-tools` (tools), `codicon-send` (send), `codicon-debug-stop` (stop), `codicon-attach` (attach), `codicon-pin` (pin selection).
+
+---
+
 ## CSS Theming
 
 The chat UI uses VS Code's CSS variables for theming:

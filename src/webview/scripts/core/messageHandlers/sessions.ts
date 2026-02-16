@@ -27,6 +27,8 @@ import {
   deletionProgress,
   filesChangedBlocks,
   hasToken,
+  implicitFile,
+  implicitSelection,
   isFirstRun,
   isSearching,
   modelInfo,
@@ -173,7 +175,8 @@ export const handleAddMessage = (msg: any) => {
         type: 'message',
         role: msg.message.role,
         content: msg.message.content,
-        model: msg.message.model
+        model: msg.message.model,
+        contextFiles: msg.contextFiles?.length ? msg.contextFiles : undefined
       });
       currentStreamIndex.value = null;
       currentProgressIndex.value = null;
@@ -230,6 +233,11 @@ export const handleAddContextItem = (msg: any) => {
   if (msg.context) {
     contextList.value.push(msg.context);
   }
+};
+
+export const handleEditorContext = (msg: any) => {
+  implicitFile.value = msg.activeFile ?? null;
+  implicitSelection.value = msg.activeSelection ?? null;
 };
 
 export const handleClearMessages = (msg: any) => {

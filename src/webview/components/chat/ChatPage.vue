@@ -169,6 +169,7 @@
             <div v-else class="message-text">{{ item.content }}</div>
             <div v-if="item.role === 'assistant' && item.model" class="message-model">{{ item.model }}</div>
           </div>
+          <ContextFilesDisplay v-if="item.role === 'user' && item.contextFiles?.length" :files="item.contextFiles" />
           <div
             v-if="item.role === 'assistant' && index < timeline.length - 1"
             class="message-divider"
@@ -227,14 +228,25 @@
       :currentModel="currentModel"
       :modelOptions="modelOptions"
       :isGenerating="isGenerating"
+      :implicitFile="implicitFile"
+      :implicitSelection="implicitSelection"
+      :implicitFileEnabled="implicitFileEnabled"
+      :toolsActive="sessionControlsExpanded"
       :onInputText="onInputText"
       :onModeChange="onModeChange"
       :onModelChange="onModelChange"
       :addContext="addContext"
+      :addContextFromFile="addContextFromFile"
+      :addContextCurrentFile="addContextCurrentFile"
+      :addContextFromTerminal="addContextFromTerminal"
       :removeContext="removeContext"
       :handleEnter="handleEnter"
       :handleSend="handleSend"
       :setInputEl="setInputEl"
+      :toggleImplicitFile="toggleImplicitFile"
+      :promoteImplicitFile="promoteImplicitFile"
+      :pinSelection="pinSelection"
+      @toggle-tools="sessionControlsExpanded = !sessionControlsExpanded"
     />
   </div>
 </template>
@@ -242,9 +254,10 @@
 <script setup lang="ts">
 import type { ChatPageProps } from '../../scripts/core/chat';
 import { useChatPage } from '../../scripts/core/chat';
-import { filesChangedBlocks, warningBanner } from '../../scripts/core/state';
+import { filesChangedBlocks, implicitFile, implicitFileEnabled, implicitSelection, warningBanner } from '../../scripts/core/state';
 import ChatInput from './components/ChatInput.vue';
 import CommandApproval from './components/CommandApproval.vue';
+import ContextFilesDisplay from './components/ContextFilesDisplay.vue';
 import FileEditApproval from './components/FileEditApproval.vue';
 import FilesChanged from './components/FilesChanged.vue';
 import MarkdownBlock from './components/MarkdownBlock.vue';

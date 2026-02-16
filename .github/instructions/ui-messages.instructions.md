@@ -34,7 +34,8 @@ description: "Backend-to-frontend and frontend-to-backend message protocol for t
 | `clearMessages` | `{sessionId}` | Clear all messages for a session |
 | `showError` | `{message, sessionId}` | Show error message in session |
 | `connectionError` | `{error}` | Show connection error (non-session-scoped) |
-| `addContextItem` | `{context: {fileName, content}}` | Add code context from editor selection |
+| `addContextItem` | `{context: {fileName, content, languageId?}}` | Add code context from editor selection |
+| `editorContext` | `{activeFile: {fileName, filePath, languageId} \| null, activeSelection: {fileName, content, startLine, endLine, languageId} \| null}` | Push current editor file + selection for implicit context chips |
 | `loadSessions` | `{sessions, hasMore, nextOffset}` | Replace sessions list |
 | `appendSessions` | `{sessions, hasMore, nextOffset}` | Append to sessions list |
 | `updateSessionStatus` | `{sessionId, status}` | Update a single session's status indicator |
@@ -67,6 +68,9 @@ description: "Backend-to-frontend and frontend-to-backend message protocol for t
 | `selectModel` | `{model}` | Change model |
 | `newChat` | - | Create new session (reuses idle empty session if one exists) |
 | `addContext` | - | Request code context from active editor selection |
+| `addContextFromFile` | - | Open file picker, add selected files to context |
+| `addContextCurrentFile` | - | Add entire active file to context (not just selection) |
+| `addContextFromTerminal` | - | Add active terminal buffer to context |
 | `loadSession` | `{sessionId}` | Load session |
 | `deleteSession` | `{sessionId}` | Delete session (optimistic removal on frontend) |
 | `deleteMultipleSessions` | `{sessionIds}` | Batch delete with modal confirmation |

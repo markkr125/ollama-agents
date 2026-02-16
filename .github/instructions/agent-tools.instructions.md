@@ -466,7 +466,11 @@ LSP results depend on having an active language server for the file type:
 
 ### System Prompt Guidance
 
-Both native tool-calling and XML fallback system prompts include a `CODE NAVIGATION STRATEGY` section that tells the LLM **when** to use each tool:
+Both native tool-calling and XML fallback system prompts include two key guidance sections:
+
+**1. `USER-PROVIDED CONTEXT` section** — tells the LLM that code blocks attached by the user are already available inline and should NOT be re-read with `read_file`. See "User-Provided Context Pipeline" below.
+
+**2. `CODE NAVIGATION STRATEGY` section** — tells the LLM **when** to use each tool:
 - Use `get_document_symbols` before reading large files
 - Use `find_definition` to follow function calls
 - Use `find_references` before modifying shared code
@@ -477,6 +481,91 @@ Both native tool-calling and XML fallback system prompts include a `CODE NAVIGAT
 - Use `get_type_hierarchy` for inheritance chains
 
 This guidance is in `buildAgentSystemPrompt()` in `agentChatExecutor.ts`.
+
+## User-Provided Context Pipeline
+
+When a user attaches code (selected lines or whole files) to a chat message, the content flows through a multi-stage pipeline before reaching the LLM. Understanding this pipeline prevents the common bug where the agent **ignores provided context and re-reads the entire file**.
+
+### Data Flow
+
+```
+Editor selection / active file
+  → EditorContextTracker.ts: sends editorContext payload to webview
+    → Webview state.ts: stores as implicitFile / implicitSelection
+      → User pins selection or sends message
+        → handleSend() / pinSelection() in actions/input.ts + actions/implicitContext.ts
+          → Builds ContextFileRef[] array with {fileName, content, kind}
+            → postMessage({type: 'sendMessage', text, context: ContextFileRef[]})
+              → chatMessageHandler.ts: resolves __implicit_file__ markers
+                → Formats contextStr with descriptive labels
+                  → Prepends to user message as fullPrompt
+                    → LLM sees context at start of user turn
+```
+
+### Context String Format (sent to LLM)
+
+The context is formatted with **descriptive labels** that signal to the LLM that the code is already available:
+
+```
+User's selected code from search-node-master/src/ProcessSearch.ts:L409-L843 (already provided — do not re-read):
+```
+<actual selected code>
+```
+
+Contents of config.ts (already provided — do not re-read):
+```
+<file contents>
+```
+
+User's actual question text here
+```
+
+The labels are constructed in `chatMessageHandler.ts`:
+- **Selections** (fileName contains `:L<digits>`): `User's selected code from <fileName> (already provided — do not re-read):`
+- **Whole files**: `Contents of <fileName> (already provided — do not re-read):`
+
+### System Prompt Reinforcement
+
+`buildAgentSystemPrompt()` includes a `USER-PROVIDED CONTEXT` section that reinforces the labels:
+
+```
+USER-PROVIDED CONTEXT:
+The user may attach code from their editor to the message. This appears at the start of their message in blocks like:
+  [file.ts:L10-L50] (selected lines 10–50)
+  [file.ts] (whole file)
+The code inside those blocks is ALREADY AVAILABLE to you — do NOT re-read it with read_file.
+Use the provided content directly for analysis, explanation, or edits.
+Only use read_file if you need lines OUTSIDE the provided range, or a different file entirely.
+```
+
+This two-level approach (descriptive labels in the user message + explicit instruction in the system prompt) helps the LLM understand it already has the code and should not waste tool calls re-reading it.
+
+### Context Kinds
+
+| Kind | When | fileName Format | Content |
+|------|------|----------------|----------|
+| `implicit-selection` | User has text selected in editor | `folder/file.ts:L10-L50` | Actual selected text |
+| `implicit-file` | Active file in editor (non-agent modes only) | `folder/file.ts` | First 8000 chars of file |
+| `explicit` | User manually attached via attach button | `folder/file.ts` or `folder/file.ts:L10-L50` | File/selection content |
+
+### Multi-Root Workspace Paths
+
+In multi-root workspaces, `relativePath` includes the workspace folder name prefix (e.g. `search-node-master/src/ProcessSearch.ts`). This is derived from `vscode.workspace.asRelativePath(uri, true)` and propagated through the full chain:
+- `EditorContextTracker` → `activeFile.relativePath` / `activeSelection.relativePath`
+- Webview state → `implicitFile.relativePath` / `implicitSelection.relativePath`
+- `pinSelection()` / `handleSend()` → used as `fileName` in context items
+- `chatMessageHandler.ts` → uses relative paths for `__implicit_file__` resolution
+
+### Key Files
+
+| File | Role |
+|------|------|
+| `src/views/editorContextTracker.ts` | Sends `editorContext` with `relativePath` to webview |
+| `src/webview/scripts/core/state.ts` | Stores `implicitFile` / `implicitSelection` with `relativePath` |
+| `src/webview/scripts/core/actions/input.ts` | `handleSend()` — builds context array, uses relativePath for fileNames |
+| `src/webview/scripts/core/actions/implicitContext.ts` | `pinSelection()` — stores content + relativePath-based fileName |
+| `src/views/messageHandlers/chatMessageHandler.ts` | Resolves `__implicit_file__` markers, formats contextStr with descriptive labels |
+| `src/services/agent/agentChatExecutor.ts` | `buildAgentSystemPrompt()` — includes USER-PROVIDED CONTEXT section |
 
 ## Streaming Behavior
 

@@ -49,6 +49,15 @@
         :auto-approve-sensitive-edits-confirm-visible="autoApproveSensitiveEditsConfirmVisible"
         :confirm-auto-approve-sensitive-edits="confirmAutoApproveSensitiveEdits"
         :cancel-auto-approve-sensitive-edits="cancelAutoApproveSensitiveEdits"
+        :implicit-file="implicitFile"
+        :implicit-selection="implicitSelection"
+        :implicit-file-enabled="implicitFileEnabled"
+        :add-context-from-file="addContextFromFile"
+        :add-context-current-file="addContextCurrentFile"
+        :add-context-from-terminal="addContextFromTerminal"
+        :toggle-implicit-file="toggleImplicitFile"
+        :promote-implicit-file="promoteImplicitFile"
+        :pin-selection="pinSelection"
       />
 
       <SettingsPage
@@ -136,6 +145,9 @@ import {
     actionStatusClass,
     activeSection,
     addContext,
+    addContextCurrentFile,
+    addContextFromFile,
+    addContextFromTerminal,
     agentSettings,
     agentStatus,
     approveCommand,
@@ -173,6 +185,9 @@ import {
     hasToken,
     headerTitle,
     highlightSnippet,
+    implicitFile,
+    implicitFileEnabled,
+    implicitSelection,
     inputEl,
     inputText,
     isGenerating,
@@ -185,6 +200,8 @@ import {
     modelOptions,
     newChat,
     openFileDiff,
+    pinSelection,
+    promoteImplicitFile,
     recreateMessagesStatus,
     recreateMessagesTable,
     refreshCapabilities,
@@ -224,6 +241,7 @@ import {
     toggleAutoApproveCommands,
     toggleAutoApproveSensitiveEdits,
     toggleAutocomplete,
+    toggleImplicitFile,
     toggleModelEnabled,
     toggleProgress,
     toggleSelectionMode,

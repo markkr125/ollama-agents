@@ -27,6 +27,7 @@ import {
     handleConnectionTestResult,
     handleDbMaintenanceResult,
     handleDeletionProgress,
+    handleEditorContext,
     handleGenerationStarted,
     handleGenerationStopped,
     handleHideThinking,
@@ -120,6 +121,9 @@ export const handleMessage = (msg: any) => {
       break;
     case 'addContextItem':
       handleAddContextItem(msg);
+      break;
+    case 'editorContext':
+      handleEditorContext(msg);
       break;
     case 'showError':
       handleShowError(msg);

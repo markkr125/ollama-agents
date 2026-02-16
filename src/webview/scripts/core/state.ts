@@ -38,10 +38,15 @@ export const activeSection = ref('connection');
 export const isFirstRun = ref(false);
 export const isGenerating = ref(false);
 export const inputText = ref('');
-export const contextList = ref<Array<{ fileName: string; content: string }>>([]);
+export const contextList = ref<Array<{ fileName: string; content: string; kind?: string; languageId?: string; lineRange?: string }>>([]);
 export const hasToken = ref(false);
 export const bearerToken = ref('');
 export const tokenVisible = ref(false);
+
+// Implicit context — pushed from the backend on editor change / webview focus
+export const implicitFile = ref<{ fileName: string; filePath: string; relativePath: string; languageId: string } | null>(null);
+export const implicitSelection = ref<{ fileName: string; relativePath: string; content: string; startLine: number; endLine: number; languageId: string } | null>(null);
+export const implicitFileEnabled = ref(true);  // user can toggle off the implicit file chip
 
 export const thinking = reactive({
   visible: false,

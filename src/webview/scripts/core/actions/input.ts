@@ -1,4 +1,4 @@
-import { contextList, currentSessionId, inputEl, inputText, isGenerating, vscode } from '../state';
+import { contextList, currentMode, currentSessionId, implicitFile, implicitFileEnabled, implicitSelection, inputEl, inputText, isGenerating, vscode } from '../state';
 import { resizeInput } from './scroll';
 
 export const handleEnter = () => {
@@ -16,10 +16,40 @@ export const handleSend = () => {
   const text = inputText.value.trim();
   if (!text) return;
 
-  const safeContext = contextList.value.map(item => ({
-    fileName: item.fileName,
-    content: item.content
-  }));
+  // Build context: explicit items + applicable implicit context
+  const safeContext: Array<{ fileName: string; content: string; kind?: string; lineRange?: string }> = [];
+
+  // Explicit context
+  for (const item of contextList.value) {
+    safeContext.push({ fileName: item.fileName, content: item.content, kind: item.kind || 'explicit', lineRange: item.lineRange });
+  }
+
+  // Implicit selection (always included, regardless of mode)
+  if (implicitSelection.value) {
+    const sel = implicitSelection.value;
+    const lineRange = `L${sel.startLine}-L${sel.endLine}`;
+    safeContext.push({
+      fileName: `${sel.relativePath || sel.fileName}:${lineRange}`,
+      content: sel.content,
+      kind: 'implicit-selection',
+      lineRange
+    });
+  }
+
+  // Implicit file in non-agent modes (if enabled and not already explicit)
+  if (
+    currentMode.value !== 'agent' &&
+    implicitFileEnabled.value &&
+    implicitFile.value &&
+    !contextList.value.some(c => c.fileName === implicitFile.value?.fileName)
+  ) {
+    safeContext.push({
+      fileName: implicitFile.value.relativePath || implicitFile.value.fileName,
+      content: '__implicit_file__',
+      kind: 'implicit-file'
+    });
+  }
+
   vscode.postMessage({ type: 'sendMessage', text, context: safeContext });
   inputText.value = '';
   resizeInput(inputEl.value);

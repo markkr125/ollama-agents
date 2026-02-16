@@ -88,7 +88,7 @@ test('handleSend posts sendMessage with context and clears input/context', async
   expect(vscodePostMessage).toHaveBeenCalledWith({
     type: 'sendMessage',
     text: 'hello',
-    context: [{ fileName: 'a.ts', content: 'x' }]
+    context: [{ fileName: 'a.ts', content: 'x', kind: 'explicit', lineRange: undefined }]
   });
 
   expect(state.inputText.value).toBe('');

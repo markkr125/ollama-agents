@@ -1073,3 +1073,107 @@ describe('buildTimelineFromMessages - filesChanged restore', () => {
     expect(state.filesChangedBlocks.value.length).toBe(0);
   });
 });
+
+// ─── contextFiles UI event ───────────────────────────────────────────
+
+describe('buildTimelineFromMessages - contextFiles event', () => {
+  function makeUiEvent(id: string, eventType: string, payload: any) {
+    return {
+      id,
+      role: 'tool',
+      content: '',
+      toolName: '__ui__',
+      toolOutput: JSON.stringify({ eventType, payload })
+    };
+  }
+
+  test('contextFiles event attaches files to the preceding user message', async () => {
+    const builder = await import('../../../src/webview/scripts/core/timelineBuilder');
+
+    const contextFiles = [
+      { fileName: 'src/app.ts', kind: 'explicit' },
+      { fileName: 'src/utils.ts', kind: 'implicit-file' }
+    ];
+
+    const messages = [
+      { id: 'u1', role: 'user', content: 'hello' },
+      makeUiEvent('cf1', 'contextFiles', { files: contextFiles }),
+      { id: 'a1', role: 'assistant', content: 'Hi!' }
+    ];
+
+    const timeline = builder.buildTimelineFromMessages(messages);
+
+    const userMsg = timeline.find((item: any) => item.type === 'message' && item.role === 'user');
+    expect(userMsg).toBeDefined();
+    expect((userMsg as any).contextFiles).toEqual(contextFiles);
+  });
+
+  test('contextFiles event is ignored when files array is empty', async () => {
+    const builder = await import('../../../src/webview/scripts/core/timelineBuilder');
+
+    const messages = [
+      { id: 'u1', role: 'user', content: 'hello' },
+      makeUiEvent('cf1', 'contextFiles', { files: [] }),
+      { id: 'a1', role: 'assistant', content: 'Hi!' }
+    ];
+
+    const timeline = builder.buildTimelineFromMessages(messages);
+
+    const userMsg = timeline.find((item: any) => item.type === 'message' && item.role === 'user');
+    expect((userMsg as any).contextFiles).toBeUndefined();
+  });
+
+  test('contextFiles event is ignored when payload has no files', async () => {
+    const builder = await import('../../../src/webview/scripts/core/timelineBuilder');
+
+    const messages = [
+      { id: 'u1', role: 'user', content: 'hello' },
+      makeUiEvent('cf1', 'contextFiles', {}),
+      { id: 'a1', role: 'assistant', content: 'Hi!' }
+    ];
+
+    const timeline = builder.buildTimelineFromMessages(messages);
+
+    const userMsg = timeline.find((item: any) => item.type === 'message' && item.role === 'user');
+    expect((userMsg as any).contextFiles).toBeUndefined();
+  });
+
+  test('contextFiles event does nothing when no user message exists', async () => {
+    const builder = await import('../../../src/webview/scripts/core/timelineBuilder');
+
+    const messages = [
+      makeUiEvent('cf1', 'contextFiles', { files: [{ fileName: 'x.ts' }] }),
+      { id: 'a1', role: 'assistant', content: 'Hi!' }
+    ];
+
+    const timeline = builder.buildTimelineFromMessages(messages);
+
+    // No crash, assistant thread still exists
+    expect(timeline.length).toBe(1);
+    expect((timeline[0] as any).type).toBe('assistantThread');
+  });
+
+  test('contextFiles event attaches to the LAST user message', async () => {
+    const builder = await import('../../../src/webview/scripts/core/timelineBuilder');
+
+    const messages = [
+      { id: 'u1', role: 'user', content: 'first question' },
+      { id: 'a1', role: 'assistant', content: 'answer 1' },
+      { id: 'u2', role: 'user', content: 'second question' },
+      makeUiEvent('cf1', 'contextFiles', { files: [{ fileName: 'target.ts', kind: 'explicit' }] }),
+      { id: 'a2', role: 'assistant', content: 'answer 2' }
+    ];
+
+    const timeline = builder.buildTimelineFromMessages(messages);
+
+    // First user message should NOT have contextFiles
+    const firstUser = timeline[0] as any;
+    expect(firstUser.role).toBe('user');
+    expect(firstUser.contextFiles).toBeUndefined();
+
+    // Second user message should have contextFiles
+    const secondUser = timeline[2] as any;
+    expect(secondUser.role).toBe('user');
+    expect(secondUser.contextFiles).toEqual([{ fileName: 'target.ts', kind: 'explicit' }]);
+  });
+});

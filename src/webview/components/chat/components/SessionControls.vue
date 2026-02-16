@@ -1,7 +1,7 @@
 <template>
   <div v-if="currentMode === 'agent'" class="session-controls">
     <button class="session-controls-toggle" @click="$emit('update:expanded', !expanded)">
-      <span class="session-controls-icon">⚙️</span>
+      <span class="codicon codicon-tools session-controls-icon"></span>
       <span class="session-controls-title">Session</span>
       <span class="session-controls-chevron" :class="{ expanded }">›</span>
     </button>

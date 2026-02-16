@@ -206,14 +206,12 @@ export function useChatPage(props: ChatPageProps) {
     props.resizeInput();
   };
 
-  const onModeChange = (event: Event) => {
-    const value = (event.target as HTMLSelectElement).value;
+  const onModeChange = (value: string) => {
     props.setCurrentMode(value);
     props.selectMode();
   };
 
-  const onModelChange = (event: Event) => {
-    const value = (event.target as HTMLSelectElement).value;
+  const onModelChange = (value: string) => {
     props.setCurrentModel(value);
     props.selectModel();
   };

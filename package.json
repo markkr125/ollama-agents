@@ -511,6 +511,7 @@
   },
   "dependencies": {
     "@lancedb/lancedb": "^0.23.0",
+    "@vscode/codicons": "^0.0.44",
     "@vscode/sqlite3": "^5.1.12-vscode",
     "apache-arrow": "^18.1.0",
     "diff": "^7.0.0",

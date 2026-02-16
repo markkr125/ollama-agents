@@ -9,6 +9,8 @@
 @use 'components/files-changed';
 @use 'components/diff2html';
 @use 'components/input';
+@use 'components/dropdown-menu';
+@use 'components/context-files';
 @use 'components/settings';
 @use 'components/tools';
 @use 'utils/scrollbar';

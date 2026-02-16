@@ -20,6 +20,9 @@ export default defineConfig({
           if (assetInfo.name === 'style.css') {
             return 'chatView.css';
           }
+          if (assetInfo.name?.endsWith('.ttf')) {
+            return 'codicon.ttf';
+          }
           return 'chatView.[ext]';
         }
       }

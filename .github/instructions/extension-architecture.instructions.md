@@ -136,6 +136,17 @@ Trailing slash is always stripped (both in constructor and `setBaseUrl()`).
 ### `testConnection()`
 Returns `boolean`, not the error — swallows exceptions. The `SettingsHandler.testConnection()` wrapper sends results to the UI via `connectionTestResult` message.
 
+## EditorContextTracker (`src/views/editorContextTracker.ts`)
+
+Tracks the active text editor and selection, posting `editorContext` messages to the webview for implicit context chips (matching VS Code Copilot's behavior).
+
+- **Listens to**: `onDidChangeActiveTextEditor`, `onDidChangeTextEditorSelection` (debounced 500ms)
+- **Lifecycle**: Created in `resolveWebviewView()` after the webview is ready; disposed in `onDidDispose`
+- **Resend on visibility**: `sendNow()` is called when the webview panel becomes visible (`onDidChangeVisibility`)
+- **Payload**: `{ type: 'editorContext', activeFile: {fileName, filePath, relativePath, languageId} | null, activeSelection: {fileName, relativePath, content, startLine, endLine, languageId} | null }`
+- **`relativePath`**: Derived from `vscode.workspace.asRelativePath(uri, true)` — includes the workspace folder prefix in multi-root workspaces (e.g. `backend/src/app.ts`). Used downstream for context item fileNames so the LLM and tools can resolve the correct file.
+- **Filters**: Skips non-file URIs (output panels, settings, etc.)
+
 ## Terminal Manager (`src/services/terminalManager.ts`)
 
 ### Shell Integration Requirement

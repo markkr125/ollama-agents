@@ -142,6 +142,7 @@ These are the mistakes most frequently made when editing this codebase. **Check 
 | 24 | `startReviewForCheckpoint` always setting `currentFileIndex = 0` | When a new file is written while the user is viewing a different file, the review session rebuilds and resets `currentFileIndex` to 0. The widget's `activeFilePath` then highlights the wrong file. | `startReviewForCheckpoint` now iterates `vscode.window.visibleTextEditors`, matches against review file URIs, and sets `currentFileIndex` to the focused/visible editor. Prefers `activeTextEditor`; falls back to any visible match. |
 | 25 | `asRelativePath(path, true)` returns folder-name-prefixed paths | `vscode.workspace.asRelativePath(path, true)` returns `"folderName/file.ts"`. Joining this with `folder.uri` via `Uri.joinPath` or `path.join` doubles the folder name: `…/folderName/folderName/file.ts` → `ENOENT`. Affects both agent tools (`resolveMultiRootPath` in `pathUtils.ts`) and UI file opening (`handleOpenWorkspaceFile`/`handleRevealInExplorer` in `fileChangeMessageHandler.ts`). | **Agent tools**: `resolveMultiRootPath` strips the folder-name prefix in single-root mode with an `fs.existsSync` guard (keeps real subdirectories with the same name). **UI handlers**: `stripFolderPrefix()` helper strips the prefix before `Uri.joinPath`. Both iterate workspace folders to find the actual file. |
 | 26 | `closeActiveThinkingGroup()` collapsing at end of generation | The function defaults to `collapse = true`, which hides all tool action groups inside the thinking group's `<details>` element. At end of generation, this makes the scroll area shrink and action groups become unclickable. | Pass `collapse = false` at end-of-generation call sites (`handleGenerationStopped`, `handleFinalMessage`). The default `collapse = true` is correct when a write group starts or when clearing messages. |
+| 27 | Agent re-reads file when selection is already in context | The context format sent to the LLM was too terse (`[fileName]\n```\ncode\n```) — the model didn't understand the code was already available and wasted tool calls on `read_file`. | Context labels must be descriptive: `User's selected code from file.ts:L10-L50 (already provided — do not re-read):`. The system prompt in `buildAgentSystemPrompt()` has a `USER-PROVIDED CONTEXT` section reinforcing this. Both signals are needed — the label alone is insufficient for some models. See `agent-tools.instructions.md` → "User-Provided Context Pipeline". |
 
 ---
 
@@ -236,11 +237,12 @@ src/
 │   ├── chatView.ts       # Webview lifecycle shell (thin — delegates to MessageRouter)
 │   ├── messageRouter.ts  # O(1) message type → IMessageHandler dispatch
 │   ├── chatSessionController.ts # Session state + messages + list/search
+│   ├── editorContextTracker.ts  # Tracks active editor file + selection → editorContext messages
 │   ├── settingsHandler.ts # Settings + token + connection handling
 │   ├── toolUIFormatter.ts # Pure mapping for tool UI text/icons
 │   ├── chatTypes.ts       # Shared view types + IMessageHandler + ViewState
 │   └── messageHandlers/   # IMessageHandler implementations (one per concern)
-│       ├── chatMessageHandler.ts      # Chat/agent mode: send, stop, mode/model switch
+│       ├── chatMessageHandler.ts      # Chat/agent mode: send, stop, mode/model switch, multi-source context
 │       ├── sessionMessageHandler.ts   # Load/delete/search sessions
 │       ├── settingsMessageHandler.ts  # Save settings, test connection, DB ops
 │       ├── approvalMessageHandler.ts  # Tool/file approval, auto-approve toggles
@@ -258,11 +260,13 @@ src/
 │   │   ├── chat/               # Chat feature folder
 │   │   │   ├── ChatPage.vue         # Main page component (entry point)
 │   │   │   └── components/          # Chat sub-components
-│   │   │       ├── ChatInput.vue
+│   │   │       ├── ChatInput.vue         # Copilot-style input (pill pickers, implicit chips, attach, tools)
 │   │   │       ├── CommandApproval.vue
+│   │   │       ├── DropdownMenu.vue      # Reusable floating dropdown (teleported, keyboard-nav)
 │   │   │       ├── FileEditApproval.vue
 │   │   │       ├── FilesChanged.vue
 │   │   │       ├── MarkdownBlock.vue
+│   │   │       ├── PillPicker.vue        # Compact pill button → opens DropdownMenu
 │   │   │       ├── ProgressGroup.vue
 │   │   │       └── SessionControls.vue
 │   │   └── settings/           # Settings feature folder
@@ -282,6 +286,7 @@ src/
 │   │   └── core/
 │   │       ├── actions/    # UI actions split by concern (+ index.ts barrel)
 │   │       │   ├── filesChanged.ts # Keep/undo/review/diffStats actions
+│   │       │   ├── implicitContext.ts # Toggle/promote/pin implicit context chips
 │   │       │   ├── approvals.ts, input.ts, markdown.ts, scroll.ts
 │   │       │   ├── search.ts, sessions.ts, settings.ts
 │   │       │   └── stateUpdates.ts, status.ts, timeline.ts, timelineView.ts
@@ -643,6 +648,7 @@ vsce package
 | Files changed widget | `src/webview/components/chat/components/FilesChanged.vue` + `src/webview/scripts/core/actions/filesChanged.ts` + `src/webview/scripts/core/messageHandlers/filesChanged.ts` | `webview-ui` + `ui-messages` instructions |
 | Checkpoint/snapshot management | `src/services/database/sessionIndexService.ts` (tables) + `src/services/agent/checkpointManager.ts` (lifecycle) | `database-rules` + `agent-tools` instructions |
 | Agent path resolution | `src/agent/tools/pathUtils.ts` (`resolveMultiRootPath`, `resolveWorkspacePath`) | `agent-tools` instructions |
+| User-provided context pipeline | `src/views/editorContextTracker.ts` → `src/webview/scripts/core/actions/input.ts` → `src/views/messageHandlers/chatMessageHandler.ts` → `src/services/agent/agentChatExecutor.ts` (`buildAgentSystemPrompt`) | `agent-tools` instructions → "User-Provided Context Pipeline" |
 | LSP code intelligence tools | `src/agent/tools/{findDefinition,findReferences,findSymbol,getDocumentSymbols,getHoverInfo,getCallHierarchy,findImplementations,getTypeHierarchy}.ts` | `agent-tools` instructions |
 | LSP symbol position resolution | `src/agent/tools/symbolResolver.ts` (`resolveSymbolPosition`, `formatLocation`) | `agent-tools` instructions |
 | UI file opening from tool results | `src/views/messageHandlers/fileChangeMessageHandler.ts` (`handleOpenWorkspaceFile`, `stripFolderPrefix`) + `src/webview/components/chat/components/ProgressGroup.vue` (click handlers) | `webview-ui` instructions |
