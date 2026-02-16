@@ -18,13 +18,13 @@ export type Settings = {
   baseUrl: string;
   enableAutoComplete: boolean;
   agentModel: string;
-  askModel: string;
-  editModel: string;
+  chatModel: string;
   completionModel: string;
   maxIterations: number;
   toolTimeout: number;
   maxActiveSessions: number;
   enableThinking: boolean;
+  continuationStrategy: 'full' | 'standard' | 'minimal';
   temperature: number;
   sensitiveFilePatterns: string;
   storagePath: string;

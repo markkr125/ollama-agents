@@ -147,4 +147,21 @@ export class SessionRepository {
     await dbRun(this.db(), 'DELETE FROM sessions;');
     console.log('[SessionRepository] All sessions and messages cleared');
   }
+
+  // ---- Session memory persistence ----
+
+  async saveSessionMemory(sessionId: string, memoryJson: string): Promise<void> {
+    await dbRun(this.db(),
+      'UPDATE sessions SET session_memory = ?, updated_at = ? WHERE id = ?;',
+      [memoryJson, Date.now(), sessionId]
+    );
+  }
+
+  async loadSessionMemory(sessionId: string): Promise<string | null> {
+    const row = await dbGet(this.db(),
+      'SELECT session_memory FROM sessions WHERE id = ? LIMIT 1;',
+      [sessionId]
+    );
+    return row?.session_memory ?? null;
+  }
 }

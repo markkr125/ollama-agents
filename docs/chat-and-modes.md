@@ -4,12 +4,11 @@
 
 - [Opening the Chat](#opening-the-chat)
 - [Agent Mode](#agent-mode)
-- [Explore Mode](#explore-mode)
 - [Plan Mode](#plan-mode)
-- [Review Mode](#review-mode)
+- [Chat Mode](#chat-mode)
+- [Slash Commands](#slash-commands)
+- [Sub-Agent (Internal)](#sub-agent-internal)
 - [Thinking Blocks](#thinking-blocks)
-- [Chat Mode (Ask)](#chat-mode-ask)
-- [Edit Mode](#edit-mode)
 - [Inline Completions](#inline-completions)
 - [Session Management](#session-management)
 - [Command Approval](#command-approval)
@@ -23,7 +22,7 @@
 
 Click the **Ollama Copilot** icon (robot) in the Activity Bar to open the sidebar chat. The chat interface has:
 
-- **Mode selector** — switch between Agent, Explore, Plan, Review, Ask, and Edit
+- **Mode selector** — switch between Agent, Plan, and Chat
 - **Model selector** — choose which model to use (only enabled models appear; shows "No enabled models" if all are disabled)
 - **Context button** — attach code from the active editor
 - **Sessions panel** — view, search, and manage conversation history
@@ -64,6 +63,7 @@ The autonomous coding agent. It can read/write files, search your workspace, and
 | `get_call_hierarchy` | Trace incoming and/or outgoing call chains |
 | `find_implementations` | Find concrete implementations of an interface or abstract class |
 | `get_type_hierarchy` | Show inheritance chains — supertypes and subtypes |
+| `run_subagent` | Launch an independent read-only sub-agent for complex investigation tasks |
 
 > **Code intelligence tools** (last 8 above) use VS Code's Language Server Protocol — they work for any language with an active LSP extension (TypeScript, Python, Java, Rust, etc.).
 
@@ -74,22 +74,6 @@ The autonomous coding agent. It can read/write files, search your workspace, and
 - **Search results**: Shown as a collapsible group listing matched files with match counts. Clicking a filename opens it in the editor.
 - **Directory listings**: Shown as a tree with folder/file icons. Clicking entries opens files or reveals folders in the explorer.
 - **Terminal commands**: Show the command, exit code, and truncated output.
-
-## Explore Mode
-
-Read-only codebase exploration. The agent uses all code intelligence tools (LSP-powered definition, references, symbols, call hierarchy, etc.) without modifying any files.
-
-**Best for:**
-- Understanding unfamiliar codebases
-- Tracing call chains and data flow
-- Finding where something is defined or used
-- Getting an overview of project structure
-
-**Differences from Agent mode:**
-- No `write_file` or `run_terminal_command` tools available
-- No approval flow needed (purely read-only)
-- Lower iteration cap (10 vs 25)
-- Parallel search and exploration strategy
 
 ## Plan Mode
 
@@ -107,22 +91,46 @@ Tool-powered implementation planning. The agent explores the codebase using read
    - File-by-file changes needed
    - Dependencies and ordering
    - Potential risks or gotchas
+4. A **"Start Implementation"** button appears at the bottom of the plan
+5. Clicking it switches to Agent mode and sends the plan as the prompt
 
-Uses the same read-only tool set as Explore mode.
+Uses a read-only tool set (same tools as Agent mode except no `write_file`, `run_terminal_command`, or `run_subagent`).
 
-## Review Mode
+## Chat Mode
 
-Security and quality review. The agent reviews code for vulnerabilities, anti-patterns, and quality issues.
+General Q&A about code. The model responds in a single turn without using tools.
 
-**Best for:**
-- Security audits (injection, XSS, auth bypass, path traversal)
-- Code quality review before merging
-- Finding anti-patterns and tech debt
+- Good for: explaining code, answering questions, brainstorming, requesting code edits
+- Uses the `chatMode.model` and temperature settings
+- Conversation history is maintained per session
+- Replaces the former Ask and Edit modes
 
-**Differences from Explore mode:**
-- Security-focused system prompt
-- Additionally allows `run_terminal_command` for git read commands (`git log`, `git diff`, `git show`)
-- Structured output: severity ratings, affected files, remediation steps
+## Slash Commands
+
+Special commands that can be typed in any mode:
+
+| Command | Description |
+|---------|-------------|
+| `/review` | Run a security and quality code review using the read-only review agent |
+| `/review <instructions>` | Review with specific focus (e.g., `/review check for SQL injection`) |
+| `/security-review` | Alias for `/review` with a security-focused prompt |
+
+The `/review` command internally uses the explore executor in review mode. It has access to all read-only code intelligence tools plus limited git commands (`git log`, `git diff`, `git show`). Output includes severity ratings, affected files, and remediation steps.
+
+## Sub-Agent (Internal)
+
+The `run_subagent` tool allows the main Agent to spawn a read-only sub-agent for complex multi-step investigation tasks. This is not a user-facing mode — it's a tool the agent can call autonomously.
+
+**How it works:**
+1. The agent identifies a research task that requires multiple tool calls
+2. It calls `run_subagent` with a task description and mode (`explore` or `review`)
+3. A lightweight explore/review executor runs the sub-task independently
+4. The results are returned as text to the main agent
+
+**Use cases:**
+- Researching code patterns across a large codebase
+- Investigating a specific subsystem before making changes
+- Running a security review of a component mid-task
 
 ## Thinking Blocks
 
@@ -139,19 +147,7 @@ When `ollamaCopilot.agent.enableThinking` is enabled (default: `true`), the exte
 - When a session is reloaded, thinking blocks appear collapsed (since the reasoning is already complete)
 - Multiple thinking rounds within one response create separate collapsible blocks
 
-Thinking blocks appear in both Agent mode (between tool execution rounds) and Ask/Edit modes (before the response).
-
-## Chat Mode (Ask)
-
-General Q&A about code. The model responds in a single turn without using tools.
-
-- Good for: explaining code, answering questions, brainstorming
-- Uses the `askMode.model` and temperature settings
-- Conversation history is maintained per session
-
-## Edit Mode
-
-Similar to chat mode but with a system prompt optimized for code modifications. Select code in the editor, attach it as context, and describe the edit you want.
+Thinking blocks appear in both Agent mode (between tool execution rounds) and Chat mode (before the response).
 
 ## Inline Completions
 

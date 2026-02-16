@@ -36,7 +36,7 @@ suite('DatabaseService', () => {
     const db1 = new DatabaseService(context);
     await db1.initialize();
 
-    const session = await db1.createSession('t', 'ask', 'test-model');
+    const session = await db1.createSession('t', 'chat', 'test-model');
 
     for (let i = 0; i < 8; i++) {
       await db1.addMessage(session.id, 'user', `m${i}`);
@@ -73,7 +73,7 @@ suite('DatabaseService', () => {
     const db = new DatabaseService(context);
     await db.initialize();
 
-    const session = await db.createSession('keep-me', 'ask', 'test-model');
+    const session = await db.createSession('keep-me', 'chat', 'test-model');
     await db.addMessage(session.id, 'user', 'valid message');
 
     // Attempting to add a message with a non-existent session_id should fail (FK constraint)

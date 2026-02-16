@@ -341,6 +341,32 @@ export class AgentExploreExecutor {
     return { summary: cleanedSummary, assistantMessage };
   }
 
+  /**
+   * Run a sub-agent exploration (called by `run_subagent` tool).
+   * Same loop as `execute()` but returns only the accumulated text result.
+   * UI events (progress groups, tool actions) still emit so the user can
+   * see what the sub-agent is doing, but no `finalMessage` / streaming
+   * is emitted — the result is returned to the parent agent as tool output.
+   */
+  async executeSubagent(
+    task: string,
+    token: vscode.CancellationToken,
+    sessionId: string,
+    model: string,
+    mode: 'explore' | 'review',
+    capabilities?: ModelCapabilities
+  ): Promise<string> {
+    const config: ExecutorConfig = {
+      maxIterations: Math.min(getConfig().agent.maxIterations, mode === 'review' ? 15 : 10),
+      toolTimeout: getConfig().agent.toolTimeout,
+      temperature: 0.5
+    };
+
+    // Execute with empty conversation history (sub-agent starts fresh)
+    const result = await this.execute(task, config, token, sessionId, model, mode, capabilities);
+    return result.summary || 'Sub-agent completed with no findings.';
+  }
+
   // -------------------------------------------------------------------------
   // Private helpers
   // -------------------------------------------------------------------------

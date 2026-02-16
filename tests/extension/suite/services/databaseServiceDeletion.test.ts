@@ -35,7 +35,7 @@ suite('DatabaseService deletion', () => {
     const db = new DatabaseService(context);
     await db.initialize();
 
-    const session = await db.createSession('to-delete', 'ask', 'test-model');
+    const session = await db.createSession('to-delete', 'chat', 'test-model');
     await db.addMessage(session.id, 'user', 'hi');
     await db.addMessage(session.id, 'assistant', 'hello');
 

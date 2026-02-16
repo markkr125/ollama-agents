@@ -1,10 +1,13 @@
 export function getProgressGroupTitle(toolCalls: Array<{ name: string; args: any }>): string {
   const readCalls = toolCalls.filter(t => t.name === 'read_file');
+  const writeCalls = toolCalls.filter(t => t.name === 'write_file' || t.name === 'create_file');
   const hasRead = readCalls.length > 0;
-  const hasWrite = toolCalls.some(t => t.name === 'write_file' || t.name === 'create_file');
+  const hasWrite = writeCalls.length > 0;
   const hasSearch = toolCalls.some(t => t.name === 'search_workspace' || t.name === 'find_symbol');
   const hasCommand = toolCalls.some(t => t.name === 'run_terminal_command' || t.name === 'run_command');
   const hasListFiles = toolCalls.some(t => t.name === 'list_files');
+  const hasDiagnostics = toolCalls.some(t => t.name === 'get_diagnostics');
+  const hasSubagent = toolCalls.some(t => t.name === 'run_subagent');
   const hasNavigation = toolCalls.some(t =>
     t.name === 'find_definition' || t.name === 'find_references' ||
     t.name === 'find_implementations' || t.name === 'get_hover_info' ||
@@ -12,21 +15,38 @@ export function getProgressGroupTitle(toolCalls: Array<{ name: string; args: any
   );
   const hasSymbols = toolCalls.some(t => t.name === 'get_document_symbols');
 
-  if (hasNavigation) return 'Analyzing code';
-  if (hasSearch) return 'Searching codebase';
-  if (hasSymbols && !hasWrite) return 'Inspecting file structure';
-  if (hasWrite && hasRead) return 'Modifying files';
-  if (hasWrite) return 'Writing files';
-  if (hasRead && !hasWrite && !hasSearch && !hasCommand && !hasListFiles) {
-    // Read-only batch — show filenames in title
-    const fileNames = readCalls.map(t => {
+  // Helper to get short filenames from tool args
+  const getFileNames = (calls: Array<{ args: any }>, max: number = 3): string => {
+    const names = calls.map(t => {
       const p = t.args?.path || t.args?.file || '';
       return p ? p.split('/').pop() : '';
     }).filter(Boolean);
-    const unique = [...new Set(fileNames)];
-    if (unique.length === 0) return 'Reading files';
-    if (unique.length > 5) return 'Reading multiple files';
-    return `Reading ${unique.join(', ')}`;
+    const unique = [...new Set(names)];
+    if (unique.length === 0) return '';
+    if (unique.length > max) return `${unique.slice(0, max).join(', ')} (+${unique.length - max})`;
+    return unique.join(', ');
+  };
+
+  if (hasSubagent) return 'Delegating subtask';
+  if (hasNavigation && hasSearch) return 'Tracing code paths';
+  if (hasNavigation) return 'Analyzing code structure';
+  if (hasSearch && hasRead) return 'Searching and reading code';
+  if (hasSearch) return 'Searching codebase';
+  if (hasSymbols && !hasWrite) return 'Inspecting file structure';
+  if (hasDiagnostics && !hasWrite && !hasRead) return 'Checking diagnostics';
+  if (hasWrite && hasRead) {
+    const writeNames = getFileNames(writeCalls);
+    return writeNames ? `Editing ${writeNames}` : 'Editing files';
+  }
+  if (hasWrite) {
+    const writeNames = getFileNames(writeCalls);
+    return writeNames ? `Writing ${writeNames}` : 'Writing files';
+  }
+  if (hasRead && !hasWrite && !hasSearch && !hasCommand && !hasListFiles) {
+    // Read-only batch — show filenames in title
+    const fileNames = getFileNames(readCalls, 5);
+    if (!fileNames) return 'Reading files';
+    return `Reading ${fileNames}`;
   }
   if (hasRead) return 'Reading files';
   if (hasListFiles) return 'Exploring workspace';
@@ -84,6 +104,12 @@ export function getToolActionInfo(
         actionText: 'Run command',
         actionDetail: (args?.command || '').substring(0, 30),
         actionIcon: '⚡'
+      };
+    case 'run_subagent':
+      return {
+        actionText: `Sub-agent: ${(args?.task || '').substring(0, 40)}${(args?.task || '').length > 40 ? '...' : ''}`,
+        actionDetail: args?.mode === 'review' ? 'Security review' : 'Explore',
+        actionIcon: '🤖'
       };
     case 'get_document_symbols':
       return {
@@ -240,6 +266,13 @@ export function getToolSuccessInfo(
       return {
         actionText: 'Command completed',
         actionDetail: cmd ? `\`${cmd}\`${exitCode ? ` · exit ${exitCode}` : ''}` : (exitCode ? `exit ${exitCode}` : '')
+      };
+    }
+    case 'run_subagent': {
+      const summary = (output || '').split('\n')[0]?.substring(0, 80) || 'Completed';
+      return {
+        actionText: 'Sub-agent completed',
+        actionDetail: summary
       };
     }
     case 'get_document_symbols': {

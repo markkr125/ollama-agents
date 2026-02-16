@@ -6,6 +6,7 @@ import { CHUNK_SIZE, countFileLines, readFileChunk } from '../../agent/tools/rea
 import { PersistUiEventFn } from '../../types/agent';
 import { ChatMessage } from '../../types/ollama';
 import { ToolExecution } from '../../types/session';
+import { formatDiagnostics, getErrorDiagnostics, waitForDiagnostics } from '../../utils/diagnosticWaiter';
 import { WebviewMessageEmitter } from '../../views/chatTypes';
 import { getToolActionInfo, getToolSuccessInfo } from '../../views/toolUIFormatter';
 import { DatabaseService } from '../database/databaseService';
@@ -249,8 +250,26 @@ export class AgentToolRunner {
           }
         }
 
-        // Feed tool result back to LLM — with contextual reminders
-        const contextualHint = this.buildContextualReminder(toolCall.name, toolCall.args, result.output || '', isFileEdit);
+        // Feed tool result back to LLM — with contextual reminders + auto-diagnostics
+        let autoDiagnosticsText = '';
+        if (isFileEdit && !isSkipped && !isFileEditSkipped) {
+          try {
+            const relPath = String(toolCall.args?.path || toolCall.args?.file || '').trim();
+            if (relPath) {
+              const absPath = resolveMultiRootPath(relPath, context.workspace, context.workspaceFolders);
+              const fileUri = vscode.Uri.file(absPath);
+              const diagnostics = await waitForDiagnostics(fileUri, 3000);
+              const errors = getErrorDiagnostics(diagnostics);
+              if (errors.length > 0) {
+                autoDiagnosticsText = `\n\n[AUTO-DIAGNOSTICS] ${errors.length} error(s) detected after writing:\n${formatDiagnostics(errors)}`;
+              }
+            }
+          } catch {
+            // Non-critical — don't block on diagnostic failures
+          }
+        }
+
+        const contextualHint = this.buildContextualReminder(toolCall.name, toolCall.args, result.output || '', isFileEdit, autoDiagnosticsText);
         const enrichedOutput = contextualHint ? (result.output || '') + contextualHint : (result.output || '');
         if (useNativeTools) {
           nativeResults.push({ role: 'tool', content: enrichedOutput, tool_name: toolCall.name });
@@ -412,15 +431,18 @@ export class AgentToolRunner {
   // feeding back to the LLM. Adapted from Claude Code's system reminders.
   // -------------------------------------------------------------------------
 
-  private buildContextualReminder(toolName: string, args: any, output: string, isFileEdit: boolean): string {
+  private buildContextualReminder(toolName: string, args: any, output: string, isFileEdit: boolean, autoDiagnostics?: string): string {
     // Empty file reminder
     if (toolName === 'read_file' && output.trim() === '') {
       return '\n\n[Note: This file exists but is empty.]';
     }
 
-    // File write success reminder
+    // File write success reminder — include auto-diagnostics if present
     if (isFileEdit && !output.toLowerCase().includes('skipped') && !output.toLowerCase().includes('error')) {
-      return '\n\n[Note: File modified successfully. Consider running relevant tests to verify the change.]';
+      if (autoDiagnostics) {
+        return autoDiagnostics + '\n[Note: Fix these errors before continuing with other changes.]';
+      }
+      return '\n\n[Note: File modified successfully. Diagnostics check passed.]';
     }
 
     // Terminal command failure reminder

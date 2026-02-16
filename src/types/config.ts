@@ -6,12 +6,15 @@ export interface ModeConfig {
   maxTokens: number;
 }
 
+export type ContinuationStrategy = 'full' | 'standard' | 'minimal';
+
 export interface AgentConfig {
   maxIterations: number;
   toolTimeout: number;
   maxActiveSessions: number;
   sensitiveFilePatterns: Record<string, boolean>;
   enableThinking: boolean;
+  continuationStrategy: ContinuationStrategy;
 }
 
 export interface ExtensionConfig {
@@ -19,11 +22,8 @@ export interface ExtensionConfig {
   contextWindow: number;
   storagePath: string;
   completionMode: ModeConfig;
-  askMode: ModeConfig;
-  editMode: ModeConfig;
+  chatMode: ModeConfig;
   planMode: ModeConfig;
   agentMode: ModeConfig;
-  exploreMode: ModeConfig;
-  reviewMode: ModeConfig;
   agent: AgentConfig;
 }

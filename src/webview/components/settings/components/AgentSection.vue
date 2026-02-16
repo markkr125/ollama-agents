@@ -48,6 +48,17 @@
         </div>
         <div class="toggle" :class="{ on: settings.enableThinking }" @click="settings.enableThinking = !settings.enableThinking"></div>
       </div>
+      <div class="settings-item">
+        <label class="settings-label">Continuation Strategy</label>
+        <select v-model="settings.continuationStrategy" class="settings-select">
+          <option value="full">Full — Session memory + rich context (best quality)</option>
+          <option value="standard">Standard — Tool results only (balanced)</option>
+          <option value="minimal">Minimal — Single-pass with auto-fix retry (fastest)</option>
+        </select>
+        <div class="settings-desc">
+          Controls how the agent continues between iterations. Full uses more tokens but produces better results.
+        </div>
+      </div>
       <div class="toggle-row">
         <div class="toggle-info">
           <span class="toggle-label">Auto Create Git Branch</span>

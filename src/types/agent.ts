@@ -42,6 +42,11 @@ export interface ToolContext {
   outputChannel: vscode.OutputChannel;
   sessionId?: string;
   terminalManager?: TerminalManager;
+  /**
+   * Optional callback for running a sub-agent with read-only tools.
+   * Injected by the agent executor; used by `run_subagent` tool.
+   */
+  runSubagent?: (task: string, mode: 'explore' | 'review') => Promise<string>;
 }
 
 /**

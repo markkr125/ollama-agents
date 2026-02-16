@@ -27,13 +27,14 @@ suite('toolUIFormatter', () => {
       assert.strictEqual(title, 'Reading a.ts, b.ts, c.ts');
     });
 
-    test('more than 5 read_file calls shows "Reading multiple files"', () => {
+    test('more than 5 read_file calls shows count with overflow', () => {
       const calls = Array.from({ length: 6 }, (_, i) => ({
         name: 'read_file',
         args: { path: `file${i}.ts` }
       }));
       const title = getProgressGroupTitle(calls);
-      assert.strictEqual(title, 'Reading multiple files');
+      assert.ok(title.startsWith('Reading '), 'Should start with Reading');
+      assert.ok(title.includes('(+'), 'Should show overflow count');
     });
 
     test('duplicate read paths are deduplicated', () => {
@@ -51,12 +52,12 @@ suite('toolUIFormatter', () => {
       assert.strictEqual(title, 'Reading guide.md');
     });
 
-    test('read + write returns "Modifying files"', () => {
+    test('read + write returns "Editing <filename>"', () => {
       const title = getProgressGroupTitle([
         { name: 'read_file', args: { path: 'a.ts' } },
         { name: 'write_file', args: { path: 'b.ts' } }
       ]);
-      assert.strictEqual(title, 'Modifying files');
+      assert.strictEqual(title, 'Editing b.ts');
     });
 
     test('search returns "Searching codebase"', () => {
@@ -73,46 +74,46 @@ suite('toolUIFormatter', () => {
       assert.strictEqual(title, 'Searching codebase');
     });
 
-    test('find_definition returns "Analyzing code"', () => {
+    test('find_definition returns "Analyzing code structure"', () => {
       const title = getProgressGroupTitle([
         { name: 'find_definition', args: { path: 'a.ts', symbolName: 'foo' } }
       ]);
-      assert.strictEqual(title, 'Analyzing code');
+      assert.strictEqual(title, 'Analyzing code structure');
     });
 
-    test('find_references returns "Analyzing code"', () => {
+    test('find_references returns "Analyzing code structure"', () => {
       const title = getProgressGroupTitle([
         { name: 'find_references', args: { path: 'a.ts', symbolName: 'foo' } }
       ]);
-      assert.strictEqual(title, 'Analyzing code');
+      assert.strictEqual(title, 'Analyzing code structure');
     });
 
-    test('get_hover_info returns "Analyzing code"', () => {
+    test('get_hover_info returns "Analyzing code structure"', () => {
       const title = getProgressGroupTitle([
         { name: 'get_hover_info', args: { path: 'a.ts', symbolName: 'x' } }
       ]);
-      assert.strictEqual(title, 'Analyzing code');
+      assert.strictEqual(title, 'Analyzing code structure');
     });
 
-    test('get_call_hierarchy returns "Analyzing code"', () => {
+    test('get_call_hierarchy returns "Analyzing code structure"', () => {
       const title = getProgressGroupTitle([
         { name: 'get_call_hierarchy', args: { path: 'a.ts', symbolName: 'foo' } }
       ]);
-      assert.strictEqual(title, 'Analyzing code');
+      assert.strictEqual(title, 'Analyzing code structure');
     });
 
-    test('find_implementations returns "Analyzing code"', () => {
+    test('find_implementations returns "Analyzing code structure"', () => {
       const title = getProgressGroupTitle([
         { name: 'find_implementations', args: { path: 'a.ts', symbolName: 'IFoo' } }
       ]);
-      assert.strictEqual(title, 'Analyzing code');
+      assert.strictEqual(title, 'Analyzing code structure');
     });
 
-    test('get_type_hierarchy returns "Analyzing code"', () => {
+    test('get_type_hierarchy returns "Analyzing code structure"', () => {
       const title = getProgressGroupTitle([
         { name: 'get_type_hierarchy', args: { path: 'a.ts', symbolName: 'Foo' } }
       ]);
-      assert.strictEqual(title, 'Analyzing code');
+      assert.strictEqual(title, 'Analyzing code structure');
     });
 
     test('get_document_symbols alone returns "Inspecting file structure"', () => {
@@ -122,11 +123,11 @@ suite('toolUIFormatter', () => {
       assert.strictEqual(title, 'Inspecting file structure');
     });
 
-    test('write only returns "Writing files"', () => {
+    test('write only returns "Writing <filename>"', () => {
       const title = getProgressGroupTitle([
         { name: 'write_file', args: { path: 'a.ts' } }
       ]);
-      assert.strictEqual(title, 'Writing files');
+      assert.strictEqual(title, 'Writing a.ts');
     });
 
     test('list_files only returns "Exploring workspace"', () => {
@@ -156,6 +157,43 @@ suite('toolUIFormatter', () => {
         { name: 'read_file', args: {} }
       ]);
       assert.strictEqual(title, 'Reading files');
+    });
+
+    test('run_subagent returns "Delegating subtask"', () => {
+      const title = getProgressGroupTitle([
+        { name: 'run_subagent', args: { task: 'check tests' } }
+      ]);
+      assert.strictEqual(title, 'Delegating subtask');
+    });
+
+    test('get_diagnostics alone returns "Checking diagnostics"', () => {
+      const title = getProgressGroupTitle([
+        { name: 'get_diagnostics', args: { path: 'src/main.ts' } }
+      ]);
+      assert.strictEqual(title, 'Checking diagnostics');
+    });
+
+    test('navigation + search returns "Tracing code paths"', () => {
+      const title = getProgressGroupTitle([
+        { name: 'find_references', args: { path: 'a.ts', symbolName: 'foo' } },
+        { name: 'search_workspace', args: { query: 'bar' } }
+      ]);
+      assert.strictEqual(title, 'Tracing code paths');
+    });
+
+    test('search + read returns "Searching and reading code"', () => {
+      const title = getProgressGroupTitle([
+        { name: 'search_workspace', args: { query: 'foo' } },
+        { name: 'read_file', args: { path: 'a.ts' } }
+      ]);
+      assert.strictEqual(title, 'Searching and reading code');
+    });
+
+    test('write with no path falls back to "Writing files"', () => {
+      const title = getProgressGroupTitle([
+        { name: 'write_file', args: {} }
+      ]);
+      assert.strictEqual(title, 'Writing files');
     });
   });
 
@@ -415,6 +453,31 @@ suite('toolUIFormatter', () => {
     test('get_type_hierarchy no result reports unavailable', () => {
       const info = getToolSuccessInfo('get_type_hierarchy', { symbolName: 'X' }, 'No type hierarchy available for X.');
       assert.strictEqual(info.actionText, 'No type hierarchy available');
+    });
+
+    test('run_subagent success shows completed message', () => {
+      const info = getToolSuccessInfo('run_subagent', { task: 'Find bugs', mode: 'review' }, 'Found 3 potential issues');
+      assert.ok(info.actionText.includes('completed'));
+    });
+  });
+
+  // ─── run_subagent in getToolActionInfo ─────────────────────────────
+
+  suite('run_subagent action info', () => {
+    test('run_subagent action shows rocket icon', () => {
+      const info = getToolActionInfo('run_subagent', { task: 'Search for patterns', mode: 'explore' });
+      assert.strictEqual(info.actionIcon, '🤖');
+      assert.ok(info.actionText.toLowerCase().includes('sub-agent') || info.actionText.toLowerCase().includes('subagent'));
+    });
+
+    test('run_subagent review mode shows review detail', () => {
+      const info = getToolActionInfo('run_subagent', { task: 'Check security', mode: 'review' });
+      assert.ok(info.actionDetail.toLowerCase().includes('review'));
+    });
+
+    test('run_subagent explore mode shows explore detail', () => {
+      const info = getToolActionInfo('run_subagent', { task: 'Find files', mode: 'explore' });
+      assert.ok(info.actionDetail.toLowerCase().includes('explore'));
     });
   });
 });

@@ -38,13 +38,13 @@ export class SettingsHandler {
       baseUrl: config.baseUrl,
       enableAutoComplete: vscode.workspace.getConfiguration('ollamaCopilot').get('enableAutoComplete', true),
       agentModel: config.agentMode.model,
-      askModel: config.askMode.model,
-      editModel: config.editMode.model,
+      chatModel: config.chatMode.model,
       completionModel: config.completionMode.model,
       maxIterations: config.agent.maxIterations,
       toolTimeout: config.agent.toolTimeout,
       maxActiveSessions: config.agent.maxActiveSessions,
       enableThinking: config.agent.enableThinking,
+      continuationStrategy: config.agent.continuationStrategy,
       temperature: config.agentMode.temperature,
       sensitiveFilePatterns: JSON.stringify(config.agent.sensitiveFilePatterns, null, 2),
       storagePath: config.storagePath
@@ -83,11 +83,8 @@ export class SettingsHandler {
     if (settings.agentModel !== undefined) {
       await config.update('agentMode.model', settings.agentModel, vscode.ConfigurationTarget.Global);
     }
-    if (settings.askModel !== undefined) {
-      await config.update('askMode.model', settings.askModel, vscode.ConfigurationTarget.Global);
-    }
-    if (settings.editModel !== undefined) {
-      await config.update('editMode.model', settings.editModel, vscode.ConfigurationTarget.Global);
+    if (settings.chatModel !== undefined) {
+      await config.update('chatMode.model', settings.chatModel, vscode.ConfigurationTarget.Global);
     }
     if (settings.completionModel !== undefined) {
       await config.update('completionMode.model', settings.completionModel, vscode.ConfigurationTarget.Global);
@@ -103,6 +100,9 @@ export class SettingsHandler {
     }
     if (settings.enableThinking !== undefined) {
       await config.update('agent.enableThinking', settings.enableThinking, vscode.ConfigurationTarget.Global);
+    }
+    if (settings.continuationStrategy !== undefined) {
+      await config.update('agent.continuationStrategy', settings.continuationStrategy, vscode.ConfigurationTarget.Global);
     }
     if (settings.sensitiveFilePatterns !== undefined) {
       try {

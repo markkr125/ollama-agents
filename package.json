@@ -287,43 +287,24 @@
           "maximum": 4096,
           "description": "Maximum tokens for completions"
         },
-        "ollamaCopilot.askMode.model": {
+        "ollamaCopilot.chatMode.model": {
           "type": "string",
           "default": "",
-          "description": "Model to use for Ask mode (chat)"
+          "description": "Model to use for Chat mode"
         },
-        "ollamaCopilot.askMode.temperature": {
+        "ollamaCopilot.chatMode.temperature": {
           "type": "number",
           "default": 0.7,
           "minimum": 0,
           "maximum": 1,
-          "description": "Temperature for Ask mode"
+          "description": "Temperature for Chat mode"
         },
-        "ollamaCopilot.askMode.maxTokens": {
+        "ollamaCopilot.chatMode.maxTokens": {
           "type": "number",
           "default": 2048,
           "minimum": 256,
           "maximum": 8192,
-          "description": "Maximum tokens for Ask mode"
-        },
-        "ollamaCopilot.editMode.model": {
-          "type": "string",
-          "default": "",
-          "description": "Model to use for Edit mode"
-        },
-        "ollamaCopilot.editMode.temperature": {
-          "type": "number",
-          "default": 0.3,
-          "minimum": 0,
-          "maximum": 1,
-          "description": "Temperature for Edit mode (lower for focused edits)"
-        },
-        "ollamaCopilot.editMode.maxTokens": {
-          "type": "number",
-          "default": 4096,
-          "minimum": 256,
-          "maximum": 8192,
-          "description": "Maximum tokens for Edit mode"
+          "description": "Maximum tokens for Chat mode"
         },
         "ollamaCopilot.planMode.model": {
           "type": "string",
@@ -363,44 +344,7 @@
           "maximum": 32768,
           "description": "Maximum tokens for Agent mode"
         },
-        "ollamaCopilot.exploreMode.model": {
-          "type": "string",
-          "default": "",
-          "description": "Model to use for Explore mode (read-only codebase exploration)"
-        },
-        "ollamaCopilot.exploreMode.temperature": {
-          "type": "number",
-          "default": 0.5,
-          "minimum": 0,
-          "maximum": 1,
-          "description": "Temperature for Explore mode"
-        },
-        "ollamaCopilot.exploreMode.maxTokens": {
-          "type": "number",
-          "default": 4096,
-          "minimum": 512,
-          "maximum": 32768,
-          "description": "Maximum tokens for Explore mode"
-        },
-        "ollamaCopilot.reviewMode.model": {
-          "type": "string",
-          "default": "",
-          "description": "Model to use for Security Review mode"
-        },
-        "ollamaCopilot.reviewMode.temperature": {
-          "type": "number",
-          "default": 0.3,
-          "minimum": 0,
-          "maximum": 1,
-          "description": "Temperature for Security Review mode"
-        },
-        "ollamaCopilot.reviewMode.maxTokens": {
-          "type": "number",
-          "default": 4096,
-          "minimum": 512,
-          "maximum": 32768,
-          "description": "Maximum tokens for Security Review mode"
-        },
+
         "ollamaCopilot.agent.maxIterations": {
           "type": "number",
           "default": 25,
@@ -426,6 +370,12 @@
           "type": "boolean",
           "default": true,
           "description": "Enable chain-of-thought reasoning (think=true) for models that support it. Shows collapsible 'Thought' blocks in agent mode."
+        },
+        "ollamaCopilot.agent.continuationStrategy": {
+          "type": "string",
+          "enum": ["full", "standard", "minimal"],
+          "default": "full",
+          "markdownDescription": "Controls how the agent continues between iterations.\n- **full**: Session memory injection with rich context (best quality, higher token usage)\n- **standard**: Tool results only, simpler continuation (balanced)\n- **minimal**: Single-pass with auto-diagnostics retry (fastest, least context)"
         },
         "ollamaCopilot.agent.sensitiveFilePatterns": {
           "type": "object",

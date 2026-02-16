@@ -215,6 +215,7 @@ suite('toolRegistry', () => {
       assert.ok(toolNames.includes('get_call_hierarchy'));
       assert.ok(toolNames.includes('find_implementations'));
       assert.ok(toolNames.includes('get_type_hierarchy'));
+      assert.ok(toolNames.includes('run_subagent'));
     });
 
     test('returns error for unknown tool', async () => {
@@ -222,6 +223,65 @@ suite('toolRegistry', () => {
       
       assert.ok(result.error);
       assert.ok(result.error.includes('Unknown tool'));
+    });
+  });
+
+  suite('run_subagent tool', () => {
+    test('returns error message when runSubagent callback is not set', async () => {
+      const result = await toolRegistry.execute('run_subagent', {
+        task: 'Find all TODO comments',
+        mode: 'explore'
+      }, context);
+
+      assert.ok(!result.error, 'Should not throw an error');
+      assert.ok(result.output?.includes('not available'), 'Should indicate sub-agent is not available');
+    });
+
+    test('calls runSubagent callback and returns result', async () => {
+      const subagentContext: ToolContext = {
+        ...context,
+        runSubagent: async (task: string, mode: 'explore' | 'review') => {
+          return `Found 3 TODOs in ${mode} mode: ${task}`;
+        }
+      };
+
+      const result = await toolRegistry.execute('run_subagent', {
+        task: 'Find all TODO comments',
+        mode: 'explore'
+      }, subagentContext);
+
+      assert.ok(!result.error, `Unexpected error: ${result.error}`);
+      assert.ok(result.output?.includes('Found 3 TODOs'));
+      assert.ok(result.output?.includes('explore mode'));
+    });
+
+    test('defaults to explore mode when mode not specified', async () => {
+      let capturedMode = '';
+      const subagentContext: ToolContext = {
+        ...context,
+        runSubagent: async (task: string, mode: 'explore' | 'review') => {
+          capturedMode = mode;
+          return 'done';
+        }
+      };
+
+      await toolRegistry.execute('run_subagent', {
+        task: 'Investigate something'
+      }, subagentContext);
+
+      assert.strictEqual(capturedMode, 'explore');
+    });
+
+    test('returns error message when task is missing', async () => {
+      const subagentContext: ToolContext = {
+        ...context,
+        runSubagent: async () => 'done'
+      };
+
+      const result = await toolRegistry.execute('run_subagent', {}, subagentContext);
+
+      assert.ok(!result.error, 'Should not throw');
+      assert.ok(result.output?.includes('required'), 'Should indicate task is required');
     });
   });
 });

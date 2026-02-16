@@ -112,11 +112,11 @@ describe('ChatInput', () => {
     expect(chip.classes()).toContain('disabled');
   });
 
-  test('implicit file chip is NOT disabled in ask mode', () => {
+  test('implicit file chip is NOT disabled in chat mode', () => {
     const wrapper = mount(ChatInput, {
       props: {
         ...baseProps,
-        currentMode: 'ask',
+        currentMode: 'chat',
         implicitFile: { fileName: 'app.ts', filePath: '/src/app.ts', languageId: 'typescript' }
       },
       attachTo: document.body
@@ -232,7 +232,7 @@ describe('ChatInput', () => {
     expect(agentWrapper.find('.tools-btn').exists()).toBe(true);
 
     const askWrapper = mount(ChatInput, {
-      props: { ...baseProps, currentMode: 'ask' },
+      props: { ...baseProps, currentMode: 'chat' },
       attachTo: document.body
     });
     expect(askWrapper.find('.tools-btn').exists()).toBe(false);
@@ -312,15 +312,15 @@ describe('ChatInput', () => {
     expect(addContextFromFile).toHaveBeenCalled();
   });
 
-  // --- New modes: explore, plan, review ---
+  // --- New modes: plan, chat ---
 
-  test('renders mode picker with "Explore" when currentMode=explore', () => {
+  test('renders mode picker with "Chat" when currentMode=chat', () => {
     const wrapper = mount(ChatInput, {
-      props: { ...baseProps, currentMode: 'explore' },
+      props: { ...baseProps, currentMode: 'chat' },
       attachTo: document.body
     });
     const pills = wrapper.findAll('.pill-label');
-    expect(pills[0].text()).toBe('Explore');
+    expect(pills[0].text()).toBe('Chat');
   });
 
   test('renders mode picker with "Plan" when currentMode=plan', () => {
@@ -332,17 +332,8 @@ describe('ChatInput', () => {
     expect(pills[0].text()).toBe('Plan');
   });
 
-  test('renders mode picker with "Review" when currentMode=review', () => {
-    const wrapper = mount(ChatInput, {
-      props: { ...baseProps, currentMode: 'review' },
-      attachTo: document.body
-    });
-    const pills = wrapper.findAll('.pill-label');
-    expect(pills[0].text()).toBe('Review');
-  });
-
-  test('tools button is hidden in explore, plan, and review modes', () => {
-    const modes = ['explore', 'plan', 'review'] as const;
+  test('tools button is hidden in plan and chat modes', () => {
+    const modes = ['plan', 'chat'] as const;
     for (const mode of modes) {
       const wrapper = mount(ChatInput, {
         props: { ...baseProps, currentMode: mode },

@@ -111,15 +111,8 @@
         </select>
       </div>
       <div class="settings-item">
-        <label class="settings-label">Ask Model</label>
-        <select v-model="settings.askModel" @change="autoSave">
-          <option v-if="modelOptions.length === 0" value="" disabled>No enabled models</option>
-          <option v-for="m in modelOptions" :key="m" :value="m">{{ m }}</option>
-        </select>
-      </div>
-      <div class="settings-item">
-        <label class="settings-label">Edit Model</label>
-        <select v-model="settings.editModel" @change="autoSave">
+        <label class="settings-label">Chat Model</label>
+        <select v-model="settings.chatModel" @change="autoSave">
           <option v-if="modelOptions.length === 0" value="" disabled>No enabled models</option>
           <option v-for="m in modelOptions" :key="m" :value="m">{{ m }}</option>
         </select>

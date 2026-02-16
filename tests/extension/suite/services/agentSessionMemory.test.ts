@@ -232,4 +232,75 @@ suite('AgentSessionMemory', () => {
     assert.strictEqual(summary.errorsEncountered.length, 0);
     assert.strictEqual(summary.keyFindings.length, 0);
   });
+
+  // ── getCompactSummary ───────────────────────────────────────────
+
+  test('getCompactSummary returns empty string with no data', () => {
+    assert.strictEqual(memory.getCompactSummary(), '');
+  });
+
+  test('getCompactSummary includes file counts', () => {
+    memory.addIterationSummary(makeSummary({
+      iteration: 1,
+      filesRead: ['a.ts', 'b.ts'],
+      filesWritten: ['c.ts']
+    }));
+    const summary = memory.getCompactSummary();
+    assert.ok(summary.includes('2 files read'), 'Should show read count');
+    assert.ok(summary.includes('1 files written'), 'Should show write count');
+  });
+
+  test('getCompactSummary includes error count', () => {
+    memory.addIterationSummary(makeSummary({
+      iteration: 1,
+      errorsEncountered: ['error1', 'error2']
+    }));
+    const summary = memory.getCompactSummary();
+    assert.ok(summary.includes('2 errors encountered'), 'Should show error count');
+  });
+
+  test('getCompactSummary includes preference count', () => {
+    memory.addUserPreference('pref1');
+    memory.addUserPreference('pref2');
+    memory.addIterationSummary(makeSummary({ iteration: 1, filesRead: ['a.ts'] }));
+    const summary = memory.getCompactSummary();
+    assert.ok(summary.includes('2 prefs noted'), 'Should show pref count');
+  });
+
+  // ── toJSON / fromJSON serialization ─────────────────────────────
+
+  test('toJSON/fromJSON round-trip preserves entries', () => {
+    memory.set('key1', 'value1');
+    memory.set('key2', 'value2');
+    const json = memory.toJSON();
+
+    const restored = AgentSessionMemory.fromJSON(json, createStubOutputChannel());
+    assert.strictEqual(restored.get('key1'), 'value1');
+    assert.strictEqual(restored.get('key2'), 'value2');
+  });
+
+  test('toJSON/fromJSON round-trip preserves iteration history', () => {
+    memory.addIterationSummary(makeSummary({ iteration: 1, filesRead: ['a.ts'] }));
+    memory.addIterationSummary(makeSummary({ iteration: 2, filesWritten: ['b.ts'] }));
+    const json = memory.toJSON();
+
+    const restored = AgentSessionMemory.fromJSON(json, createStubOutputChannel());
+    assert.strictEqual(restored.iterationCount, 2);
+  });
+
+  test('toJSON/fromJSON round-trip preserves user preferences', () => {
+    memory.addUserPreference('Use tabs');
+    memory.set('x', 'y'); // trigger non-empty
+    const json = memory.toJSON();
+
+    const restored = AgentSessionMemory.fromJSON(json, createStubOutputChannel());
+    const reminder = restored.toSystemReminder();
+    assert.ok(reminder.includes('Use tabs'), 'Restored memory should have preference');
+  });
+
+  test('fromJSON returns empty memory on invalid JSON', () => {
+    const restored = AgentSessionMemory.fromJSON('not valid json', createStubOutputChannel());
+    assert.strictEqual(restored.iterationCount, 0);
+    assert.strictEqual(restored.getCompactSummary(), '');
+  });
 });

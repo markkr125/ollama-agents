@@ -14,15 +14,10 @@ export function getConfig(): ExtensionConfig {
       temperature: config.get('completionMode.temperature', 0.1),
       maxTokens: config.get('completionMode.maxTokens', 500)
     },
-    askMode: {
-      model: config.get('askMode.model', ''),
-      temperature: config.get('askMode.temperature', 0.7),
-      maxTokens: config.get('askMode.maxTokens', 2048)
-    },
-    editMode: {
-      model: config.get('editMode.model', ''),
-      temperature: config.get('editMode.temperature', 0.3),
-      maxTokens: config.get('editMode.maxTokens', 4096)
+    chatMode: {
+      model: config.get('chatMode.model', ''),
+      temperature: config.get('chatMode.temperature', 0.7),
+      maxTokens: config.get('chatMode.maxTokens', 2048)
     },
     planMode: {
       model: config.get('planMode.model', ''),
@@ -34,16 +29,7 @@ export function getConfig(): ExtensionConfig {
       temperature: config.get('agentMode.temperature', 0.4),
       maxTokens: config.get('agentMode.maxTokens', 8192)
     },
-    exploreMode: {
-      model: config.get('exploreMode.model', ''),
-      temperature: config.get('exploreMode.temperature', 0.5),
-      maxTokens: config.get('exploreMode.maxTokens', 4096)
-    },
-    reviewMode: {
-      model: config.get('reviewMode.model', ''),
-      temperature: config.get('reviewMode.temperature', 0.3),
-      maxTokens: config.get('reviewMode.maxTokens', 4096)
-    },
+
     agent: {
       maxIterations: config.get('agent.maxIterations', 25),
       toolTimeout: config.get('agent.toolTimeout', 30000),
@@ -52,7 +38,8 @@ export function getConfig(): ExtensionConfig {
         'agent.sensitiveFilePatterns',
         DEFAULT_SENSITIVE_FILE_PATTERNS
       ),
-      enableThinking: config.get('agent.enableThinking', true)
+      enableThinking: config.get('agent.enableThinking', true),
+      continuationStrategy: config.get('agent.continuationStrategy', 'full') as 'full' | 'standard' | 'minimal'
     }
   };
 }
@@ -62,16 +49,13 @@ export async function updateConfig(section: string, value: any): Promise<void> {
   await config.update(section, value, vscode.ConfigurationTarget.Global);
 }
 
-export function getModeConfig(mode: 'completion' | 'ask' | 'edit' | 'plan' | 'agent' | 'explore' | 'review'): ModeConfig {
+export function getModeConfig(mode: 'completion' | 'chat' | 'plan' | 'agent'): ModeConfig {
   const config = getConfig();
   const modeMap = {
     completion: config.completionMode,
-    ask: config.askMode,
-    edit: config.editMode,
+    chat: config.chatMode,
     plan: config.planMode,
-    agent: config.agentMode,
-    explore: config.exploreMode,
-    review: config.reviewMode
+    agent: config.agentMode
   };
   return modeMap[mode];
 }

@@ -248,4 +248,52 @@ suite('AgentPromptBuilder', () => {
       assert.strictEqual(defs.length, 13, `Expected 13 review tools, got ${defs.length}`);
     });
   });
+
+  // ── Enhanced prompt sections ──────────────────────────────────────
+
+  suite('enhanced prompt sections', () => {
+    test('tone section includes anti-sycophancy rules', () => {
+      const prompt = builder.buildNativeToolPrompt(singleRoot, singleRoot[0]);
+      assert.ok(prompt.includes('sycophantic'), 'Should mention sycophantic behavior');
+      assert.ok(prompt.includes('professional and objective'), 'Should mention professional objectivity');
+    });
+
+    test('doingTasks section includes diagnostics guidance', () => {
+      const prompt = builder.buildNativeToolPrompt(singleRoot, singleRoot[0]);
+      assert.ok(prompt.includes('get_diagnostics'), 'Should mention get_diagnostics');
+      assert.ok(prompt.includes('Complete one logical step'), 'Should mention completing steps');
+    });
+
+    test('toolUsagePolicy section includes subagent delegation', () => {
+      const prompt = builder.buildNativeToolPrompt(singleRoot, singleRoot[0]);
+      assert.ok(prompt.includes('run_subagent'), 'Should mention run_subagent');
+      assert.ok(prompt.includes('diagnostics are automatically checked'), 'Should mention auto-diagnostics after writes');
+    });
+
+    test('executingWithCare includes investigation before fixing', () => {
+      const prompt = builder.buildNativeToolPrompt(singleRoot, singleRoot[0]);
+      assert.ok(prompt.includes('investigate the cause'), 'Should mention investigating errors');
+      assert.ok(prompt.includes('verify the package name'), 'Should mention package verification');
+    });
+
+    test('completionSignal includes verification instructions', () => {
+      const prompt = builder.buildNativeToolPrompt(singleRoot, singleRoot[0]);
+      assert.ok(prompt.includes('verify your work'), 'Should mention verifying work');
+      assert.ok(prompt.includes('compiles/lints cleanly'), 'Should mention clean compilation');
+    });
+
+    test('plan prompt includes quality rules', () => {
+      const prompt = builder.buildPlanPrompt(singleRoot, singleRoot[0], true);
+      assert.ok(prompt.includes('PLAN QUALITY RULES'), 'Should have plan quality section');
+      assert.ok(prompt.includes('Estimated complexity'), 'Should mention complexity estimation');
+    });
+
+    test('security review prompt includes expanded confidence scale', () => {
+      const prompt = builder.buildSecurityReviewPrompt(singleRoot, singleRoot[0], true);
+      assert.ok(prompt.includes('Confidence 10:'), 'Should have confidence 10 definition');
+      assert.ok(prompt.includes('Confidence 9:'), 'Should have confidence 9 definition');
+      assert.ok(prompt.includes('Confidence 8:'), 'Should have confidence 8 definition');
+      assert.ok(prompt.includes('Low Confidence'), 'Should mention low confidence appendix');
+    });
+  });
 });

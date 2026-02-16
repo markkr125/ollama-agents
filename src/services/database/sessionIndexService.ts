@@ -159,6 +159,9 @@ export class SessionIndexService {
     await this.ensureColumn('file_snapshots', 'additions', 'INTEGER DEFAULT NULL');
     await this.ensureColumn('file_snapshots', 'deletions', 'INTEGER DEFAULT NULL');
 
+    // Session memory persistence (serialized JSON of structured agent notes)
+    await this.ensureColumn('sessions', 'session_memory', 'TEXT DEFAULT NULL');
+
     // Create repositories now that DB is ready
     const getDb = () => this.getDb();
     this._sessions = new SessionRepository(getDb);
@@ -253,6 +256,16 @@ export class SessionIndexService {
   async resetGeneratingSessions(status: ChatSessionStatus = 'idle'): Promise<void> {
     this.ensureReady();
     return this._sessions.resetGeneratingSessions(status);
+  }
+
+  async saveSessionMemory(sessionId: string, memoryJson: string): Promise<void> {
+    this.ensureReady();
+    return this._sessions.saveSessionMemory(sessionId, memoryJson);
+  }
+
+  async loadSessionMemory(sessionId: string): Promise<string | null> {
+    this.ensureReady();
+    return this._sessions.loadSessionMemory(sessionId);
   }
 
   async findIdleEmptySession(): Promise<string | null> {

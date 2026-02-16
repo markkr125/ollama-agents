@@ -57,6 +57,31 @@ src/services/agent/
 - `parseToolCalls()` — native vs XML extraction dispatch
 - `logIterationResponse()` — debug output channel logging
 - Pass-through delegates to `checkpointManager` and `approvalManager`
+- `buildContinuationMessage()` — strategy-aware continuation text (see Continuation Strategy below)
+- Post-task verification gate — diagnostics check on modified files before accepting `[TASK_COMPLETE]`
+- Output truncation handling — detects `StreamResult.truncated` and sends "continue where you left off" message
+- Session memory DB persistence — saves `sessionMemory.toJSON()` via `databaseService.saveSessionMemory()` after loop
+
+#### Continuation Strategy
+
+The executor builds rich continuation messages via `buildContinuationMessage()` when the LLM needs to keep iterating. The level of detail is controlled by the `ollamaCopilot.agent.continuationStrategy` setting (`ContinuationStrategy` type: `'full' | 'standard' | 'minimal'`):
+
+| Strategy | Content |
+|----------|---------|")
+| `full` (default) | Iteration budget remaining, files modified so far, session memory compact summary, tool results context |
+| `standard` | Iteration budget remaining, brief context |
+| `minimal` | Bare "Continue with the task" |
+
+The method is called at two sites: (1) when the LLM returns text with no tool calls, and (2) as the standard continuation after a tool batch completes.
+
+#### Post-Task Verification Gate
+
+When the LLM emits `[TASK_COMPLETE]`, the executor does NOT immediately accept it. Instead:
+1. Collects all files modified during the session from `agentSession.filesChanged`
+2. Calls `getErrorDiagnostics()` + `formatDiagnostics()` (from `diagnosticWaiter.ts`) on each file
+3. If errors are found, sends a continuation message with the diagnostics and re-enters the loop
+4. Uses `agentSession._verificationDone` guard to prevent infinite verification loops (only runs once)
+5. If no errors, accepts the completion normally
 
 ### `AgentExploreExecutor` — Read-Only Modes
 
@@ -82,10 +107,15 @@ interface StreamResult {
   firstChunkReceived: boolean; // Whether any text was sent to UI
   lastThinkingTimestamp: number; // Timestamp (ms) of last thinking token
   thinkingCollapsed: boolean;    // Whether collapseThinking was already sent
+  truncated: boolean;            // Whether output was truncated (done_reason === 'length')
 }
 ```
 
-Handles: thinking token accumulation, native tool_call accumulation, text content accumulation with 32ms throttled UI emission, first-chunk gate (≥8 word chars), `[TASK_COMPLETE]` partial-prefix stripping, partial tool call detection (XML fallback freezing).
+Handles: thinking token accumulation, native tool_call accumulation, text content accumulation with 32ms throttled UI emission, first-chunk gate (≥8 word chars), `[TASK_COMPLETE]` partial-prefix stripping, partial tool call detection (XML fallback freezing), output truncation detection.
+
+#### Output Truncation Detection
+
+Ollama returns `done_reason: 'length'` in the final chunk when the model's output was truncated due to context window limits. The stream processor detects this and sets `truncated: true` in the `StreamResult`. The executor then sends a continuation message ("Your last response was truncated. Continue exactly where you left off.") so the model can finish its thought.
 
 #### Early Thinking Collapse on Native Tool Calls
 
@@ -112,7 +142,22 @@ interface ToolBatchResult {
 }
 ```
 
-Handles: per-tool "running"→"success"/"error" UI events, `persistUiEvent` for each action, inline diff stats computation (`+N -N` badges), incremental `filesChanged` emission, tool result persistence to DB, skipped-action detection.
+Handles: per-tool "running"→"success"/"error" UI events, `persistUiEvent` for each action, inline diff stats computation (`+N -N` badges), incremental `filesChanged` emission, tool result persistence to DB, skipped-action detection, auto-diagnostics injection after file writes.
+
+#### Auto-Diagnostics After File Writes
+
+After every successful `write_file` tool execution, the tool runner automatically:
+1. Calls `waitForDiagnostics(fileUri, 3000)` — event-driven wait for the language server to process the file (uses `onDidChangeDiagnostics`, falls back to timeout)
+2. Calls `getErrorDiagnostics()` to filter to Error-severity only
+3. If errors found, calls `formatDiagnostics()` for human-readable output and appends as `\n\n[Auto-diagnostics]\n...` to the tool result
+4. The LLM sees the diagnostics inline with the write result and can fix issues immediately
+
+The diagnostic utilities live in `src/utils/diagnosticWaiter.ts`:
+| Function | Purpose |
+|----------|---------|")
+| `waitForDiagnostics(uri, timeoutMs)` | Subscribes to `onDidChangeDiagnostics`, resolves when target URI appears or timeout |
+| `formatDiagnostics(diagnostics, maxItems)` | Formats with human-readable severity (Error/Warning/Info/Hint), sorted by severity |
+| `getErrorDiagnostics(diagnostics)` | Filters to `DiagnosticSeverity.Error` only |
 
 #### Chunked `read_file` Interception
 
@@ -144,6 +189,51 @@ Called once after the while-loop exits. Handles:
 - `finalMessage` emission to webview
 - `filesChanged` final emission with checkpoint
 - Has its own `persistUiEvent` (does not share the executor's instance)
+
+### `AgentSessionMemory` — Structured Notes Across Iterations
+
+Maintains categorized notes (files read, files written, errors, user preferences, custom entries) that persist across agent loop iterations and are injected into the system prompt.
+
+**Key methods:**
+| Method | Purpose |
+|--------|---------|")
+| `addEntry(category, content)` | Add a note under a category |
+| `getCompactSummary()` | One-line summary: "2 files read, 1 files written, 3 errors encountered" |
+| `toSystemPromptBlock()` | Render notes as `<session_memory>` XML block for system prompt |
+| `toJSON()` | Serialize to JSON for DB persistence |
+| `static fromJSON(json, outputChannel)` | Restore from persisted JSON (gracefully handles invalid input) |
+
+**DB persistence:** The `sessions` table has a `session_memory TEXT` column (added via `ensureColumn` migration). After the agent loop completes, the executor saves memory via `databaseService.saveSessionMemory(sessionId, memory.toJSON())`. On session restore, memory is loaded via `databaseService.loadSessionMemory(sessionId)` and restored with `AgentSessionMemory.fromJSON()`.
+
+### `AgentContextCompactor` — Conversation Summarization
+
+Triggered when conversation tokens exceed ~70% of the model's context window. Summarizes earlier messages while preserving the system prompt and last 6 messages. The summary prompt requests structured analysis in 7 sections:
+
+1. **CURRENT STATE** — what the task is and where we are
+2. **WORK COMPLETED** — what has been done so far
+3. **FILES INVOLVED** — which files were read/modified
+4. **APPROACHES THAT FAILED** — what was tried and didn't work (prevents loops)
+5. **PROMISES MADE** — commitments to revisit or follow up
+6. **REMAINING WORK** — what still needs to be done
+7. **KEY CONTEXT** — important technical details
+
+The summary is wrapped in `<analysis>` XML tags to encourage structured output.
+
+### `AgentPromptBuilder` — System Prompt Assembly
+
+Builds the system prompt from modular sections. Key behavioral sections (enhanced with anti-sycophancy and professional objectivity rules):
+
+| Section | Key Rules |
+|---------|-----------|")
+| `toneAndStyle()` | Professional objectivity, no apologizing for tool failures, explicit uncertainty handling |
+| `doingTasks()` | Use `get_diagnostics` to verify after writes, fix errors immediately, complete one logical step end-to-end |
+| `toolUsagePolicy()` | Delegate complex investigation to `run_subagent`, diagnostics are auto-checked after writes, try alternative approaches on failure |
+| `executingWithCare()` | Investigate cause before fixing, verify package names exist before installing |
+| `completionSignal()` | Verify work compiles/lints cleanly before `[TASK_COMPLETE]`, include brief summary |
+
+Mode-specific prompts:
+- **Plan mode** — includes PLAN QUALITY RULES section (estimated complexity, concrete plans, risk callouts)
+- **Security review** — expanded confidence scale (10/9/8 definitions, Low Confidence appendix)
 
 ### Shared Types Location
 
@@ -291,7 +381,8 @@ src/agent/tools/
 ├── findSymbol.ts         # find_symbol tool (LSP)
 ├── getHoverInfo.ts       # get_hover_info tool (LSP)
 ├── getCallHierarchy.ts   # get_call_hierarchy tool (LSP)
-└── getTypeHierarchy.ts   # get_type_hierarchy tool (LSP)
+├── getTypeHierarchy.ts   # get_type_hierarchy tool (LSP)
+└── runSubagent.ts        # run_subagent tool (sub-agent launcher)
 ```
 
 ### Shared Types (`src/types/agent.ts`)
@@ -327,6 +418,11 @@ All core agent types are centralised in `src/types/agent.ts`:
 | `get_hover_info` | `vscode.executeHoverProvider` | Type signatures, JSDoc/docstrings, and parameter info for any symbol. |
 | `get_call_hierarchy` | `vscode.prepareCallHierarchy` + `provideIncomingCalls`/`provideOutgoingCalls` | Call chain tracing — incoming (who calls this?) and/or outgoing (what does this call?). |
 | `get_type_hierarchy` | `vscode.prepareTypeHierarchy` + `provideSupertypes`/`provideSubtypes` | Inheritance chain — supertypes and subtypes of a class/interface. |
+
+*Sub-agent tool:*
+| Tool | Mechanism | Description |
+|------|-----------|-------------|
+| `run_subagent` | `context.runSubagent()` callback → `AgentExploreExecutor.executeSubagent()` | Launch an independent read-only sub-agent for complex investigation tasks. Accepts `task` (string) and optional `mode` (`'explore'` or `'review'`). Returns the sub-agent's summary text. |
 
 **Tool Call Format (in LLM responses):**
 ```xml

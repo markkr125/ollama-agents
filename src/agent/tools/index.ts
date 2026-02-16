@@ -18,6 +18,7 @@ import { getHoverInfoTool } from './getHoverInfo';
 import { getTypeHierarchyTool } from './getTypeHierarchy';
 import { listFilesTool } from './listFiles';
 import { readFileTool } from './readFile';
+import { runSubagentTool } from './runSubagent';
 import { runTerminalCommandTool } from './runTerminalCommand';
 import { searchWorkspaceTool } from './searchWorkspace';
 import { writeFileTool } from './writeFile';
@@ -38,6 +39,7 @@ export const builtInTools: Tool[] = [
   getHoverInfoTool,
   getCallHierarchyTool,
   getTypeHierarchyTool,
+  runSubagentTool,
 ];
 
 export {
@@ -52,6 +54,7 @@ export {
     getTypeHierarchyTool,
     listFilesTool,
     readFileTool,
+    runSubagentTool,
     runTerminalCommandTool,
     searchWorkspaceTool,
     writeFileTool

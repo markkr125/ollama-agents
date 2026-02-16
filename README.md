@@ -6,8 +6,10 @@ AI-powered code completion and chat assistance using local [Ollama](https://olla
 
 - **Inline Code Completions** — real-time ghost-text suggestions as you type, powered by FIM-capable models
 - **Chat Sidebar** — Copilot-style sidebar chat with persistent sessions, search, and markdown rendering
-- **Agent Mode** — autonomous coding agent that reads/writes files, runs terminal commands, and iterates until the task is done
-- **Edit Mode** — describe edits in natural language, get code changes applied to your selection
+- **Agent Mode** — autonomous coding agent that reads/writes files, runs terminal commands, spawns sub-agents, and iterates until the task is done
+- **Plan Mode** — read-only planning with "Start Implementation" handoff to Agent mode
+- **Chat Mode** — general Q&A about code (replaces former Ask and Edit modes)
+- **Slash Commands** — `/review` and `/security-review` for on-demand code review
 - **Command Approval** — terminal commands and sensitive file edits require explicit approval with editable commands and side-by-side diffs
 - **Files Changed Widget** — review all agent-modified files with per-file diff stats, Keep/Undo actions, and cross-file hunk navigation
 - **Inline Change Review** — green/red line decorations with CodeLens Keep/Undo/Navigate actions directly in the editor
@@ -48,7 +50,7 @@ See [docs/getting-started.md](docs/getting-started.md) for the full setup guide.
 | [Getting Started](docs/getting-started.md) | Install Ollama, install the extension, first-run setup |
 | [Configuration](docs/configuration.md) | All settings, per-mode config, model recommendations |
 | [Authentication](docs/authentication.md) | Bearer tokens for OpenWebUI |
-| [Chat & Modes](docs/chat-and-modes.md) | Agent mode, chat mode, edit mode — how each works |
+| [Chat & Modes](docs/chat-and-modes.md) | Agent, Plan, and Chat modes, slash commands, sub-agents |
 | [Testing](docs/testing.md) | Dual-harness architecture, running tests, adding tests |
 | [Troubleshooting](docs/troubleshooting.md) | Common errors and how to fix them |
 

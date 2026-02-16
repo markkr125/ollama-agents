@@ -33,6 +33,7 @@ import {
   isSearching,
   modelInfo,
   modelOptions,
+  pendingPlanContent,
   recreateMessagesStatus,
   scrollTargetMessageId,
   selectedSessionIds,
@@ -64,6 +65,7 @@ export const handleInit = (msg: InitMessage) => {
   }
   syncModelSelection();
   hasToken.value = !!msg.hasToken;
+  pendingPlanContent.value = null;
 };
 
 export const handleLoadSessions = (msg: any) => {
@@ -251,6 +253,7 @@ export const handleClearMessages = (msg: any) => {
   currentStreamIndex.value = null;
   currentProgressIndex.value = null;
   currentAssistantThreadId.value = null;
+  pendingPlanContent.value = null;
   closeActiveThinkingGroup();
   resetActiveStreamBlock();
   if (msg.sessionId) {

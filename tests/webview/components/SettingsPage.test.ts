@@ -23,8 +23,7 @@ function makeProps(overrides: Record<string, any> = {}) {
       baseUrl: 'http://localhost:11434',
       enableAutoComplete: true,
       agentModel: '',
-      askModel: '',
-      editModel: '',
+      chatModel: '',
       completionModel: '',
       maxIterations: 25,
       toolTimeout: 30000,
@@ -290,8 +289,8 @@ describe('SettingsPage component', () => {
 
     const options = wrapper.findAll('option');
     const optionValues = options.map(o => o.text());
-    // 4 selects × 2 options = 8
-    expect(optionValues.filter(v => v === 'llama3').length).toBe(4);
-    expect(optionValues.filter(v => v === 'codellama').length).toBe(4);
+    // 3 selects (Agent, Chat, Completion) × 2 options = 6
+    expect(optionValues.filter(v => v === 'llama3').length).toBe(3);
+    expect(optionValues.filter(v => v === 'codellama').length).toBe(3);
   });
 });

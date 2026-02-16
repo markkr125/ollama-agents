@@ -31,8 +31,7 @@ export const applySettings = (msg: any) => {
   settings.baseUrl = msg.settings.baseUrl || 'http://localhost:11434';
   settings.enableAutoComplete = !!msg.settings.enableAutoComplete;
   settings.agentModel = msg.settings.agentModel || '';
-  settings.askModel = msg.settings.askModel || '';
-  settings.editModel = msg.settings.editModel || '';
+  settings.chatModel = msg.settings.chatModel || '';
   settings.completionModel = msg.settings.completionModel || '';
   settings.maxIterations = msg.settings.maxIterations || settings.maxIterations;
   settings.toolTimeout = msg.settings.toolTimeout || settings.toolTimeout;

@@ -40,7 +40,7 @@ suite('SessionIndexService', () => {
     const record = {
       id: 's1',
       title: 'Title',
-      mode: 'ask',
+      mode: 'chat',
       model: 'test-model',
       status: 'idle' as const,
       auto_approve_commands: false,
@@ -75,7 +75,7 @@ suite('SessionIndexService', () => {
       await svc.createSession({
         id: `s${i}`,
         title: `T${i}`,
-        mode: 'ask',
+        mode: 'chat',
         model: 'test-model',
         status: 'completed' as const,
         auto_approve_commands: false,
@@ -139,7 +139,7 @@ suite('SessionIndexService', () => {
 
     const now = Date.now();
     await svc.createSession({
-      id: 's1', title: 'T', mode: 'ask', model: 'm',
+      id: 's1', title: 'T', mode: 'chat', model: 'm',
       status: 'idle', auto_approve_commands: false,
       created_at: now, updated_at: now
     });
@@ -185,7 +185,7 @@ suite('SessionIndexService', () => {
 
     const now = Date.now();
     await svc.createSession({
-      id: 's1', title: 'T', mode: 'ask', model: 'm',
+      id: 's1', title: 'T', mode: 'chat', model: 'm',
       status: 'idle', auto_approve_commands: false,
       created_at: now, updated_at: now
     });
@@ -235,7 +235,7 @@ suite('SessionIndexService', () => {
 
     const now = Date.now();
     await svc.createSession({
-      id: 's1', title: 'T', mode: 'ask', model: 'm',
+      id: 's1', title: 'T', mode: 'chat', model: 'm',
       status: 'idle', auto_approve_commands: false,
       created_at: now, updated_at: now
     });
@@ -264,7 +264,7 @@ suite('SessionIndexService', () => {
     const now = Date.now();
     for (let i = 0; i < 3; i++) {
       await svc.createSession({
-        id: `s${i}`, title: `T${i}`, mode: 'ask', model: 'm',
+        id: `s${i}`, title: `T${i}`, mode: 'chat', model: 'm',
         status: 'idle', auto_approve_commands: false,
         created_at: now + i, updated_at: now + i
       });

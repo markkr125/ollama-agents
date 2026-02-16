@@ -156,13 +156,11 @@ These are the mistakes most frequently made when editing this codebase. **Check 
 
 ### Key Features
 - **Inline Code Completion** - Autocomplete suggestions as you type
-- **Chat Interface** - GitHub Copilot-style sidebar chat with multiple modes
-- **Agent Mode** - Autonomous coding agent that can read/write files, search, and run commands
-- **Explore Mode** - Read-only codebase exploration using all code intelligence tools
-- **Plan Mode** - Tool-powered multi-step implementation planning with codebase navigation
-- **Review Mode** - Security and quality review using read-only tools + limited git commands
-- **Edit Mode** - Apply AI-guided edits to selected code
-- **Ask Mode** - General Q&A about code
+- **Chat Interface** - GitHub Copilot-style sidebar chat with 3 modes (Agent, Plan, Chat)
+- **Agent Mode** - Autonomous coding agent that can read/write files, search, run commands, and spawn sub-agents
+- **Plan Mode** - Tool-powered multi-step implementation planning with "Start Implementation" handoff
+- **Chat Mode** - General Q&A about code (replaces former Ask and Edit modes)
+- **Slash Commands** - `/review` and `/security-review` for on-demand code review in any mode
 
 ---
 
@@ -196,13 +194,14 @@ src/
 │       ├── getHoverInfo.ts        # get_hover_info (LSP)
 │       ├── getCallHierarchy.ts    # get_call_hierarchy (LSP)
 │       ├── findImplementations.ts # find_implementations (LSP)
-│       └── getTypeHierarchy.ts    # get_type_hierarchy (LSP)
+│       ├── getTypeHierarchy.ts    # get_type_hierarchy (LSP)
+│       └── runSubagent.ts         # run_subagent (sub-agent launcher)
 ├── config/
 │   └── settings.ts       # Configuration helpers
 ├── modes/                # Different interaction modes
 │   ├── agentMode.ts      # Autonomous agent commands
-│   ├── editMode.ts       # Code editing with AI
-│   └── planMode.ts       # Multi-step planning
+│   ├── editCommand.ts    # Edit-with-instructions VS Code command
+│   └── planMode.ts       # Multi-step planning (VS Code native chat)
 ├── providers/
 │   └── completionProvider.ts  # Inline completion provider
 ├── services/             # Core services (organized into subfolders)
@@ -220,8 +219,8 @@ src/
 │   │   ├── agentTerminalHandler.ts  # Terminal command approval + execution
 │   │   ├── agentFileEditHandler.ts  # File edit approval + execution
 │   │   ├── agentPromptBuilder.ts    # Modular system prompt assembly (native + XML + mode-specific)
-│   │   ├── agentContextCompactor.ts # Conversation summarization when approaching context limit
-│   │   ├── agentSessionMemory.ts    # Structured in-memory notes maintained across iterations
+│   │   ├── agentContextCompactor.ts # Conversation summarization — 7-section structured analysis
+│   │   ├── agentSessionMemory.ts    # Structured notes across iterations with DB persistence
 │   │   ├── projectContext.ts        # Auto-discovers project files (package.json, CLAUDE.md, etc.)
 │   │   ├── approvalManager.ts       # Shared approval state tracking
 │   │   └── checkpointManager.ts     # Checkpoint/snapshot lifecycle
@@ -318,6 +317,7 @@ src/
 └── utils/                # Utility functions
     ├── asyncMutex.ts      # Reusable promise-chain mutex
     ├── commandSafety.ts   # Terminal command safety analysis
+    ├── diagnosticWaiter.ts # Event-driven LSP diagnostic waiting + formatting
     ├── fileSensitivity.ts # File sensitivity patterns for approval
     ├── toolCallParser.ts  # XML/bracket tool call parsing
     └── ...                # debounce, diffParser, diffRenderer, gitCli, etc.
@@ -458,6 +458,7 @@ Settings are defined in `package.json` under `contributes.configuration`:
 | `ollamaCopilot.agent.maxIterations` | `25` | Max tool execution cycles |
 | `ollamaCopilot.agent.toolTimeout` | `30000` | Tool timeout in ms |
 | `ollamaCopilot.agent.maxActiveSessions` | `1` | Max concurrent active sessions |
+| `ollamaCopilot.agent.continuationStrategy` | `full` | Agent continuation detail level: `full` (iteration budget + files + memory), `standard` (budget + brief), `minimal` (bare message) |
 | `ollamaCopilot.storagePath` | `""` | Custom absolute path for database storage. Empty = stable default under `globalStorageUri`. Requires reload. |
 
 ### Model Management
@@ -476,16 +477,16 @@ The agent executor is **decomposed into focused sub-handlers** — each owning a
 
 | File | Responsibility |
 |------|----------------|
-| `agentChatExecutor.ts` | **Thin orchestrator** — wires sub-handlers, runs main `while` loop, owns `persistUiEvent`, session memory injection |
+| `agentChatExecutor.ts` | **Thin orchestrator** — wires sub-handlers, runs main `while` loop, owns `persistUiEvent`, session memory injection, continuation strategy, post-task verification gate, truncation handling |
 | `agentExploreExecutor.ts` | **Read-only executor** — explore/plan/review modes with restricted tool set (no writes, no terminal by default) |
-| `agentStreamProcessor.ts` | Owns the `for await (chunk)` streaming loop — thinking accumulation, throttled UI emission, first-chunk gate |
-| `agentToolRunner.ts` | Executes a batch of tool calls per iteration — progress groups, approvals, inline diff stats, contextual reminders |
+| `agentStreamProcessor.ts` | Owns the `for await (chunk)` streaming loop — thinking accumulation, throttled UI emission, first-chunk gate, output truncation detection (`done_reason === 'length'`) |
+| `agentToolRunner.ts` | Executes a batch of tool calls per iteration — progress groups, approvals, inline diff stats, contextual reminders, auto-diagnostics injection after file writes |
 | `agentSummaryBuilder.ts` | Post-loop finalization — summary generation (LLM or fallback), final message, `filesChanged` event, scratch cleanup |
 | `agentTerminalHandler.ts` | Terminal command approval + execution via `TerminalManager` |
 | `agentFileEditHandler.ts` | File edit approval + execution via workspace FS |
-| `agentPromptBuilder.ts` | Modular system prompt assembly — identity, workspace, tone, tasks, tools, safety, navigation. Builds mode-specific prompts (explore/plan/review) |
-| `agentContextCompactor.ts` | Conversation summarization when tokens exceed 70% of context window — preserves system + last 6 messages |
-| `agentSessionMemory.ts` | Structured in-memory notes (files explored, errors, preferences) maintained across iterations and injected into system prompt |
+| `agentPromptBuilder.ts` | Modular system prompt assembly — identity, workspace, tone, tasks, tools, safety, navigation. Anti-sycophancy rules, auto-diagnostics guidance. Builds mode-specific prompts (explore/plan/review) |
+| `agentContextCompactor.ts` | Conversation summarization when tokens exceed 70% of context window — 7-section structured analysis (including failed approaches & promises made) |
+| `agentSessionMemory.ts` | Structured in-memory notes (files explored, errors, preferences) with `toJSON()`/`fromJSON()` serialization and DB persistence via `session_memory` column |
 | `projectContext.ts` | Auto-discovers project files (package.json, CLAUDE.md, tsconfig, etc.) at session start and builds `<project_context>` block |
 | `approvalManager.ts` | Shared approval state tracking |
 | `checkpointManager.ts` | Checkpoint/snapshot lifecycle |

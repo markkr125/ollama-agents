@@ -2,6 +2,7 @@
  * Message router — maps incoming message types to handlers.
  * Do NOT add handler logic here. Create new handler files in this folder.
  */
+import { currentMode, pendingPlanContent } from '../state';
 import type {
     CollapseThinkingMessage,
     InitMessage,
@@ -190,6 +191,12 @@ export const handleMessage = (msg: any) => {
       break;
     case 'reviewChangePosition':
       handleReviewChangePosition(msg);
+      break;
+    case 'planReady':
+      pendingPlanContent.value = msg.planContent || null;
+      break;
+    case 'modeChanged':
+      currentMode.value = msg.mode;
       break;
   }
 };

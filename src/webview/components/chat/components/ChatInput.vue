@@ -168,11 +168,8 @@ function chipDisplayName(name: string): string {
 // Mode picker items
 const modeItems = computed<DropdownItem[]>(() => [
   { id: 'agent', icon: 'codicon-hubot', label: 'Agent', description: 'Autonomous coding agent' },
-  { id: 'explore', icon: 'codicon-search', label: 'Explore', description: 'Read-only codebase exploration' },
   { id: 'plan', icon: 'codicon-list-tree', label: 'Plan', description: 'Tool-powered implementation planning' },
-  { id: 'review', icon: 'codicon-shield', label: 'Review', description: 'Security & quality review' },
-  { id: 'ask', icon: 'codicon-comment-discussion', label: 'Ask', description: 'Ask questions about code' },
-  { id: 'edit', icon: 'codicon-edit', label: 'Edit', description: 'Apply edits to selected code' },
+  { id: 'chat', icon: 'codicon-comment-discussion', label: 'Chat', description: 'Chat about code' },
 ]);
 
 const currentModeIcon = computed(() => {

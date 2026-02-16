@@ -3,7 +3,7 @@ import { SessionManager } from './agent/sessionManager';
 import { TaskTracker } from './agent/taskTracker';
 import { getConfig, getModeConfig } from './config/settings';
 import { registerAgentMode } from './modes/agentMode';
-import { registerEditMode } from './modes/editMode';
+import { registerEditCommand } from './modes/editCommand';
 import { registerPlanMode } from './modes/planMode';
 import { CompletionProvider } from './providers/completionProvider';
 import { disposeDatabaseService, getDatabaseService } from './services/database/databaseService';
@@ -252,7 +252,7 @@ async function registerChatView(context: vscode.ExtensionContext, s: ServiceCont
 async function registerModes(context: vscode.ExtensionContext, s: ServiceContainer): Promise<void> {
   await registerPlanMode(context, s.client, s.taskTracker);
   registerAgentMode(context, s.client, s.sessionManager, s.outputChannel);
-  await registerEditMode(context, s.client);
+  await registerEditCommand(context, s.client);
 }
 
 function checkFirstRun(context: vscode.ExtensionContext, chatViewProvider: ChatViewProvider): void {

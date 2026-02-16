@@ -50,8 +50,7 @@ export const saveModelSettings = () => {
     type: 'saveSettings',
     settings: {
       agentModel: settings.agentModel,
-      askModel: settings.askModel,
-      editModel: settings.editModel,
+      chatModel: settings.chatModel,
       completionModel: settings.completionModel
     }
   });

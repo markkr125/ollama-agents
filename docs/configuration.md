@@ -35,8 +35,7 @@ Each mode can use a different model. If left empty, the extension uses the first
 | Setting | Default | Used By |
 |---------|---------|---------|
 | `ollamaCopilot.completionMode.model` | `""` | Inline code completions |
-| `ollamaCopilot.askMode.model` | `""` | Ask (chat) mode |
-| `ollamaCopilot.editMode.model` | `""` | Edit mode |
+| `ollamaCopilot.chatMode.model` | `""` | Chat mode |
 | `ollamaCopilot.planMode.model` | `""` | Plan mode |
 | `ollamaCopilot.agentMode.model` | `""` | Agent mode |
 
@@ -45,8 +44,7 @@ Each mode also has `temperature` and `maxTokens` settings:
 | Mode | Temperature | Max Tokens | Notes |
 |------|-------------|------------|-------|
 | Completion | 0.1 | 500 | Low temp for predictable completions |
-| Ask | 0.7 | 2048 | Higher temp for conversational responses |
-| Edit | 0.3 | 4096 | Low-medium temp for focused edits |
+| Chat | 0.7 | 2048 | Higher temp for conversational responses |
 | Plan | 0.5 | 4096 | Medium temp for planning |
 | Agent | 0.4 | 8192 | Medium-low temp, high token limit for tool use |
 
@@ -57,6 +55,7 @@ Each mode also has `temperature` and `maxTokens` settings:
 | `ollamaCopilot.agent.maxIterations` | `25` | 5–100 | Max tool execution cycles per request |
 | `ollamaCopilot.agent.toolTimeout` | `30000` | 5000–300000 | Tool timeout in milliseconds |
 | `ollamaCopilot.agent.maxActiveSessions` | `1` | 1–5 | Max concurrent generating sessions |
+| `ollamaCopilot.agent.continuationStrategy` | `full` | `full`, `standard`, `minimal` | Detail level of continuation messages between agent iterations. `full` includes iteration budget, files modified, and session memory summary. `standard` includes budget + brief context. `minimal` sends a bare continuation. |
 | `ollamaCopilot.agent.enableThinking` | `true` | — | Enable chain-of-thought reasoning (`think: true` in Ollama API) |
 | `ollamaCopilot.agent.sensitiveFilePatterns` | *(see below)* | — | Glob→boolean map for file edit approval |
 
@@ -177,7 +176,7 @@ When upgrading from a previous version, databases at the old `context.storageUri
 {
   "ollamaCopilot.baseUrl": "http://localhost:11434",
   "ollamaCopilot.completionMode.model": "codellama:7b-code",
-  "ollamaCopilot.askMode.model": "qwen2.5-coder:7b",
+  "ollamaCopilot.chatMode.model": "qwen2.5-coder:7b",
   "ollamaCopilot.agentMode.model": "qwen2.5-coder:14b",
   "ollamaCopilot.agent.maxIterations": 30
 }

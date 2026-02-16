@@ -21,6 +21,8 @@ export interface StreamResult {
   lastThinkingTimestamp: number;
   /** Whether collapseThinking was already sent from inside the stream (on tool_call detection) */
   thinkingCollapsed: boolean;
+  /** Whether the response was truncated due to context length limits */
+  truncated: boolean;
 }
 
 // ---------------------------------------------------------------------------
@@ -55,6 +57,7 @@ export class AgentStreamProcessor {
     let thinkingContent = '';
     let lastThinkingTimestamp = 0;
     let thinkingCollapsed = false;
+    let truncated = false;
     const nativeToolCalls: OllamaToolCall[] = [];
 
     // Create an AbortController so we can abort the HTTP stream immediately
@@ -80,6 +83,11 @@ export class AgentStreamProcessor {
     try {
     for await (const chunk of stream) {
       if (token.isCancellationRequested) break;
+
+      // Detect output truncation due to context/token limits
+      if (chunk.done && chunk.done_reason === 'length') {
+        truncated = true;
+      }
 
       // Accumulate thinking tokens
       if (chunk.message?.thinking) {
@@ -215,6 +223,6 @@ export class AgentStreamProcessor {
     // (It stays visible during streaming as a "still generating" indicator.)
     this.emitter.postMessage({ type: 'hideThinking', sessionId });
 
-    return { response, thinkingContent, nativeToolCalls, firstChunkReceived, lastThinkingTimestamp, thinkingCollapsed };
+    return { response, thinkingContent, nativeToolCalls, firstChunkReceived, lastThinkingTimestamp, thinkingCollapsed, truncated };
   }
 }

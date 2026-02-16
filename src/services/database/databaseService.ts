@@ -137,6 +137,14 @@ export class DatabaseService {
     return this.sessionIndex.listSessions(limit, offset);
   }
 
+  async saveSessionMemory(sessionId: string, memoryJson: string): Promise<void> {
+    return this.sessionIndex.saveSessionMemory(sessionId, memoryJson);
+  }
+
+  async loadSessionMemory(sessionId: string): Promise<string | null> {
+    return this.sessionIndex.loadSessionMemory(sessionId);
+  }
+
   async resetGeneratingSessions(status: ChatSessionStatus = 'idle'): Promise<void> {
     await this.sessionIndex.resetGeneratingSessions(status);
   }

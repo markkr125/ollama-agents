@@ -43,6 +43,8 @@ export interface StreamChunk {
   response?: string;
   message?: ChatMessage;
   done: boolean;
+  /** Reason the stream ended — 'stop' (normal), 'length' (truncated by context/token limit) */
+  done_reason?: string;
   total_duration?: number;
   load_duration?: number;
   prompt_eval_count?: number;

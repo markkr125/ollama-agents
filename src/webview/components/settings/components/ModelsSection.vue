@@ -9,14 +9,8 @@
         </select>
       </div>
       <div class="settings-item">
-        <label class="settings-label">Ask Model</label>
-        <select v-model="settings.askModel">
-          <option v-for="m in modelOptions" :key="m" :value="m">{{ m }}</option>
-        </select>
-      </div>
-      <div class="settings-item">
-        <label class="settings-label">Edit Model</label>
-        <select v-model="settings.editModel">
+        <label class="settings-label">Chat Model</label>
+        <select v-model="settings.chatModel">
           <option v-for="m in modelOptions" :key="m" :value="m">{{ m }}</option>
         </select>
       </div>

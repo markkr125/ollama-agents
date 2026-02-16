@@ -1,10 +1,13 @@
 import * as vscode from 'vscode';
 import { SessionManager } from '../../agent/sessionManager';
 import { ToolRegistry } from '../../agent/toolRegistry';
+import { resolveMultiRootPath } from '../../agent/tools/pathUtils';
 import { getConfig } from '../../config/settings';
 import { ExecutorConfig } from '../../types/agent';
+import { ContinuationStrategy } from '../../types/config';
 import { OllamaError } from '../../types/ollama';
 import { MessageRecord } from '../../types/session';
+import { formatDiagnostics, getErrorDiagnostics, waitForDiagnostics } from '../../utils/diagnosticWaiter';
 import { extractToolCalls, removeToolCalls } from '../../utils/toolCallParser';
 import { WebviewMessageEmitter } from '../../views/chatTypes';
 import { getProgressGroupTitle } from '../../views/toolUIFormatter';
@@ -15,6 +18,7 @@ import { OllamaClient } from '../model/ollamaClient';
 import { PendingEditDecorationProvider } from '../pendingEditDecorationProvider';
 import { TerminalManager } from '../terminalManager';
 import { AgentContextCompactor } from './agentContextCompactor';
+import { AgentExploreExecutor } from './agentExploreExecutor';
 import { AgentFileEditHandler } from './agentFileEditHandler';
 import { AgentPromptBuilder } from './agentPromptBuilder';
 import { AgentSessionMemory } from './agentSessionMemory';
@@ -43,6 +47,7 @@ export class AgentChatExecutor {
   readonly checkpointManager: CheckpointManager;
   private editManager: EditManager;
   private _onFileWritten?: (checkpointId: string) => void;
+  private _exploreExecutor?: AgentExploreExecutor;
 
   constructor(
     private readonly client: OllamaClient,
@@ -119,6 +124,11 @@ export class AgentChatExecutor {
   /** Register a callback invoked after each successful file write (e.g. to trigger CodeLens review). */
   set onFileWritten(cb: ((checkpointId: string) => void) | undefined) {
     this._onFileWritten = cb;
+  }
+
+  /** Set the explore executor for sub-agent tool support. */
+  set exploreExecutor(executor: AgentExploreExecutor | undefined) {
+    this._exploreExecutor = executor;
   }
 
   /** Open diff for a cached file-edit approval entry. */
@@ -220,7 +230,12 @@ export class AgentChatExecutor {
       token,
       outputChannel: this.outputChannel,
       sessionId,
-      terminalManager: this.terminalManager
+      terminalManager: this.terminalManager,
+      runSubagent: this._exploreExecutor
+        ? async (task: string, mode: 'explore' | 'review') => {
+            return this._exploreExecutor!.executeSubagent(task, token, sessionId, model, mode, capabilities);
+          }
+        : undefined
     };
 
     const useNativeTools = !!capabilities?.tools;
@@ -274,6 +289,7 @@ export class AgentChatExecutor {
 
     // Session memory — tracks discovered facts across iterations
     const sessionMemory = new AgentSessionMemory(this.outputChannel);
+    const continuationStrategy: ContinuationStrategy = getConfig().agent.continuationStrategy || 'full';
 
     while (iteration < config.maxIterations && !token.isCancellationRequested) {
       iteration++;
@@ -335,11 +351,23 @@ export class AgentChatExecutor {
         }
 
         let { response } = streamResult;
-        const { thinkingContent, nativeToolCalls } = streamResult;
+        const { thinkingContent, nativeToolCalls, truncated } = streamResult;
 
         if (token.isCancellationRequested) {
           this.sessionManager.updateSession(agentSession.id, { status: 'cancelled' });
           break;
+        }
+
+        // Handle output truncation — the model hit the context/token limit mid-response.
+        // Push a continuation message so it can resume from where it was cut off.
+        if (truncated && response) {
+          this.outputChannel.appendLine(`[Iteration ${iteration}] Output truncated by context limit — requesting continuation`);
+          messages.push({ role: 'assistant', content: response });
+          messages.push({
+            role: 'user',
+            content: 'Your response was cut off due to the output length limit. Continue EXACTLY where you left off — do not repeat what you already said. If you were in the middle of a tool call, re-emit the complete tool call.'
+          });
+          continue;
         }
 
         // --- 2. Log iteration response ---
@@ -418,6 +446,35 @@ export class AgentChatExecutor {
               continue;
             }
           }
+
+          // Post-task verification: check diagnostics on all modified files
+          if (hasWrittenFiles && !agentSession._verificationDone) {
+            agentSession._verificationDone = true;
+            try {
+              const modifiedFiles = [...new Set(agentSession.filesChanged)] as string[];
+              const allErrors: string[] = [];
+              for (const relPath of modifiedFiles) {
+                const absPath = resolveMultiRootPath(relPath, context.workspace, context.workspaceFolders);
+                const fileUri = vscode.Uri.file(absPath);
+                const diagnostics = await waitForDiagnostics(fileUri, 3000);
+                const errors = getErrorDiagnostics(diagnostics);
+                if (errors.length > 0) {
+                  allErrors.push(`${relPath}:\n${formatDiagnostics(errors)}`);
+                }
+              }
+              if (allErrors.length > 0) {
+                messages.push({ role: 'assistant', content: response });
+                messages.push({
+                  role: 'user',
+                  content: `You declared [TASK_COMPLETE] but errors remain in modified files:\n\n${allErrors.join('\n\n')}\n\nFix these errors before completing the task.`
+                });
+                continue;
+              }
+            } catch {
+              // Non-critical — allow completion if diagnostics fail
+            }
+          }
+
           const completionText = cleanedText.replace(/\[TASK_COMPLETE\]/gi, '').trim();
           accumulatedExplanation = completionText || accumulatedExplanation;
 
@@ -453,7 +510,10 @@ export class AgentChatExecutor {
           if (iteration < config.maxIterations - 1) {
             messages.push({
               role: 'user',
-              content: 'Continue with the task. Use tools or respond with [TASK_COMPLETE] if finished.'
+              content: this.buildContinuationMessage(
+                iteration, config.maxIterations, sessionMemory,
+                continuationStrategy, agentSession.filesChanged || []
+              )
             });
           }
           continue;
@@ -511,9 +571,14 @@ export class AgentChatExecutor {
         if (useNativeTools) {
           messages.push(...batchResult.nativeResults);
         } else if (batchResult.xmlResults.length > 0) {
+          const toolResultText = batchResult.xmlResults.join('\n\n');
           messages.push({
             role: 'user',
-            content: batchResult.xmlResults.join('\n\n') + '\n\nContinue with the task.'
+            content: this.buildContinuationMessage(
+              iteration, config.maxIterations, sessionMemory,
+              continuationStrategy, agentSession.filesChanged || [],
+              toolResultText
+            )
           });
         }
       } catch (error: any) {
@@ -526,6 +591,15 @@ export class AgentChatExecutor {
     // --- Post-loop: mark session complete + build summary ---
     this.sessionManager.updateSession(agentSession.id, { status: 'completed' });
 
+    // Persist session memory for future reference
+    if (sessionMemory.iterationCount > 0 && sessionId) {
+      try {
+        await this.databaseService.saveSessionMemory(sessionId, sessionMemory.toJSON());
+      } catch (err) {
+        console.warn('[AgentChatExecutor] Failed to persist session memory:', err);
+      }
+    }
+
     const { summary, assistantMessage } = await this.summaryBuilder.finalize(
       sessionId, model, agentSession,
       accumulatedExplanation, hasPersistedIterationText, currentCheckpointId
@@ -537,6 +611,53 @@ export class AgentChatExecutor {
   // -------------------------------------------------------------------------
   // Private helpers
   // -------------------------------------------------------------------------
+
+  /** Build a strategy-aware continuation message for the agent loop. */
+  private buildContinuationMessage(
+    iteration: number,
+    maxIterations: number,
+    sessionMemory: AgentSessionMemory,
+    strategy: ContinuationStrategy,
+    filesChanged: string[],
+    toolResults?: string
+  ): string {
+    const remaining = maxIterations - iteration - 1;
+
+    if (strategy === 'minimal') {
+      return toolResults
+        ? `${toolResults}\n\nContinue. Respond with [TASK_COMPLETE] when done.`
+        : 'Continue. Respond with [TASK_COMPLETE] when done.';
+    }
+
+    const parts: string[] = [];
+
+    if (toolResults) {
+      parts.push(toolResults);
+    }
+
+    if (strategy === 'full') {
+      // Iteration budget
+      parts.push(`[Iteration ${iteration + 1}/${maxIterations} — ${remaining} remaining]`);
+
+      // Files modified so far
+      if (filesChanged.length > 0) {
+        const uniqueFiles = [...new Set(filesChanged)];
+        const fileList = uniqueFiles.length <= 5
+          ? uniqueFiles.join(', ')
+          : `${uniqueFiles.slice(0, 5).join(', ')} (+${uniqueFiles.length - 5} more)`;
+        parts.push(`Files modified: ${fileList}`);
+      }
+
+      // Session memory summary
+      const memorySummary = sessionMemory.getCompactSummary();
+      if (memorySummary) {
+        parts.push(`Memory: ${memorySummary}`);
+      }
+    }
+
+    parts.push('Continue with the task. Use tools or respond with [TASK_COMPLETE] if finished.');
+    return parts.join('\n');
+  }
 
   /** Parse tool calls from either native API response or XML text. */
   private parseToolCalls(

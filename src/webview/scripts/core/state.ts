@@ -62,8 +62,7 @@ export const settings = reactive({
   baseUrl: 'http://localhost:11434',
   enableAutoComplete: true,
   agentModel: '',
-  askModel: '',
-  editModel: '',
+  chatModel: '',
   completionModel: '',
   maxIterations: 25,
   toolTimeout: 30000,
@@ -137,6 +136,9 @@ export const searchIsRevealing = ref(false);
 export const isSearching = ref(false);
 export const scrollTargetMessageId = ref<string | null>(null);
 export const autoScrollLocked = ref(false);
+
+// Plan handoff — shown after plan mode completes
+export const pendingPlanContent = ref<string | null>(null);
 
 // Session deletion state
 export const deletingSessionIds = ref(new Set<string>());

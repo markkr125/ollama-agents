@@ -608,3 +608,33 @@
     }
   }
 }
+
+/* Plan Handoff Button */
+.plan-handoff {
+  display: flex;
+  justify-content: center;
+  padding: 12px 16px;
+  margin-top: 4px;
+}
+
+.plan-handoff-btn {
+  padding: 8px 20px;
+  border-radius: 4px;
+  font-size: 13px;
+  font-weight: 500;
+  cursor: pointer;
+  border: none;
+  background: var(--btn-bg);
+  color: var(--btn-fg);
+  display: flex;
+  align-items: center;
+  gap: 6px;
+
+  &:hover {
+    filter: brightness(1.1);
+  }
+
+  &:active {
+    filter: brightness(0.95);
+  }
+}

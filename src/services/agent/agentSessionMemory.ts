@@ -77,6 +77,55 @@ export class AgentSessionMemory {
   }
 
   /**
+   * Return a one-line compact summary of the session for continuation messages.
+   * Returns empty string if nothing interesting has been recorded yet.
+   */
+  getCompactSummary(): string {
+    const parts: string[] = [];
+    const allFilesRead = new Set(this.iterationHistory.flatMap(it => it.filesRead));
+    const allFilesWritten = new Set(this.iterationHistory.flatMap(it => it.filesWritten));
+    const totalErrors = parseInt(this.get('total_errors') || '0', 10);
+
+    if (allFilesRead.size > 0) parts.push(`${allFilesRead.size} files read`);
+    if (allFilesWritten.size > 0) parts.push(`${allFilesWritten.size} files written`);
+    if (totalErrors > 0) parts.push(`${totalErrors} errors encountered`);
+    if (this.userPreferences.length > 0) parts.push(`${this.userPreferences.length} prefs noted`);
+
+    return parts.join(', ');
+  }
+
+  /** Serialize session memory to JSON for database persistence. */
+  toJSON(): string {
+    return JSON.stringify({
+      entries: Array.from(this.entries.entries()),
+      iterationHistory: this.iterationHistory,
+      userPreferences: this.userPreferences
+    });
+  }
+
+  /** Restore session memory from persisted JSON. */
+  static fromJSON(json: string, outputChannel: vscode.OutputChannel): AgentSessionMemory {
+    const memory = new AgentSessionMemory(outputChannel);
+    try {
+      const data = JSON.parse(json);
+      if (data.entries) {
+        for (const [key, entry] of data.entries) {
+          memory.entries.set(key, entry);
+        }
+      }
+      if (data.iterationHistory) {
+        memory.iterationHistory = data.iterationHistory;
+      }
+      if (data.userPreferences) {
+        memory.userPreferences = data.userPreferences;
+      }
+    } catch {
+      // If parsing fails, return empty memory
+    }
+    return memory;
+  }
+
+  /**
    * Build a compact text block suitable for injection into the system prompt
    * or as a user-role reminder message.
    */

@@ -3,7 +3,7 @@ import { getModeConfig } from '../config/settings';
 import { EditManager } from '../services/editManager';
 import { OllamaClient } from '../services/model/ollamaClient';
 
-export async function registerEditMode(
+export async function registerEditCommand(
   context: vscode.ExtensionContext,
   client: OllamaClient
 ): Promise<void> {

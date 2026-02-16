@@ -21,7 +21,7 @@ Add the setting to `package.json` under `contributes.configuration.properties`:
 
 **Naming conventions:**
 - Use dot-separated sections: `ollamaCopilot.<section>.<setting>`
-- Sections map to mode groups: `completionMode`, `askMode`, `editMode`, `planMode`, `agentMode`, `agent`
+- Sections map to mode groups: `completionMode`, `chatMode`, `planMode`, `agentMode`, `agent`
 - Top-level settings (e.g., `baseUrl`, `enableAutoComplete`) have no section
 
 ## Step 2: Add to TypeScript Config Types

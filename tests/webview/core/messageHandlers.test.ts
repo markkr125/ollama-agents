@@ -1017,3 +1017,75 @@ describe('handleAddContextItem deduplication', () => {
     expect(state.contextList.value).toHaveLength(0);
   });
 });
+
+// ─── Plan handoff & mode change ──────────────────────────────────────
+
+describe('planReady / modeChanged handlers', () => {
+  test('planReady sets pendingPlanContent', async () => {
+    const state = await import('../../../src/webview/scripts/core/state');
+    const { handleMessage } = await import('../../../src/webview/scripts/core/messageHandlers/index');
+
+    state.pendingPlanContent.value = null;
+
+    handleMessage({ type: 'planReady', planContent: 'Step 1: create files' });
+
+    expect(state.pendingPlanContent.value).toBe('Step 1: create files');
+  });
+
+  test('planReady with empty content sets null', async () => {
+    const state = await import('../../../src/webview/scripts/core/state');
+    const { handleMessage } = await import('../../../src/webview/scripts/core/messageHandlers/index');
+
+    state.pendingPlanContent.value = 'old plan';
+
+    handleMessage({ type: 'planReady', planContent: '' });
+
+    expect(state.pendingPlanContent.value).toBeNull();
+  });
+
+  test('modeChanged updates currentMode', async () => {
+    const state = await import('../../../src/webview/scripts/core/state');
+    const { handleMessage } = await import('../../../src/webview/scripts/core/messageHandlers/index');
+
+    state.currentMode.value = 'plan';
+
+    handleMessage({ type: 'modeChanged', mode: 'agent' });
+
+    expect(state.currentMode.value).toBe('agent');
+  });
+
+  test('clearMessages resets pendingPlanContent', async () => {
+    const state = await import('../../../src/webview/scripts/core/state');
+    const { handleClearMessages } = await import('../../../src/webview/scripts/core/messageHandlers/sessions');
+
+    state.pendingPlanContent.value = 'some plan';
+
+    handleClearMessages({ sessionId: 's1' });
+
+    expect(state.pendingPlanContent.value).toBeNull();
+  });
+
+  test('handleInit resets pendingPlanContent', async () => {
+    const state = await import('../../../src/webview/scripts/core/state');
+    const { handleInit } = await import('../../../src/webview/scripts/core/messageHandlers/sessions');
+
+    state.pendingPlanContent.value = 'some plan';
+
+    handleInit({
+      type: 'init',
+      models: [],
+      settings: {
+        temperature: 0.7,
+        agentModel: 'llama3',
+        chatModel: '',
+        planModel: '',
+        completionModel: '',
+        maxTokens: 2048,
+        sensitiveFilePatterns: {},
+        enabledTools: {}
+      },
+    } as any);
+
+    expect(state.pendingPlanContent.value).toBeNull();
+  });
+});

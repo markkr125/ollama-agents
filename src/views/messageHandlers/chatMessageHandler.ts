@@ -25,7 +25,7 @@ import { mergeCachedCapabilities, ModelMessageHandler } from './modelMessageHand
 export class ChatMessageHandler implements IMessageHandler {
   readonly handledTypes = [
     'ready', 'sendMessage', 'stopGeneration', 'selectModel', 'selectMode', 'newChat', 'addContext',
-    'addContextFromFile', 'addContextCurrentFile', 'addContextFromTerminal'
+    'addContextFromFile', 'addContextCurrentFile', 'addContextFromTerminal', 'implementPlan'
   ] as const;
 
   private cancellationTokenSource?: vscode.CancellationTokenSource;
@@ -93,6 +93,9 @@ export class ChatMessageHandler implements IMessageHandler {
         break;
       case 'addContextFromTerminal':
         await this.handleAddContextFromTerminal();
+        break;
+      case 'implementPlan':
+        await this.handleImplementPlan(data.planContent);
         break;
     }
   }
@@ -401,11 +404,16 @@ export class ChatMessageHandler implements IMessageHandler {
 
     let finalStatus: ChatSessionStatus = 'completed';
     try {
-      if (this.state.currentMode === 'agent') {
+      // /review slash command — works in any mode
+      if (this.isReviewCommand(text)) {
+        const reviewPrompt = this.extractReviewPrompt(text, fullPrompt);
+        await this.handleExploreMode(reviewPrompt, token, sessionIdAtStart, 'review', sessionMessagesSnapshot);
+      } else if (this.state.currentMode === 'agent') {
         await this.handleAgentMode(fullPrompt, token, sessionIdAtStart, sessionMessagesSnapshot);
-      } else if (this.state.currentMode === 'explore' || this.state.currentMode === 'review' || this.state.currentMode === 'plan') {
-        await this.handleExploreMode(fullPrompt, token, sessionIdAtStart, this.state.currentMode === 'plan' ? 'plan' : this.state.currentMode as ExploreMode, sessionMessagesSnapshot);
+      } else if (this.state.currentMode === 'plan') {
+        await this.handleExploreMode(fullPrompt, token, sessionIdAtStart, 'plan', sessionMessagesSnapshot);
       } else {
+        // 'chat' mode (also handles legacy 'ask'/'edit' values)
         await this.handleChatMode(fullPrompt, token, sessionIdAtStart, sessionMessagesSnapshot);
       }
     } catch (error: any) {
@@ -442,6 +450,9 @@ export class ChatMessageHandler implements IMessageHandler {
         capabilities = getModelCapabilities(modelRecord);
       }
     } catch { /* proceed without — executor will default to XML fallback */ }
+
+    // Wire explore executor for sub-agent tool support
+    this.agentExecutor.exploreExecutor = this.exploreExecutor;
 
     // Register per-file review callback so CodeLens appears as each file is written
     if (this.reviewService) {
@@ -495,6 +506,18 @@ export class ChatMessageHandler implements IMessageHandler {
     if (this.sessionController.getCurrentSessionId() === sessionId) {
       this.sessionController.pushMessage(result.assistantMessage);
     }
+
+    // Send plan handoff button when plan mode completes successfully
+    if (mode === 'plan' && result.summary) {
+      this.emitter.postMessage({ type: 'planReady', planContent: result.summary, sessionId });
+      // Persist so session history shows the handoff button
+      try {
+        await this.databaseService.addMessage(sessionId, 'tool', '', {
+          toolName: '__ui__',
+          toolOutput: JSON.stringify({ eventType: 'planReady', payload: { planContent: result.summary } })
+        });
+      } catch { /* non-fatal */ }
+    }
   }
 
   private async handleChatMode(
@@ -509,9 +532,7 @@ export class ChatMessageHandler implements IMessageHandler {
       .filter(m => m.role !== 'tool')
       .map(m => ({ role: m.role as 'user' | 'assistant', content: m.content }));
 
-    const systemPrompt = this.state.currentMode === 'edit'
-      ? 'You are a code editor. Provide clear, concise code modifications.'
-      : 'You are a helpful coding assistant.';
+    const systemPrompt = 'You are a helpful coding assistant. Provide clear, concise answers and code modifications when asked.';
 
     const stream = this.client.chat({
       model: this.state.currentModel,
@@ -566,10 +587,60 @@ export class ChatMessageHandler implements IMessageHandler {
     this.emitter.postMessage({ type: 'finalMessage', content: fullResponse, model: this.state.currentModel, sessionId });
   }
 
+  /**
+   * Handle plan handoff: switch to agent mode and send the plan as a prompt.
+   * Creates a new session so the implementation is tracked separately.
+   */
+  private async handleImplementPlan(planContent: string) {
+    if (!planContent) return;
+
+    // Switch to agent mode
+    this.state.currentMode = 'agent';
+    this.emitter.postMessage({ type: 'modeChanged', mode: 'agent' });
+
+    // Create a new session for implementation
+    await this.sessionController.createNewSession('agent', this.state.currentModel);
+    this.emitter.postMessage({ type: 'clearMessages', sessionId: this.sessionController.getCurrentSessionId() });
+    await this.sessionController.sendSessionsList();
+
+    // Send the plan as a prompt to the agent
+    const implementPrompt = `Implement the following plan step by step. Follow the plan exactly and create all necessary files and changes.\n\n${planContent}`;
+    await this.handleMessage(implementPrompt);
+  }
+
   private async handleModelChange(modelName: string) {
     if (!modelName) return;
     this.state.currentModel = modelName;
     await vscode.workspace.getConfiguration('ollamaCopilot')
       .update('agentMode.model', modelName, vscode.ConfigurationTarget.Global);
+  }
+
+  // -------------------------------------------------------------------------
+  // /review slash command detection
+  // -------------------------------------------------------------------------
+
+  /**
+   * Detect `/review` slash command.
+   * Matches: `/review`, `/review <instructions>`, `/security-review`.
+   */
+  private isReviewCommand(text: string): boolean {
+    const trimmed = text.trim().toLowerCase();
+    return trimmed.startsWith('/review') || trimmed.startsWith('/security-review');
+  }
+
+  /**
+   * Extract the review prompt from a slash command, preserving any context prefix.
+   */
+  private extractReviewPrompt(rawText: string, fullPrompt: string): string {
+    // Remove the slash command prefix from the raw text
+    const stripped = rawText.trim().replace(/^\/(security-)?review\s*/i, '').trim();
+    const reviewTask = stripped || 'Perform a thorough security and quality review of the codebase.';
+
+    // If fullPrompt has context prefix (from attached files), keep it
+    if (fullPrompt.length > rawText.length) {
+      const contextPrefix = fullPrompt.substring(0, fullPrompt.length - rawText.length);
+      return contextPrefix + reviewTask;
+    }
+    return reviewTask;
   }
 }

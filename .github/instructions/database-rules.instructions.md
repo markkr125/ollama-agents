@@ -11,7 +11,7 @@ This extension uses **two separate databases**:
 
 | Database | Technology | Purpose | Location |
 |----------|------------|---------|----------|
-| Sessions | SQLite (sql.js) | Session metadata (id, title, mode, model, timestamps) | `sessions.sqlite` |
+| Sessions | SQLite (sql.js) | Session metadata (id, title, mode, model, timestamps, session_memory) | `sessions.sqlite` |
 | Messages | LanceDB | Message content + vector embeddings for semantic search | `ollama-copilot.lance/` |
 
 **Critical**: Sessions and messages are stored separately. Any operation that clears one MUST clear the other to maintain consistency.

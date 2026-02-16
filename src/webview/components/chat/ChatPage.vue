@@ -211,6 +211,14 @@
         <div class="spinner"></div>
         <span>{{ thinking.text }}</span>
       </div>
+
+      <!-- Plan handoff button (shown after plan mode creates a plan) -->
+      <div v-if="pendingPlanContent && !isGenerating" class="plan-handoff">
+        <button class="btn btn-primary plan-handoff-btn" @click="handleImplementPlan">
+          <span class="codicon codicon-play"></span>
+          Start Implementation
+        </button>
+      </div>
     </div>
 
     <div v-if="filesChangedBlocks.length" class="files-changed-pinned">
@@ -254,7 +262,7 @@
 <script setup lang="ts">
 import type { ChatPageProps } from '../../scripts/core/chat';
 import { useChatPage } from '../../scripts/core/chat';
-import { filesChangedBlocks, implicitFile, implicitFileEnabled, implicitSelection, warningBanner } from '../../scripts/core/state';
+import { filesChangedBlocks, implicitFile, implicitFileEnabled, implicitSelection, isGenerating, pendingPlanContent, vscode, warningBanner } from '../../scripts/core/state';
 import ChatInput from './components/ChatInput.vue';
 import CommandApproval from './components/CommandApproval.vue';
 import ContextFilesDisplay from './components/ContextFilesDisplay.vue';
@@ -280,4 +288,11 @@ const {
   onModeChange,
   onModelChange,
 } = useChatPage(props);
+
+const handleImplementPlan = () => {
+  const planContent = pendingPlanContent.value;
+  if (!planContent) return;
+  pendingPlanContent.value = null;
+  vscode.postMessage({ type: 'implementPlan', planContent });
+};
 </script>

@@ -89,11 +89,15 @@ ${transcript}
 
 Create a summary with these sections:
 
+<analysis>
 1. TASK OVERVIEW: What the user originally asked for and what success looks like.
 2. CURRENT STATE: What has been completed so far. List specific files modified, functions changed, and their current status.
-3. IMPORTANT DISCOVERIES: Constraints found, architectural decisions made, errors encountered and how they were resolved, approaches that were tried and failed.
-4. NEXT STEPS: What still needs to be done, any blockers, priority order.
-5. KEY CODE CONTEXT: Important file paths, function names, variable names, or patterns that the agent will need to reference.
+3. IMPORTANT DISCOVERIES: Constraints found, architectural decisions made, errors encountered and how they were resolved.
+4. APPROACHES THAT FAILED: What was tried and didn't work, and why. Include error messages. This prevents the agent from repeating failed approaches.
+5. PROMISES MADE: Any commitments to the user (e.g. "I'll also update the tests", "I'll clean up the scratch files"). These must not be forgotten after compaction.
+6. NEXT STEPS: What still needs to be done, any blockers, priority order.
+7. KEY CODE CONTEXT: Important file paths, function names, variable names, or patterns that the agent will need to reference.
+</analysis>
 
 Be specific — include file paths, function names, error messages, and exact details. This summary replaces the original messages, so nothing can be looked up later.`;
 
