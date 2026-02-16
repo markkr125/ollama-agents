@@ -4,6 +4,9 @@
 
 - [Opening the Chat](#opening-the-chat)
 - [Agent Mode](#agent-mode)
+- [Explore Mode](#explore-mode)
+- [Plan Mode](#plan-mode)
+- [Review Mode](#review-mode)
 - [Thinking Blocks](#thinking-blocks)
 - [Chat Mode (Ask)](#chat-mode-ask)
 - [Edit Mode](#edit-mode)
@@ -20,7 +23,7 @@
 
 Click the **Ollama Copilot** icon (robot) in the Activity Bar to open the sidebar chat. The chat interface has:
 
-- **Mode selector** — switch between Agent, Ask, and Edit
+- **Mode selector** — switch between Agent, Explore, Plan, Review, Ask, and Edit
 - **Model selector** — choose which model to use (only enabled models appear; shows "No enabled models" if all are disabled)
 - **Context button** — attach code from the active editor
 - **Sessions panel** — view, search, and manage conversation history
@@ -71,6 +74,55 @@ The autonomous coding agent. It can read/write files, search your workspace, and
 - **Search results**: Shown as a collapsible group listing matched files with match counts. Clicking a filename opens it in the editor.
 - **Directory listings**: Shown as a tree with folder/file icons. Clicking entries opens files or reveals folders in the explorer.
 - **Terminal commands**: Show the command, exit code, and truncated output.
+
+## Explore Mode
+
+Read-only codebase exploration. The agent uses all code intelligence tools (LSP-powered definition, references, symbols, call hierarchy, etc.) without modifying any files.
+
+**Best for:**
+- Understanding unfamiliar codebases
+- Tracing call chains and data flow
+- Finding where something is defined or used
+- Getting an overview of project structure
+
+**Differences from Agent mode:**
+- No `write_file` or `run_terminal_command` tools available
+- No approval flow needed (purely read-only)
+- Lower iteration cap (10 vs 25)
+- Parallel search and exploration strategy
+
+## Plan Mode
+
+Tool-powered implementation planning. The agent explores the codebase using read-only tools to build a detailed, multi-step implementation plan.
+
+**Best for:**
+- Planning a feature before writing code
+- Understanding what files need to change
+- Breaking down complex tasks into steps
+
+**How it works:**
+1. You describe what you want to implement
+2. The agent explores relevant files, types, and patterns
+3. It produces a structured plan with:
+   - File-by-file changes needed
+   - Dependencies and ordering
+   - Potential risks or gotchas
+
+Uses the same read-only tool set as Explore mode.
+
+## Review Mode
+
+Security and quality review. The agent reviews code for vulnerabilities, anti-patterns, and quality issues.
+
+**Best for:**
+- Security audits (injection, XSS, auth bypass, path traversal)
+- Code quality review before merging
+- Finding anti-patterns and tech debt
+
+**Differences from Explore mode:**
+- Security-focused system prompt
+- Additionally allows `run_terminal_command` for git read commands (`git log`, `git diff`, `git show`)
+- Structured output: severity ratings, affected files, remediation steps
 
 ## Thinking Blocks
 

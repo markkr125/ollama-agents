@@ -8,6 +8,7 @@ import { GitOperations } from '../agent/gitOperations';
 import { SessionManager } from '../agent/sessionManager';
 import { ToolRegistry } from '../agent/toolRegistry';
 import { AgentChatExecutor } from '../services/agent/agentChatExecutor';
+import { AgentExploreExecutor } from '../services/agent/agentExploreExecutor';
 import { DatabaseService } from '../services/database/databaseService';
 import { ModelManager } from '../services/model/modelManager';
 import { OllamaClient } from '../services/model/ollamaClient';
@@ -37,6 +38,7 @@ export class ChatViewProvider implements vscode.WebviewViewProvider, WebviewMess
   private readonly sessionController: ChatSessionController;
   private readonly settingsHandler: SettingsHandler;
   private readonly agentExecutor: AgentChatExecutor;
+  private readonly exploreExecutor: AgentExploreExecutor;
   private readonly terminalManager: TerminalManager;
   private readonly messageRouter: MessageRouter;
   private editorContextTracker?: EditorContextTracker;
@@ -80,12 +82,19 @@ export class ChatViewProvider implements vscode.WebviewViewProvider, WebviewMess
       this.terminalManager,
       decorationProvider
     );
+    this.exploreExecutor = new AgentExploreExecutor(
+      client,
+      toolRegistry,
+      databaseService,
+      outputChannel,
+      this
+    );
 
     // Build message handlers
     const modelHandler = new ModelMessageHandler(this, client, databaseService);
     const chatHandler = new ChatMessageHandler(
       this.state, this, this.sessionController, this.settingsHandler,
-      this.agentExecutor, databaseService, client, tokenManager,
+      this.agentExecutor, this.exploreExecutor, databaseService, client, tokenManager,
       sessionManager, gitOps, modelHandler, reviewService
     );
     const sessionHandler = new SessionMessageHandler(this.state, this, this.sessionController);
@@ -223,6 +232,10 @@ export class ChatViewProvider implements vscode.WebviewViewProvider, WebviewMess
       this.messageRouter.route(data).catch(err => {
         console.error('[ChatView] Unhandled error in message handler:', err);
       });
+      // On initial ready, send editor context so the implicit file chip appears immediately
+      if (data.type === 'ready') {
+        this.editorContextTracker?.sendNow();
+      }
     });
   }
 

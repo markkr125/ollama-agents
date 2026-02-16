@@ -70,6 +70,12 @@ function createStubDatabaseService(): any {
   };
 }
 
+function createStubExploreExecutor(): any {
+  return {
+    execute: async () => ({ summary: '', assistantMessage: {} })
+  };
+}
+
 function createStubClient(): any {
   return {
     chat: async function* () { yield { message: { content: 'done' } }; },
@@ -104,6 +110,7 @@ function createHandler(emitter: WebviewMessageEmitter, state?: ViewState): ChatM
     createStubSessionController(),
     createStubSettingsHandler(),
     createStubAgentExecutor(),
+    createStubExploreExecutor(),
     createStubDatabaseService(),
     createStubClient(),
     createStubTokenManager(),
@@ -276,6 +283,7 @@ suite('ChatMessageHandler – contextFiles in sendMessage', () => {
       createStubSessionController(),
       createStubSettingsHandler(),
       createStubAgentExecutor(),
+      createStubExploreExecutor(),
       dbService,
       createStubClient(),
       createStubTokenManager(),
@@ -331,6 +339,7 @@ suite('ChatMessageHandler – contextFiles in sendMessage', () => {
       createStubSessionController(),
       createStubSettingsHandler(),
       createStubAgentExecutor(),
+      createStubExploreExecutor(),
       dbService,
       createStubClient(),
       createStubTokenManager(),
@@ -356,5 +365,167 @@ suite('ChatMessageHandler – contextFiles in sendMessage', () => {
       call[1] === 'tool' && call[3]?.toolName === '__ui__'
     );
     assert.strictEqual(uiCall, undefined, 'should NOT persist __ui__ event when no context files');
+  });
+});
+
+// ─── explore/plan/review mode dispatch tests ─────────────────────────
+
+suite('ChatMessageHandler – explore/plan/review dispatch', () => {
+  /**
+   * sendMessage with currentMode='explore' should invoke exploreExecutor.execute()
+   * with mode='explore' — NOT the agent executor.
+   */
+  test('explore mode calls exploreExecutor.execute with mode=explore', async () => {
+    const { emitter } = createStubEmitter();
+    const state = createStubViewState();
+    state.currentMode = 'explore';
+    state.currentModel = 'test-model';
+
+    let exploreCalled = false;
+    let capturedMode = '';
+    const exploreExecutor = {
+      execute: async (_task: string, _config: any, _token: any, _sessionId: string, _model: string, mode: string) => {
+        exploreCalled = true;
+        capturedMode = mode;
+        return { summary: 'Explored', assistantMessage: {} };
+      }
+    };
+
+    let agentCalled = false;
+    const agentExecutor = {
+      execute: async () => { agentCalled = true; return {}; }
+    };
+
+    const handler = new ChatMessageHandler(
+      state,
+      emitter,
+      createStubSessionController(),
+      createStubSettingsHandler(),
+      agentExecutor as any,
+      exploreExecutor as any,
+      createStubDatabaseService(),
+      createStubClient(),
+      createStubTokenManager(),
+      createStubSessionManager(),
+      createStubGitOps(),
+      createStubModelHandler(),
+      undefined
+    );
+
+    await handler.handle({ type: 'sendMessage', text: 'Find the main entry point' });
+
+    assert.ok(exploreCalled, 'explore executor should have been called');
+    assert.strictEqual(capturedMode, 'explore', 'mode should be "explore"');
+    assert.ok(!agentCalled, 'agent executor should NOT be called in explore mode');
+  });
+
+  /**
+   * sendMessage with currentMode='plan' should invoke exploreExecutor.execute()
+   * with mode='plan'.
+   */
+  test('plan mode calls exploreExecutor.execute with mode=plan', async () => {
+    const { emitter } = createStubEmitter();
+    const state = createStubViewState();
+    state.currentMode = 'plan';
+    state.currentModel = 'test-model';
+
+    let capturedMode = '';
+    const exploreExecutor = {
+      execute: async (_task: string, _config: any, _token: any, _sessionId: string, _model: string, mode: string) => {
+        capturedMode = mode;
+        return { summary: 'Planned', assistantMessage: {} };
+      }
+    };
+
+    const handler = new ChatMessageHandler(
+      state,
+      emitter,
+      createStubSessionController(),
+      createStubSettingsHandler(),
+      createStubAgentExecutor(),
+      exploreExecutor as any,
+      createStubDatabaseService(),
+      createStubClient(),
+      createStubTokenManager(),
+      createStubSessionManager(),
+      createStubGitOps(),
+      createStubModelHandler(),
+      undefined
+    );
+
+    await handler.handle({ type: 'sendMessage', text: 'Plan auth implementation' });
+    assert.strictEqual(capturedMode, 'plan', 'mode should be "plan"');
+  });
+
+  /**
+   * sendMessage with currentMode='review' should invoke exploreExecutor.execute()
+   * with mode='review'.
+   */
+  test('review mode calls exploreExecutor.execute with mode=review', async () => {
+    const { emitter } = createStubEmitter();
+    const state = createStubViewState();
+    state.currentMode = 'review';
+    state.currentModel = 'test-model';
+
+    let capturedMode = '';
+    const exploreExecutor = {
+      execute: async (_task: string, _config: any, _token: any, _sessionId: string, _model: string, mode: string) => {
+        capturedMode = mode;
+        return { summary: 'Reviewed', assistantMessage: {} };
+      }
+    };
+
+    const handler = new ChatMessageHandler(
+      state,
+      emitter,
+      createStubSessionController(),
+      createStubSettingsHandler(),
+      createStubAgentExecutor(),
+      exploreExecutor as any,
+      createStubDatabaseService(),
+      createStubClient(),
+      createStubTokenManager(),
+      createStubSessionManager(),
+      createStubGitOps(),
+      createStubModelHandler(),
+      undefined
+    );
+
+    await handler.handle({ type: 'sendMessage', text: 'Review security of auth module' });
+    assert.strictEqual(capturedMode, 'review', 'mode should be "review"');
+  });
+
+  /**
+   * sendMessage with currentMode='agent' does NOT call exploreExecutor.
+   */
+  test('agent mode does NOT call exploreExecutor', async () => {
+    const { emitter } = createStubEmitter();
+    const state = createStubViewState();
+    state.currentMode = 'agent';
+    state.currentModel = 'test-model';
+
+    let exploreCalled = false;
+    const exploreExecutor = {
+      execute: async () => { exploreCalled = true; return { summary: '', assistantMessage: {} }; }
+    };
+
+    const handler = new ChatMessageHandler(
+      state,
+      emitter,
+      createStubSessionController(),
+      createStubSettingsHandler(),
+      createStubAgentExecutor(),
+      exploreExecutor as any,
+      createStubDatabaseService(),
+      createStubClient(),
+      createStubTokenManager(),
+      createStubSessionManager(),
+      createStubGitOps(),
+      createStubModelHandler(),
+      undefined
+    );
+
+    await handler.handle({ type: 'sendMessage', text: 'Create a file' });
+    assert.ok(!exploreCalled, 'explore executor should NOT be called in agent mode');
   });
 });

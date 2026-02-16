@@ -81,6 +81,23 @@ describe('ChatInput', () => {
     expect(implicitChips.length).toBe(0);
   });
 
+  test('hides implicit file chip when explicit context uses relative path', () => {
+    // Backend addContextCurrentFile sends relativePath ("demo-project/app.ts")
+    // while EditorContextTracker sends basename as fileName ("app.ts").
+    // showImplicitFile must check against relativePath too.
+    const wrapper = mount(ChatInput, {
+      props: {
+        ...baseProps,
+        implicitFile: { fileName: 'app.ts', filePath: '/demo-project/app.ts', relativePath: 'demo-project/app.ts', languageId: 'typescript' },
+        contextList: [{ fileName: 'demo-project/app.ts', content: 'code' }]
+      },
+      attachTo: document.body
+    });
+
+    const implicitChips = wrapper.findAll('.context-chip.implicit:not(.selection)');
+    expect(implicitChips.length).toBe(0);
+  });
+
   test('implicit file chip shows disabled class in agent mode', () => {
     const wrapper = mount(ChatInput, {
       props: {
@@ -293,5 +310,45 @@ describe('ChatInput', () => {
     // Click "file" item
     await wrapper.find('.mock-dropdown-item[data-id="file"]').trigger('click');
     expect(addContextFromFile).toHaveBeenCalled();
+  });
+
+  // --- New modes: explore, plan, review ---
+
+  test('renders mode picker with "Explore" when currentMode=explore', () => {
+    const wrapper = mount(ChatInput, {
+      props: { ...baseProps, currentMode: 'explore' },
+      attachTo: document.body
+    });
+    const pills = wrapper.findAll('.pill-label');
+    expect(pills[0].text()).toBe('Explore');
+  });
+
+  test('renders mode picker with "Plan" when currentMode=plan', () => {
+    const wrapper = mount(ChatInput, {
+      props: { ...baseProps, currentMode: 'plan' },
+      attachTo: document.body
+    });
+    const pills = wrapper.findAll('.pill-label');
+    expect(pills[0].text()).toBe('Plan');
+  });
+
+  test('renders mode picker with "Review" when currentMode=review', () => {
+    const wrapper = mount(ChatInput, {
+      props: { ...baseProps, currentMode: 'review' },
+      attachTo: document.body
+    });
+    const pills = wrapper.findAll('.pill-label');
+    expect(pills[0].text()).toBe('Review');
+  });
+
+  test('tools button is hidden in explore, plan, and review modes', () => {
+    const modes = ['explore', 'plan', 'review'] as const;
+    for (const mode of modes) {
+      const wrapper = mount(ChatInput, {
+        props: { ...baseProps, currentMode: mode },
+        attachTo: document.body
+      });
+      expect(wrapper.find('.tools-btn').exists()).toBe(false);
+    }
   });
 });

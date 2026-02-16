@@ -144,6 +144,9 @@ These are the mistakes most frequently made when editing this codebase. **Check 
 | 26 | `closeActiveThinkingGroup()` collapsing at end of generation | The function defaults to `collapse = true`, which hides all tool action groups inside the thinking group's `<details>` element. At end of generation, this makes the scroll area shrink and action groups become unclickable. | Pass `collapse = false` at end-of-generation call sites (`handleGenerationStopped`, `handleFinalMessage`). The default `collapse = true` is correct when a write group starts or when clearing messages. |
 | 27 | Agent re-reads file when selection is already in context | The context format sent to the LLM was too terse (`[fileName]\n```\ncode\n```) — the model didn't understand the code was already available and wasted tool calls on `read_file`. | Context labels must be descriptive: `User's selected code from file.ts:L10-L50 (already provided — do not re-read):`. The system prompt in `buildAgentSystemPrompt()` has a `USER-PROVIDED CONTEXT` section reinforcing this. Both signals are needed — the label alone is insufficient for some models. See `agent-tools.instructions.md` → "User-Provided Context Pipeline". |
 | 28 | Using `context.storageUri` for database storage | `context.storageUri` changes when VS Code reassigns workspace identity — e.g. single-folder → multi-root conversion. All sessions become invisible (orphaned on disk). | Use `resolveStoragePath()` from `src/services/database/storagePath.ts`. It computes `globalStorageUri/<sha256(workspaceFolders[0].uri)>/` which is stable. `DatabaseService` calls `migrateIfNeeded()` on init to copy from the old path. |
+| 29 | Agent multi-iteration streaming overwrites previous text | `activeStreamBlock` persists between agent iterations. `handleStreamChunk` uses REPLACEMENT semantics (`block.content = msg.content`). Stream processor resets `response = ''` each iteration. Result: iteration 2's text replaces iteration 1's explanation. Only affects non-thinking models with no tool calls (thinking models reset `activeStreamBlock`; tool models insert non-text blocks). | `agentChatExecutor.ts` sends `iterationBoundary` before each iteration ≥ 2. `streaming.ts` saves current block content as `blockBaseContent` and prepends it to subsequent `streamChunk` content. Cleared on block switch (thinking group insertion, tool blocks, etc.). Regression tests in `messageHandlers.test.ts`. |
+| 30 | Context name-format mismatch: basename vs relative path | `EditorContextTracker` sends `fileName` as **basename** (`hello_world.py` via `doc.fileName.split('/').pop()`), but backend `handleAddContext*` handlers use `asRelativePath(uri, true)` for `fileName` (e.g., `demo-project/hello_world.py`). Any dedup that compares these two formats with `===` silently fails — implicit chip stays visible after promoting to explicit context, implicit file gets double-sent on submit. | Dedup checks must compare against **both** `implicitFile.fileName` (basename) AND `implicitFile.relativePath` (workspace-relative). Three locations: `showImplicitFile` computed in `ChatInput.vue`, `handleSend` in `actions/input.ts`, `getEffectiveContext` in `actions/implicitContext.ts`. The `handleAddContextItem` handler in `sessions.ts` uses exact `fileName` match (safe — all backend paths use the same `asRelativePath` format). |
+| 31 | Implicit file chip missing on IDE startup | `EditorContextTracker.sendNow()` was only called in `onDidChangeVisibility`, which doesn't fire on initial `resolveWebviewView`. The `ready` message is the first message the webview sends after mounting — if `sendNow()` isn't called in response, the implicit chip never appears until the user switches files. | `chatView.ts` calls `editorContextTracker?.sendNow()` on the `ready` message inside the `onDidReceiveMessage` callback. This is in `chatView.ts` (not a message handler) because `editorContextTracker` is owned by `ChatViewProvider` and not accessible from handler classes. |
 
 ---
 
@@ -155,8 +158,10 @@ These are the mistakes most frequently made when editing this codebase. **Check 
 - **Inline Code Completion** - Autocomplete suggestions as you type
 - **Chat Interface** - GitHub Copilot-style sidebar chat with multiple modes
 - **Agent Mode** - Autonomous coding agent that can read/write files, search, and run commands
+- **Explore Mode** - Read-only codebase exploration using all code intelligence tools
+- **Plan Mode** - Tool-powered multi-step implementation planning with codebase navigation
+- **Review Mode** - Security and quality review using read-only tools + limited git commands
 - **Edit Mode** - Apply AI-guided edits to selected code
-- **Plan Mode** - Generate multi-step implementation plans
 - **Ask Mode** - General Q&A about code
 
 ---
@@ -208,11 +213,16 @@ src/
 │   ├── tokenManager.ts        # Bearer token management
 │   ├── agent/                 # Agent execution engine (decomposed — see agent-tools instructions)
 │   │   ├── agentChatExecutor.ts     # Thin orchestrator — wires sub-handlers, runs main loop
+│   │   ├── agentExploreExecutor.ts  # Read-only executor for explore/plan/review modes
 │   │   ├── agentStreamProcessor.ts  # Owns streaming: LLM chunk loop, throttled UI, thinking
 │   │   ├── agentToolRunner.ts       # Executes tool batches: progress groups, approvals, results
 │   │   ├── agentSummaryBuilder.ts   # Post-loop: summary generation, final message, filesChanged
 │   │   ├── agentTerminalHandler.ts  # Terminal command approval + execution
 │   │   ├── agentFileEditHandler.ts  # File edit approval + execution
+│   │   ├── agentPromptBuilder.ts    # Modular system prompt assembly (native + XML + mode-specific)
+│   │   ├── agentContextCompactor.ts # Conversation summarization when approaching context limit
+│   │   ├── agentSessionMemory.ts    # Structured in-memory notes maintained across iterations
+│   │   ├── projectContext.ts        # Auto-discovers project files (package.json, CLAUDE.md, etc.)
 │   │   ├── approvalManager.ts       # Shared approval state tracking
 │   │   └── checkpointManager.ts     # Checkpoint/snapshot lifecycle
 │   ├── database/              # Persistence layer
@@ -466,12 +476,17 @@ The agent executor is **decomposed into focused sub-handlers** — each owning a
 
 | File | Responsibility |
 |------|----------------|
-| `agentChatExecutor.ts` | **Thin orchestrator** — wires sub-handlers, runs main `while` loop, owns `persistUiEvent` and `buildAgentSystemPrompt` |
+| `agentChatExecutor.ts` | **Thin orchestrator** — wires sub-handlers, runs main `while` loop, owns `persistUiEvent`, session memory injection |
+| `agentExploreExecutor.ts` | **Read-only executor** — explore/plan/review modes with restricted tool set (no writes, no terminal by default) |
 | `agentStreamProcessor.ts` | Owns the `for await (chunk)` streaming loop — thinking accumulation, throttled UI emission, first-chunk gate |
-| `agentToolRunner.ts` | Executes a batch of tool calls per iteration — progress groups, approvals, inline diff stats |
-| `agentSummaryBuilder.ts` | Post-loop finalization — summary generation (LLM or fallback), final message, `filesChanged` event |
+| `agentToolRunner.ts` | Executes a batch of tool calls per iteration — progress groups, approvals, inline diff stats, contextual reminders |
+| `agentSummaryBuilder.ts` | Post-loop finalization — summary generation (LLM or fallback), final message, `filesChanged` event, scratch cleanup |
 | `agentTerminalHandler.ts` | Terminal command approval + execution via `TerminalManager` |
 | `agentFileEditHandler.ts` | File edit approval + execution via workspace FS |
+| `agentPromptBuilder.ts` | Modular system prompt assembly — identity, workspace, tone, tasks, tools, safety, navigation. Builds mode-specific prompts (explore/plan/review) |
+| `agentContextCompactor.ts` | Conversation summarization when tokens exceed 70% of context window — preserves system + last 6 messages |
+| `agentSessionMemory.ts` | Structured in-memory notes (files explored, errors, preferences) maintained across iterations and injected into system prompt |
+| `projectContext.ts` | Auto-discovers project files (package.json, CLAUDE.md, tsconfig, etc.) at session start and builds `<project_context>` block |
 | `approvalManager.ts` | Shared approval state tracking |
 | `checkpointManager.ts` | Checkpoint/snapshot lifecycle |
 
@@ -651,7 +666,7 @@ npx tsc -p tsconfig.test.json --noEmit
 | Modify model management UI | `src/webview/components/settings/components/ModelCapabilitiesSection.vue` + `src/services/database/sessionIndexService.ts` | `database-rules` + `extension-architecture` instructions |
 | Change API behavior | `src/services/model/ollamaClient.ts` | `extension-architecture` instructions |
 | Change inline completions | `src/providers/completionProvider.ts` | — |
-| Modify agent prompts | `buildAgentSystemPrompt()` in `src/services/agent/agentChatExecutor.ts` | `agent-tools` instructions |
+| Modify agent prompts | `src/services/agent/agentPromptBuilder.ts` | `agent-tools` instructions |
 | Modify agent streaming | `src/services/agent/agentStreamProcessor.ts` | `agent-tools` instructions |
 | Modify agent tool execution | `src/services/agent/agentToolRunner.ts` | `agent-tools` instructions |
 | Modify agent summary/finalization | `src/services/agent/agentSummaryBuilder.ts` | `agent-tools` instructions |

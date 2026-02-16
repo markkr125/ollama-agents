@@ -23,5 +23,7 @@ export interface ExtensionConfig {
   editMode: ModeConfig;
   planMode: ModeConfig;
   agentMode: ModeConfig;
+  exploreMode: ModeConfig;
+  reviewMode: ModeConfig;
   agent: AgentConfig;
 }

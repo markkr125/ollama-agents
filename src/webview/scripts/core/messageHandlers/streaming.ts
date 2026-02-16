@@ -27,10 +27,34 @@ let activeStreamBlock: AssistantThreadTextBlock | null = null;
  */
 let thinkingRoundCollapsed = false;
 
+/**
+ * Saved content from the previous iteration's text block.
+ * When set, the next streamChunk prepends this + "\n\n" to the incoming
+ * content, producing the merged result that matches timelineBuilder's
+ * appendText behavior for session history parity.
+ *
+ * @see markIterationBoundary
+ */
+let blockBaseContent: string | null = null;
+
 /** Reset the active stream block (called on new iteration / generation end). */
 export const resetActiveStreamBlock = () => {
   activeStreamBlock = null;
+  blockBaseContent = null;
   thinkingRoundCollapsed = false;
+};
+
+/**
+ * Mark an iteration boundary — save the current text block's content so the
+ * next iteration's streaming appends to it instead of overwriting it.
+ *
+ * Called from the `iterationBoundary` message handler (sent by the agent
+ * executor between loop iterations).
+ */
+export const markIterationBoundary = () => {
+  if (activeStreamBlock && activeStreamBlock.content) {
+    blockBaseContent = activeStreamBlock.content;
+  }
 };
 
 /**
@@ -90,6 +114,9 @@ export const handleStreamChunk = (msg: StreamChunkMessage) => {
   // UNLESS non-text blocks (tools/thinking/thinkingGroup) were added after it,
   // which means a new iteration has started (critical for non-thinking models
   // that don't have streamThinking to reset the target).
+  // Track the previous block so we can detect switches (clears blockBaseContent)
+  const prevBlock = activeStreamBlock;
+
   if (activeStreamBlock && thread.blocks.includes(activeStreamBlock)) {
     const idx = thread.blocks.indexOf(activeStreamBlock);
     const hasNonTextAfter = thread.blocks.slice(idx + 1).some(b => b.type !== 'text');
@@ -113,10 +140,27 @@ export const handleStreamChunk = (msg: StreamChunkMessage) => {
       // If we keep the raw reference, writes to `.content` bypass the Proxy's
       // set trap and Vue never detects the change (no re-render).
       activeStreamBlock = thread.blocks[thread.blocks.length - 1] as AssistantThreadTextBlock;
+      // New block — base content from previous iteration doesn't apply here
+      // (thinking models create separate blocks per iteration)
+      blockBaseContent = null;
     }
   }
 
-  activeStreamBlock.content = (msg.content || '').replace(/\[TASK_COMPLETE\]/gi, '').trimEnd();
+  // If we switched to a different block (thinking model creating per-iteration
+  // blocks, or tools inserted between text blocks), the base content from the
+  // previous iteration doesn't apply.
+  if (activeStreamBlock !== prevBlock) {
+    blockBaseContent = null;
+  }
+
+  // Apply content — prepend base from previous iterations when present.
+  // streamChunk uses replacement semantics (content = accumulated text for THIS
+  // iteration). Prepending blockBaseContent merges iterations into one block,
+  // matching timelineBuilder.appendText behavior for session history parity.
+  const incoming = (msg.content || '').replace(/\[TASK_COMPLETE\]/gi, '').trimEnd();
+  activeStreamBlock.content = blockBaseContent
+    ? `${blockBaseContent}\n\n${incoming}`
+    : incoming;
   if (msg.model) {
     thread.model = msg.model;
   }

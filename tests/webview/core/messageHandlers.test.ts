@@ -77,6 +77,74 @@ describe('streaming handlers', () => {
     expect(thread.blocks[0].content).toBe('The quick brown fox jumps over the lazy dog .');
   });
 
+  // Regression: agent mode with non-thinking model across multiple iterations.
+  // Without iterationBoundary, iteration 2's streamChunk (which starts from '')
+  // overwrites iteration 1's text because activeStreamBlock persists and
+  // streamChunk uses replacement semantics.
+  test('iterationBoundary prevents second iteration from overwriting first (non-thinking multi-iteration)', async () => {
+    const state = await import('../../../src/webview/scripts/core/state');
+    const handlers = await import('../../../src/webview/scripts/core/messageHandlers/streaming');
+
+    state.timeline.value = [];
+    state.currentStreamIndex.value = null;
+    state.currentAssistantThreadId.value = null;
+
+    // Iteration 1: model explains the file
+    handlers.handleStreamChunk({ type: 'streamChunk', content: 'This is a Python script.' });
+    handlers.handleStreamChunk({ type: 'streamChunk', content: 'This is a Python script. It prints Hello World.' });
+
+    const thread = state.timeline.value[0] as any;
+    expect(thread.blocks.length).toBe(1);
+    expect(thread.blocks[0].content).toBe('This is a Python script. It prints Hello World.');
+
+    // Between iterations: agent executor sends iterationBoundary
+    handlers.markIterationBoundary();
+
+    // Iteration 2: model sends follow-up (accumulated from '' again)
+    handlers.handleStreamChunk({ type: 'streamChunk', content: 'How would you like to proceed?' });
+
+    // MUST merge — not overwrite. Single text block with both iterations.
+    expect(thread.blocks.length).toBe(1);
+    expect(thread.blocks[0].content).toBe(
+      'This is a Python script. It prints Hello World.\n\nHow would you like to proceed?'
+    );
+
+    // Further streaming in iteration 2 continues correctly
+    handlers.handleStreamChunk({ type: 'streamChunk', content: 'How would you like to proceed? Here are some options.' });
+    expect(thread.blocks[0].content).toBe(
+      'This is a Python script. It prints Hello World.\n\nHow would you like to proceed? Here are some options.'
+    );
+  });
+
+  // Regression: iterationBoundary must NOT affect thinking models (which already
+  // create separate text blocks via handleStreamThinking resetting activeStreamBlock).
+  test('iterationBoundary clears blockBaseContent when thinking model switches blocks', async () => {
+    const state = await import('../../../src/webview/scripts/core/state');
+    const handlers = await import('../../../src/webview/scripts/core/messageHandlers/streaming');
+
+    state.timeline.value = [];
+    state.currentStreamIndex.value = null;
+    state.currentAssistantThreadId.value = null;
+
+    // Iteration 1: stream text
+    handlers.handleStreamChunk({ type: 'streamChunk', content: 'First answer' });
+
+    // iterationBoundary before iteration 2
+    handlers.markIterationBoundary();
+
+    // Thinking triggers new block (resets activeStreamBlock)
+    handlers.handleStreamThinking({ type: 'streamThinking', content: 'Planning...' });
+
+    // Iteration 2: stream text — should go to NEW block, WITHOUT first answer prefix
+    handlers.handleStreamChunk({ type: 'streamChunk', content: 'Second answer' });
+
+    const thread = state.timeline.value[0] as any;
+    const textBlocks = thread.blocks.filter((b: any) => b.type === 'text');
+    expect(textBlocks.length).toBe(2);
+    expect(textBlocks[0].content).toBe('First answer');
+    expect(textBlocks[1].content).toBe('Second answer');
+  });
+
   test('streamChunk after thinking reset creates new block with reactive content (reactivity regression)', async () => {
     const state = await import('../../../src/webview/scripts/core/state');
     const handlers = await import('../../../src/webview/scripts/core/messageHandlers/streaming');
@@ -893,5 +961,59 @@ describe('chunked read_file handlers', () => {
     expect(group.actions[0].detail).toBe('lines 1–100');
     expect(group.actions[1].text).toBe('Read file.ts');
     expect(group.actions[1].detail).toBe('lines 101–200');
+  });
+});
+
+// --- Context item deduplication ---
+
+describe('handleAddContextItem deduplication', () => {
+  test('adds a context item normally when list is empty', async () => {
+    const state = await import('../../../src/webview/scripts/core/state');
+    const { handleAddContextItem } = await import('../../../src/webview/scripts/core/messageHandlers/sessions');
+
+    state.contextList.value = [];
+
+    handleAddContextItem({ context: { fileName: 'src/app.ts', content: 'code' } });
+
+    expect(state.contextList.value).toHaveLength(1);
+    expect(state.contextList.value[0].fileName).toBe('src/app.ts');
+  });
+
+  test('rejects duplicate context item with same fileName', async () => {
+    const state = await import('../../../src/webview/scripts/core/state');
+    const { handleAddContextItem } = await import('../../../src/webview/scripts/core/messageHandlers/sessions');
+
+    state.contextList.value = [];
+
+    handleAddContextItem({ context: { fileName: 'src/app.ts', content: 'code' } });
+    handleAddContextItem({ context: { fileName: 'src/app.ts', content: 'code' } });
+    handleAddContextItem({ context: { fileName: 'src/app.ts', content: 'updated code' } });
+
+    expect(state.contextList.value).toHaveLength(1);
+  });
+
+  test('allows different files to be added', async () => {
+    const state = await import('../../../src/webview/scripts/core/state');
+    const { handleAddContextItem } = await import('../../../src/webview/scripts/core/messageHandlers/sessions');
+
+    state.contextList.value = [];
+
+    handleAddContextItem({ context: { fileName: 'src/app.ts', content: 'a' } });
+    handleAddContextItem({ context: { fileName: 'src/utils.ts', content: 'b' } });
+    handleAddContextItem({ context: { fileName: 'src/main.ts', content: 'c' } });
+
+    expect(state.contextList.value).toHaveLength(3);
+  });
+
+  test('no-op when msg.context is missing', async () => {
+    const state = await import('../../../src/webview/scripts/core/state');
+    const { handleAddContextItem } = await import('../../../src/webview/scripts/core/messageHandlers/sessions');
+
+    state.contextList.value = [];
+
+    handleAddContextItem({});
+    handleAddContextItem({ context: undefined });
+
+    expect(state.contextList.value).toHaveLength(0);
   });
 });

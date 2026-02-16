@@ -168,7 +168,9 @@ function chipDisplayName(name: string): string {
 // Mode picker items
 const modeItems = computed<DropdownItem[]>(() => [
   { id: 'agent', icon: 'codicon-hubot', label: 'Agent', description: 'Autonomous coding agent' },
-  { id: 'plan', icon: 'codicon-list-tree', label: 'Plan', description: 'Multi-step implementation plan' },
+  { id: 'explore', icon: 'codicon-search', label: 'Explore', description: 'Read-only codebase exploration' },
+  { id: 'plan', icon: 'codicon-list-tree', label: 'Plan', description: 'Tool-powered implementation planning' },
+  { id: 'review', icon: 'codicon-shield', label: 'Review', description: 'Security & quality review' },
   { id: 'ask', icon: 'codicon-comment-discussion', label: 'Ask', description: 'Ask questions about code' },
   { id: 'edit', icon: 'codicon-edit', label: 'Edit', description: 'Apply edits to selected code' },
 ]);
@@ -199,7 +201,10 @@ const attachMenuItems = computed<DropdownItem[]>(() => [
 // Whether the implicit file chip should show (not if same file already in explicit context)
 const showImplicitFile = computed(() => {
   if (!props.implicitFile) return false;
-  return !props.contextList.some(c => c.fileName === props.implicitFile?.fileName);
+  const { fileName, relativePath } = props.implicitFile;
+  return !props.contextList.some(c =>
+    c.fileName === fileName || c.fileName === relativePath
+  );
 });
 
 const selectionChipLabel = computed(() => {

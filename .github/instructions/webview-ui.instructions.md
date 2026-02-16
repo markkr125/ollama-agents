@@ -274,13 +274,16 @@ The chat input area (`ChatInput.vue`) follows the VS Code Copilot design:
 The backend sends `editorContext` messages whenever the active editor or selection changes:
 - `EditorContextTracker` (`src/views/editorContextTracker.ts`) listens to `onDidChangeActiveTextEditor` and `onDidChangeTextEditorSelection` (debounced 500ms)
 - Also fires on `onDidChangeVisibility` (webview panel becomes visible)
+- Also fires on webview `ready` message — `chatView.ts` calls `editorContextTracker?.sendNow()` so the implicit chip appears immediately on IDE startup (Pitfall #31)
 - Webview stores in `implicitFile` and `implicitSelection` refs (`state.ts`)
+
+**⚠️ Name-format mismatch** (Pitfall #30): `editorContext` sends `activeFile.fileName` as a **basename** (`hello_world.py` via `doc.fileName.split('/').pop()`), while `addContextItem` uses `asRelativePath(uri, true)` for `fileName` (e.g., `demo-project/hello_world.py`). `editorContext` also sends `activeFile.relativePath` which matches the `asRelativePath` format. All dedup checks must compare against **both** fields.
 
 **Implicit file chip behavior** (mirrors VS Code Copilot):
 - **Agent mode**: Faded chip with `(+)` button — click to promote to explicit context
 - **Non-agent modes**: Active chip — file content auto-included in message sent to model
 - User can toggle (disable/re-enable) via click
-- Deduplication: hidden if the same file already exists in explicit context
+- Deduplication: hidden if the same file already exists in explicit context. The `showImplicitFile` computed in `ChatInput.vue` checks both `implicitFile.fileName` (basename) and `implicitFile.relativePath` (workspace-relative) against `contextList[].fileName`.
 
 **Implicit selection chip**:
 - Always active (not faded), shown with line range
@@ -291,6 +294,7 @@ The backend sends `editorContext` messages whenever the active editor or selecti
 - Explicit context items are always sent
 - Implicit selection is always included (content attached directly)
 - Implicit file is included in non-agent modes only (content placeholder `__implicit_file__` → backend resolves via `chatMessageHandler.ts`)
+- Implicit file dedup also checks both `fileName` and `relativePath` before including
 
 ### Reusable Sub-Components
 

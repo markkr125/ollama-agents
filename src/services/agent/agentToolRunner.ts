@@ -213,6 +213,14 @@ export class AgentToolRunner {
             this.emitter.postMessage({ type: 'showToolAction', ...skipPayload, sessionId });
             await this.persistUiEvent(sessionId, 'showToolAction', skipPayload);
           }
+
+          // Tool denial tracking: tell the LLM not to retry the same call
+          const denialHint = '\n\n[SYSTEM NOTE: This action was denied by the user. Do NOT re-attempt the same call. Adjust your approach or explain what you need and why.]';
+          if (useNativeTools) {
+            nativeResults.push({ role: 'tool', content: (result.output || 'Skipped by user') + denialHint, tool_name: toolCall.name });
+          } else {
+            xmlResults.push(`Tool ${toolCall.name} was denied by the user.${denialHint}`);
+          }
         } else {
           // Build success action with diff stats
           const { actionText: successText, actionDetail: successDetail, filePath: successFilePath, startLine: successStartLine } =
@@ -241,11 +249,13 @@ export class AgentToolRunner {
           }
         }
 
-        // Feed tool result back to LLM
+        // Feed tool result back to LLM — with contextual reminders
+        const contextualHint = this.buildContextualReminder(toolCall.name, toolCall.args, result.output || '', isFileEdit);
+        const enrichedOutput = contextualHint ? (result.output || '') + contextualHint : (result.output || '');
         if (useNativeTools) {
-          nativeResults.push({ role: 'tool', content: result.output || '', tool_name: toolCall.name });
+          nativeResults.push({ role: 'tool', content: enrichedOutput, tool_name: toolCall.name });
         } else {
-          xmlResults.push(`Tool result for ${toolCall.name}:\n${result.output}`);
+          xmlResults.push(`Tool result for ${toolCall.name}:\n${enrichedOutput}`);
         }
       } catch (error: any) {
         // Error UI + persistence (skip for terminal — approval card shows errors)
@@ -395,5 +405,37 @@ export class AgentToolRunner {
     } catch {
       return fallback;
     }
+  }
+
+  // -------------------------------------------------------------------------
+  // Contextual reminders — short hints appended to tool outputs before
+  // feeding back to the LLM. Adapted from Claude Code's system reminders.
+  // -------------------------------------------------------------------------
+
+  private buildContextualReminder(toolName: string, args: any, output: string, isFileEdit: boolean): string {
+    // Empty file reminder
+    if (toolName === 'read_file' && output.trim() === '') {
+      return '\n\n[Note: This file exists but is empty.]';
+    }
+
+    // File write success reminder
+    if (isFileEdit && !output.toLowerCase().includes('skipped') && !output.toLowerCase().includes('error')) {
+      return '\n\n[Note: File modified successfully. Consider running relevant tests to verify the change.]';
+    }
+
+    // Terminal command failure reminder
+    if ((toolName === 'run_terminal_command' || toolName === 'run_command') && output.includes('Exit code:')) {
+      const exitMatch = output.match(/Exit code:\s*(\d+)/);
+      if (exitMatch && exitMatch[1] !== '0') {
+        return '\n\n[Note: Command exited with a non-zero status. Investigate the error output before retrying with the same command.]';
+      }
+    }
+
+    // Diagnostics with errors reminder
+    if (toolName === 'get_diagnostics' && (output.includes('Error') || output.includes('error'))) {
+      return '\n\n[Note: Errors detected. Review and fix these before continuing with other changes.]';
+    }
+
+    return '';
   }
 }

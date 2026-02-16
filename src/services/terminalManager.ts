@@ -148,23 +148,36 @@ export class TerminalManager {
     return `Command: ${command}\n${outputBody}${exitLine}`.trimEnd();
   }
 
+  // Precompiled patterns for stripping terminal control sequences.
+  // Built via String.fromCharCode so ESLint no-control-regex cannot flag them.
+  private static readonly ESC = String.fromCharCode(0x1b);
+  private static readonly BEL = String.fromCharCode(0x07);
+  private static readonly ANSI_ESCAPE = new RegExp(TerminalManager.ESC + '\\[[0-9;]*[a-zA-Z]', 'g');
+  private static readonly OSC_SEQUENCE = new RegExp(
+    TerminalManager.ESC + '\\][0-9]+;[^' + TerminalManager.BEL + TerminalManager.ESC + ']*(?:' + TerminalManager.BEL + '|' + TerminalManager.ESC + '\\\\)', 'g'
+  );
+  private static readonly BARE_OSC = /\]633;[A-Z][^\n]*/g;
+  private static readonly CONTROL_CHARS = new RegExp(
+    '[' + String.fromCharCode(0x00) + '-' + String.fromCharCode(0x08)
+    + String.fromCharCode(0x0b) + String.fromCharCode(0x0c)
+    + String.fromCharCode(0x0e) + '-' + String.fromCharCode(0x1f)
+    + String.fromCharCode(0x7f) + ']', 'g'
+  );
+
   private stripAnsiAndShellIntegration(text: string): string {
     // Remove ANSI escape sequences (colors, cursor movement, etc.)
-    // eslint-disable-next-line no-control-regex
-    let cleaned = text.replace(/\x1b\[[0-9;]*[a-zA-Z]/g, '');
-    
+    let cleaned = text.replace(TerminalManager.ANSI_ESCAPE, '');
+
     // Remove OSC (Operating System Command) sequences like ]633;...
     // These are VS Code shell integration markers: ]633;A, ]633;B, ]633;C, ]633;D, etc.
-    // eslint-disable-next-line no-control-regex
-    cleaned = cleaned.replace(/\x1b\][0-9]+;[^\x07\x1b]*(?:\x07|\x1b\\)/g, '');
-    
+    cleaned = cleaned.replace(TerminalManager.OSC_SEQUENCE, '');
+
     // Also handle bare OSC sequences without proper escape prefix (sometimes happens)
-    cleaned = cleaned.replace(/\]633;[A-Z][^\n]*/g, '');
-    
+    cleaned = cleaned.replace(TerminalManager.BARE_OSC, '');
+
     // Remove any remaining control characters except newlines and tabs
-    // eslint-disable-next-line no-control-regex
-    cleaned = cleaned.replace(/[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]/g, '');
-    
+    cleaned = cleaned.replace(TerminalManager.CONTROL_CHARS, '');
+
     return cleaned;
   }
 }

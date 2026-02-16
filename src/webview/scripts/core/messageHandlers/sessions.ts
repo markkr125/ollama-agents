@@ -231,7 +231,12 @@ export const handleGenerationStopped = (msg: any) => {
 
 export const handleAddContextItem = (msg: any) => {
   if (msg.context) {
-    contextList.value.push(msg.context);
+    // Deduplicate: skip if a context item with the same fileName already exists.
+    // All backend addContext* handlers use asRelativePath, so exact match is sufficient.
+    const isDuplicate = contextList.value.some(c => c.fileName === msg.context.fileName);
+    if (!isDuplicate) {
+      contextList.value.push(msg.context);
+    }
   }
 };
 

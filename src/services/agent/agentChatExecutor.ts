@@ -14,7 +14,10 @@ import { ModelCapabilities } from '../model/modelCompatibility';
 import { OllamaClient } from '../model/ollamaClient';
 import { PendingEditDecorationProvider } from '../pendingEditDecorationProvider';
 import { TerminalManager } from '../terminalManager';
+import { AgentContextCompactor } from './agentContextCompactor';
 import { AgentFileEditHandler } from './agentFileEditHandler';
+import { AgentPromptBuilder } from './agentPromptBuilder';
+import { AgentSessionMemory } from './agentSessionMemory';
 import { AgentStreamProcessor } from './agentStreamProcessor';
 import { AgentSummaryBuilder } from './agentSummaryBuilder';
 import { AgentTerminalHandler } from './agentTerminalHandler';
@@ -32,6 +35,8 @@ export class AgentChatExecutor {
   private readonly approvalManager: ApprovalManager;
   private readonly terminalHandler: AgentTerminalHandler;
   private readonly fileEditHandler: AgentFileEditHandler;
+  private readonly promptBuilder: AgentPromptBuilder;
+  private readonly contextCompactor: AgentContextCompactor;
   private readonly streamProcessor: AgentStreamProcessor;
   private readonly toolRunner: AgentToolRunner;
   private readonly summaryBuilder: AgentSummaryBuilder;
@@ -83,6 +88,8 @@ export class AgentChatExecutor {
       this.outputChannel
     );
 
+    this.promptBuilder = new AgentPromptBuilder(this.toolRegistry);
+    this.contextCompactor = new AgentContextCompactor(this.client);
     this.streamProcessor = new AgentStreamProcessor(this.client, this.emitter);
 
     this.toolRunner = new AgentToolRunner(
@@ -204,7 +211,8 @@ export class AgentChatExecutor {
     token: vscode.CancellationToken,
     sessionId: string,
     model: string,
-    capabilities?: ModelCapabilities
+    capabilities?: ModelCapabilities,
+    conversationHistory?: MessageRecord[]
   ): Promise<{ summary: string; assistantMessage: MessageRecord; checkpointId?: string }> {
     const context = {
       workspace: agentSession.workspace,
@@ -220,19 +228,22 @@ export class AgentChatExecutor {
     let useThinking = agentConfig.enableThinking && useNativeTools;
 
     const allFolders = vscode.workspace.workspaceFolders || [];
-    const workspaceDescription = allFolders.length > 1
-      ? `This is a multi-root workspace with ${allFolders.length} folders:\n${allFolders.map(f => `  - ${f.name}: ${f.uri.fsPath}`).join('\n')}\nAll file paths are relative to the folder that contains them (or prefixed with the folder name). The primary folder is: ${agentSession.workspace?.uri?.fsPath || ''}.`
-      : `The workspace root is: ${agentSession.workspace?.uri?.fsPath || ''}. All file paths are relative to this workspace.`;
+
+    // Load project context (reads package.json, CLAUDE.md, etc.) before prompt assembly
+    await this.promptBuilder.loadProjectContext(agentSession.workspace);
+
     const systemContent = useNativeTools
-      ? `You are a coding agent. Use the provided tools to complete tasks. ${workspaceDescription} Terminal commands run in the primary workspace directory by default.
+      ? this.promptBuilder.buildNativeToolPrompt(allFolders, agentSession.workspace)
+      : this.promptBuilder.buildXmlFallbackPrompt(allFolders, agentSession.workspace);
 
-SEARCH TIPS: search_workspace supports regex via isRegex=true. Use regex when: you're unsure of exact casing/spelling, you need case-insensitive search ((?i)pattern), you want alternatives (word1|word2), or pattern matching (import.*something). Use plain text for known exact strings.
-
-When done, respond with [TASK_COMPLETE].`
-      : this.buildAgentSystemPrompt();
+    // Build messages array with conversation history for multi-turn context
+    const historyMessages = (conversationHistory || [])
+      .filter(m => (m.role === 'user' || m.role === 'assistant') && m.tool_name !== '__ui__' && m.content.trim())
+      .map(m => ({ role: m.role as 'user' | 'assistant', content: m.content }));
 
     const messages: any[] = [
       { role: 'system', content: systemContent },
+      ...historyMessages,
       { role: 'user', content: agentSession.task }
     ];
 
@@ -258,12 +269,33 @@ When done, respond with [TASK_COMPLETE].`
     }
 
     const taskLower = agentSession.task.toLowerCase();
-    const taskRequiresWrite = /\b(rename|change|modify|edit|update|add|create|write|fix|refactor|remove|delete)\b/.test(taskLower);
+    const taskRequiresWrite = /\b(rename|change|modify|edit|update|add|create|write|fix|refactor|remove|delete|implement|move|replace|insert|append|prepend)\b/.test(taskLower);
+    const taskRequiresTerminal = /\b(run|test|install|build|compile|execute|start|serve|deploy|lint|format|npm|yarn|pip|cargo|make|docker)\b/.test(taskLower);
+
+    // Session memory — tracks discovered facts across iterations
+    const sessionMemory = new AgentSessionMemory(this.outputChannel);
 
     while (iteration < config.maxIterations && !token.isCancellationRequested) {
       iteration++;
 
       try {
+        // --- 0. Compact conversation history if approaching context limit ---
+        const contextWindow = getConfig().contextWindow || 16000;
+        if (iteration > 2) {
+          // Inject session memory reminder into system prompt before compaction
+          const memoryReminder = sessionMemory.toSystemReminder();
+          if (memoryReminder && messages.length > 0 && messages[0].role === 'system') {
+            // Strip any previous memory block and append fresh one
+            const sysContent = messages[0].content.replace(/<session_memory>[\s\S]*?<\/session_memory>/g, '').trimEnd();
+            messages[0].content = sysContent + '\n\n' + memoryReminder;
+          }
+
+          const compacted = await this.contextCompactor.compactIfNeeded(messages, contextWindow, model);
+          if (compacted) {
+            this.outputChannel.appendLine(`[Iteration ${iteration}] Context compacted — conversation history was summarized to free token budget.`);
+          }
+        }
+
         // --- 1. Stream LLM response ---
         const chatRequest: any = { model, messages };
         if (useNativeTools) {
@@ -271,6 +303,14 @@ When done, respond with [TASK_COMPLETE].`
         }
         if (useThinking) {
           chatRequest.think = true;
+        }
+
+        // Signal the webview that a new iteration is starting so it can
+        // save the existing text block content as a base prefix. Without this,
+        // iteration 2's streaming (which starts from '') overwrites iteration 1's
+        // text block content due to the replacement semantics of streamChunk.
+        if (iteration > 1) {
+          this.emitter.postMessage({ type: 'iterationBoundary', sessionId });
         }
 
         const thinkingStartTime = Date.now();
@@ -361,9 +401,22 @@ When done, respond with [TASK_COMPLETE].`
             messages.push({ role: 'assistant', content: response });
             messages.push({
               role: 'user',
-              content: 'You said the task is complete, but no files were modified. You must use write_file to actually make changes. Reading a file does not modify it. Please complete the task by calling write_file with the modified content.'
+              content: 'You indicated the task is complete, but NO files have been modified. Reading a file does NOT change it. You MUST call write_file with the modified content to actually make changes. If no changes are truly needed, explain why explicitly.'
             });
             continue;
+          }
+          if (taskRequiresTerminal && !hasWrittenFiles && !(agentSession.toolCalls || []).some((tc: any) => tc.tool === 'run_terminal_command' || tc.name === 'run_terminal_command')) {
+            // Task looks like it needs a terminal command but none was run
+            // Only nudge once — don't block completion if the model insists
+            if (!agentSession._terminalNudgeSent) {
+              agentSession._terminalNudgeSent = true;
+              messages.push({ role: 'assistant', content: response });
+              messages.push({
+                role: 'user',
+                content: 'You indicated the task is complete, but no terminal command was executed. If the task requires running a command (test, build, install, etc.), use run_terminal_command. If no command is needed, explain why and respond with [TASK_COMPLETE].'
+              });
+              continue;
+            }
           }
           const completionText = cleanedText.replace(/\[TASK_COMPLETE\]/gi, '').trim();
           accumulatedExplanation = completionText || accumulatedExplanation;
@@ -434,6 +487,21 @@ When done, respond with [TASK_COMPLETE].`
           hasWrittenFiles = true;
         }
 
+        // Track iteration in session memory
+        const iterSummary = AgentSessionMemory.buildIterationSummary(
+          iteration,
+          toolCalls.map((tc, idx) => {
+            const output = (useNativeTools ? (batchResult.nativeResults[idx]?.content ?? '') : (batchResult.xmlResults[idx] ?? ''));
+            return {
+              name: tc.name,
+              args: tc.args,
+              output,
+              success: !output.startsWith('Error:')
+            };
+          })
+        );
+        sessionMemory.addIterationSummary(iterSummary);
+
         if (!isTerminalOnly) {
           this.emitter.postMessage({ type: 'finishProgressGroup', sessionId });
           await this.persistUiEvent(sessionId, 'finishProgressGroup', {});
@@ -503,63 +571,8 @@ When done, respond with [TASK_COMPLETE].`
     this.outputChannel.appendLine('---');
   }
 
-  /** Build XML fallback system prompt with all tool definitions. */
-  private buildAgentSystemPrompt(): string {
-    const tools = this.toolRegistry.getAll();
-    const toolDescriptions = tools.map((t: { name: string; description: string; schema?: any }) => {
-      const params = t.schema?.properties
-        ? Object.entries(t.schema.properties)
-            .map(([key, val]: [string, any]) => `    ${key}: ${val.description || val.type}`)
-            .join('\n')
-        : '    (no parameters)';
-      return `${t.name}: ${t.description}\n${params}`;
-    }).join('\n\n');
-
-    // Multi-root workspace description
-    const allFolders = vscode.workspace.workspaceFolders || [];
-    const workspaceInfo = allFolders.length > 1
-      ? `This is a multi-root workspace with ${allFolders.length} folders:\n${allFolders.map(f => `  - ${f.name}: ${f.uri.fsPath}`).join('\n')}\nFile paths can be relative to any workspace folder. When a path is ambiguous, prefix it with the folder name (e.g. "backend/src/app.ts" where "backend" is a folder name).`
-      : `The workspace root is: ${allFolders[0]?.uri?.fsPath || '(unknown)'}. All file paths are relative to this workspace.`;
-
-    return `You are a coding agent. You MUST use tools to complete tasks. Never claim to do something without using tools.
-
-${workspaceInfo}
-
-TOOLS:
-${toolDescriptions}
-
-FORMAT - Always use this exact format:
-<tool_call>{"name": "TOOL_NAME", "arguments": {"arg": "value"}}</tool_call>
-
-EXAMPLES:
-<tool_call>{"name": "read_file", "arguments": {"path": "package.json"}}</tool_call>
-<tool_call>{"name": "write_file", "arguments": {"path": "file.txt", "content": "new content"}}</tool_call>
-<tool_call>{"name": "find_definition", "arguments": {"path": "src/main.ts", "symbolName": "handleRequest"}}</tool_call>
-
-CRITICAL: To edit a file you must call write_file. Reading alone does NOT change files.
-
-USER-PROVIDED CONTEXT:
-The user may attach code from their editor to the message. This appears at the start of their message in blocks like:
-  [file.ts:L10-L50] (selected lines 10–50)
-  [file.ts] (whole file)
-The code inside those blocks is ALREADY AVAILABLE to you — do NOT re-read it with read_file.
-Use the provided content directly for analysis, explanation, or edits.
-Only use read_file if you need lines OUTSIDE the provided range, or a different file entirely.
-
-CODE NAVIGATION STRATEGY:
-- Use get_document_symbols to get a file's outline (classes, functions, methods with line ranges) before reading the whole file.
-- Use find_definition to follow a function/method call to its source — this works across files.
-- Use find_references to find all usages of a symbol before modifying it.
-- Use find_symbol to search for a class or function by name when you don't know which file it's in.
-- Use get_hover_info to inspect the type or signature of a symbol without reading definition files.
-- Use get_call_hierarchy to trace call chains — who calls a function, and what does it call.
-- Use find_implementations to find concrete classes that implement an interface or abstract method.
-- Use get_type_hierarchy to understand inheritance chains — what a class extends and what extends it.
-- Use search_workspace for text/regex search with line numbers and context.
-  - Use plain text (default) for known exact strings.
-  - Set isRegex=true when unsure of casing/spelling, for case-insensitive search ((?i)pattern), alternatives (word1|word2|word3), or pattern matching (import.*something).
-- Prefer get_document_symbols + targeted read_file over reading entire large files.
-
-When done: [TASK_COMPLETE]`;
+  /** Expose the prompt builder for use by other executors. */
+  get promptBuilderInstance(): AgentPromptBuilder {
+    return this.promptBuilder;
   }
 }

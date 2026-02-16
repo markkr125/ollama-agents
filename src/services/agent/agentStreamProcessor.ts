@@ -193,7 +193,23 @@ export class AgentStreamProcessor {
       cancelDisposable.dispose();
     }
 
-    // Send final content state (no pending timer to flush anymore)
+    // Flush final content — synchronous throttle may have skipped the last tokens
+    if (!textFrozen && firstChunkReceived) {
+      const finalCleaned = (useNativeTools ? response : removeToolCalls(response))
+        .replace(/\[TASK_COMPLETE\]/gi, '');
+      let finalText = finalCleaned;
+      const FLUSH_MARKER = '[TASK_COMPLETE]';
+      for (let len = FLUSH_MARKER.length - 1; len >= 1; len--) {
+        if (finalText.toUpperCase().endsWith(FLUSH_MARKER.substring(0, len))) {
+          finalText = finalText.slice(0, -len);
+          break;
+        }
+      }
+      finalText = finalText.trim();
+      if (finalText) {
+        this.emitter.postMessage({ type: 'streamChunk', content: finalText, model, sessionId });
+      }
+    }
 
     // Always hide the thinking/generating spinner when the stream ends.
     // (It stays visible during streaming as a "still generating" indicator.)

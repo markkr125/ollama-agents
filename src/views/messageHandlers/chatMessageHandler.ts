@@ -4,6 +4,7 @@ import { GitOperations } from '../../agent/gitOperations';
 import { SessionManager } from '../../agent/sessionManager';
 import { getConfig, getModeConfig } from '../../config/settings';
 import { AgentChatExecutor } from '../../services/agent/agentChatExecutor';
+import { AgentExploreExecutor, ExploreMode } from '../../services/agent/agentExploreExecutor';
 import { DatabaseService } from '../../services/database/databaseService';
 import { getModelCapabilities, ModelCapabilities } from '../../services/model/modelCompatibility';
 import { OllamaClient } from '../../services/model/ollamaClient';
@@ -35,6 +36,7 @@ export class ChatMessageHandler implements IMessageHandler {
     private readonly sessionController: ChatSessionController,
     private readonly settingsHandler: SettingsHandler,
     private readonly agentExecutor: AgentChatExecutor,
+    private readonly exploreExecutor: AgentExploreExecutor,
     private readonly databaseService: DatabaseService,
     private readonly client: OllamaClient,
     private readonly tokenManager: TokenManager,
@@ -400,7 +402,9 @@ export class ChatMessageHandler implements IMessageHandler {
     let finalStatus: ChatSessionStatus = 'completed';
     try {
       if (this.state.currentMode === 'agent') {
-        await this.handleAgentMode(fullPrompt, token, sessionIdAtStart);
+        await this.handleAgentMode(fullPrompt, token, sessionIdAtStart, sessionMessagesSnapshot);
+      } else if (this.state.currentMode === 'explore' || this.state.currentMode === 'review' || this.state.currentMode === 'plan') {
+        await this.handleExploreMode(fullPrompt, token, sessionIdAtStart, this.state.currentMode === 'plan' ? 'plan' : this.state.currentMode as ExploreMode, sessionMessagesSnapshot);
       } else {
         await this.handleChatMode(fullPrompt, token, sessionIdAtStart, sessionMessagesSnapshot);
       }
@@ -416,7 +420,7 @@ export class ChatMessageHandler implements IMessageHandler {
     }
   }
 
-  private async handleAgentMode(prompt: string, token: vscode.CancellationToken, sessionId: string) {
+  private async handleAgentMode(prompt: string, token: vscode.CancellationToken, sessionId: string, sessionMessages?: MessageRecord[]) {
     const workspace = vscode.workspace.workspaceFolders?.[0];
     if (!workspace) {
       this.emitter.postMessage({ type: 'showError', message: 'No workspace folder open', sessionId });
@@ -453,7 +457,7 @@ export class ChatMessageHandler implements IMessageHandler {
       };
     }
 
-    const result = await this.agentExecutor.execute(agentSession, config, token, sessionId, this.state.currentModel, capabilities);
+    const result = await this.agentExecutor.execute(agentSession, config, token, sessionId, this.state.currentModel, capabilities, sessionMessages);
 
     // Clear the per-write callback
     this.agentExecutor.onFileWritten = undefined;
@@ -469,6 +473,27 @@ export class ChatMessageHandler implements IMessageHandler {
       if (pos) {
         this.emitter.postMessage({ type: 'reviewChangePosition', checkpointId: result.checkpointId, current: pos.current, total: pos.total, filePath: pos.filePath });
       }
+    }
+  }
+
+  private async handleExploreMode(prompt: string, token: vscode.CancellationToken, sessionId: string, mode: ExploreMode, sessionMessages?: MessageRecord[]) {
+    this.emitter.postMessage({ type: 'showThinking', message: mode === 'review' ? 'Starting security review...' : 'Exploring codebase...', sessionId });
+
+    let capabilities: ModelCapabilities | undefined;
+    try {
+      const cached = await this.databaseService.getCachedModels();
+      const modelRecord = cached.find(m => m.name === this.state.currentModel);
+      if (modelRecord) {
+        capabilities = getModelCapabilities(modelRecord);
+      }
+    } catch { /* proceed without */ }
+
+    const config: ExecutorConfig = { maxIterations: getConfig().agent.maxIterations, toolTimeout: getConfig().agent.toolTimeout, temperature: 0.7 };
+
+    const result = await this.exploreExecutor.execute(prompt, config, token, sessionId, this.state.currentModel, mode, capabilities, sessionMessages);
+
+    if (this.sessionController.getCurrentSessionId() === sessionId) {
+      this.sessionController.pushMessage(result.assistantMessage);
     }
   }
 

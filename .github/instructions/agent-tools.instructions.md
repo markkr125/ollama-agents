@@ -14,9 +14,14 @@ The agent execution logic lives in `src/services/agent/` and follows a **strict 
 ```
 src/services/agent/
 ├── agentChatExecutor.ts      # ORCHESTRATOR ONLY — wires sub-handlers, runs main loop
+├── agentExploreExecutor.ts   # Read-only executor for explore/plan/review modes
 ├── agentStreamProcessor.ts   # LLM streaming — chunk accumulation, throttled UI emission
-├── agentToolRunner.ts        # Tool batch execution — routing, UI events, diff stats
-├── agentSummaryBuilder.ts    # Post-loop — summary generation, final message, filesChanged
+├── agentToolRunner.ts        # Tool batch execution — routing, UI events, diff stats, contextual reminders
+├── agentSummaryBuilder.ts    # Post-loop — summary generation, final message, filesChanged, scratch cleanup
+├── agentPromptBuilder.ts     # Modular system prompt assembly (native + XML + mode-specific)
+├── agentContextCompactor.ts  # Conversation summarization when approaching context limit
+├── agentSessionMemory.ts     # Structured in-memory notes maintained across iterations
+├── projectContext.ts         # Auto-discovers project files (package.json, CLAUDE.md, etc.)
 ├── approvalManager.ts        # Approval promise lifecycle — waitForApproval / handleResponse
 ├── agentTerminalHandler.ts   # Terminal commands — safety check, approval, execution
 ├── agentFileEditHandler.ts   # File edits — sensitivity check, approval, diff preview
@@ -35,6 +40,11 @@ src/services/agent/
 | Change checkpoint snapshotting, keep/undo, diff computation | `checkpointManager.ts` | `agentChatExecutor.ts` |
 | Change approval promise lifecycle (wait/resolve) | `approvalManager.ts` | handler files |
 | Change loop flow, iteration logic, conversation history | `agentChatExecutor.ts` | sub-handler files |
+| Change system prompt wording, sections, mode prompts | `agentPromptBuilder.ts` | `agentChatExecutor.ts` |
+| Change conversation compaction/summarization | `agentContextCompactor.ts` | `agentChatExecutor.ts` |
+| Change session memory tracking | `agentSessionMemory.ts` | `agentChatExecutor.ts` |
+| Change project file auto-discovery | `projectContext.ts` | `agentPromptBuilder.ts` |
+| Add/change read-only exploration modes | `agentExploreExecutor.ts` | `agentChatExecutor.ts` |
 
 ### `AgentChatExecutor` — The Orchestrator
 
@@ -43,10 +53,20 @@ src/services/agent/
 - The main `execute()` while-loop (iteration orchestration)
 - `persistUiEvent()` — the shared persist-to-DB helper
 - `persistGitBranchAction()` — git branch UI event sequence
-- `buildAgentSystemPrompt()` — XML fallback prompt generation
+- Session memory injection into system prompt
 - `parseToolCalls()` — native vs XML extraction dispatch
 - `logIterationResponse()` — debug output channel logging
 - Pass-through delegates to `checkpointManager` and `approvalManager`
+
+### `AgentExploreExecutor` — Read-Only Modes
+
+Handles explore, plan, and review modes. Key differences from `AgentChatExecutor`:
+- **No checkpoints** — read-only tools don't modify files
+- **No approval flow** — no writes or destructive commands to approve
+- **Tool filtering** — blocks any non-read-only tools the model attempts to call
+- **Lower iteration cap** — defaults to 10 (vs 25 for agent mode)
+- **Mode-specific prompts** via `AgentPromptBuilder.buildExplorePrompt()` / `buildPlanPrompt()` / `buildSecurityReviewPrompt()`
+- Review mode additionally allows `run_terminal_command` (restricted to git read commands in the prompt)
 
 **It does NOT own** streaming, tool execution, diff stats, summary generation, terminal safety, or file sensitivity. Those are in the sub-handlers.
 

@@ -63,7 +63,8 @@ export const getEffectiveContext = (): Array<{ fileName: string; content: string
     implicitFile.value
   ) {
     const isAlreadyExplicit = contextList.value.some(
-      c => c.fileName === implicitFile.value?.fileName
+      c => c.fileName === implicitFile.value?.fileName ||
+           c.fileName === implicitFile.value?.relativePath
     );
     if (!isAlreadyExplicit) {
       // We don't have the file content in the webview; request it from backend

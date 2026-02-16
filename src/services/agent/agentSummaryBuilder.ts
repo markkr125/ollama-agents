@@ -1,3 +1,4 @@
+import * as vscode from 'vscode';
 import { MessageRecord } from '../../types/session';
 import { WebviewMessageEmitter } from '../../views/chatTypes';
 import { DatabaseService } from '../database/databaseService';
@@ -123,6 +124,9 @@ export class AgentSummaryBuilder {
 
     this.emitter.postMessage({ type: 'hideThinking', sessionId });
 
+    // Clean up scratch directory if it exists
+    await this.cleanupScratchDirectory();
+
     return { summary, assistantMessage };
   }
 
@@ -154,11 +158,11 @@ export class AgentSummaryBuilder {
         messages: [
           {
             role: 'system',
-            content: 'You are a helpful coding assistant. Provide a concise final answer to the user based on tool results. Do not call tools.'
+            content: 'You are a helpful coding assistant. Summarize what was accomplished in 2-4 sentences. Be specific: name files modified, functions changed, and what each change does. Use active voice, present tense. End with what the user should verify or test. Do not call tools.'
           },
           {
             role: 'user',
-            content: `User request: ${agentSession.task}\n\nRecent tool results:\n${toolResults}\n\nProvide the final response now.`
+            content: `User request: ${agentSession.task}\n\nRecent tool results:\n${toolResults}\n\nProvide a specific, actionable summary of what was done.`
           }
         ]
       });
@@ -191,6 +195,61 @@ export class AgentSummaryBuilder {
       });
     } catch (error) {
       console.warn('[persistUiEvent] Failed to persist UI event:', error);
+    }
+  }
+
+  /**
+   * Clean up the scratch directory created during agent execution.
+   * The agent is instructed to use `.ollama-copilot-scratch/` for temp files.
+   */
+  private async cleanupScratchDirectory(): Promise<void> {
+    const folders = vscode.workspace.workspaceFolders;
+    if (!folders?.length) return;
+
+    const scratchUri = vscode.Uri.joinPath(folders[0].uri, '.ollama-copilot-scratch');
+    try {
+      await vscode.workspace.fs.stat(scratchUri);
+      await vscode.workspace.fs.delete(scratchUri, { recursive: true });
+    } catch {
+      // Directory doesn't exist — nothing to clean up
+    }
+  }
+
+  /**
+   * Generate a short status line for the sessions list.
+   * Format: 3-5 words, present tense (-ing), names a file or function.
+   * E.g., "Fixing null check in validate.ts"
+   */
+  static generateStatusLine(toolCalls: any[]): string {
+    if (!toolCalls?.length) return 'Working...';
+
+    const last = toolCalls[toolCalls.length - 1];
+    const toolName = last?.tool || last?.name || '';
+    const args = last?.input || last?.args || {};
+    const fileName = (args?.path || args?.file || '').split('/').pop() || '';
+
+    switch (toolName) {
+      case 'read_file':
+        return fileName ? `Reading ${fileName}` : 'Reading file';
+      case 'write_file':
+      case 'create_file':
+        return fileName ? `Writing ${fileName}` : 'Writing file';
+      case 'search_workspace':
+        return `Searching for "${(args?.query || '').slice(0, 20)}"`;
+      case 'list_files':
+        return 'Listing files';
+      case 'run_terminal_command':
+        return `Running command`;
+      case 'find_definition':
+        return args?.symbolName ? `Finding ${args.symbolName}` : 'Finding definition';
+      case 'find_references':
+        return args?.symbolName ? `Finding usages of ${args.symbolName}` : 'Finding references';
+      case 'get_diagnostics':
+        return fileName ? `Checking ${fileName}` : 'Checking diagnostics';
+      case 'get_document_symbols':
+        return fileName ? `Analyzing ${fileName}` : 'Getting symbols';
+      default:
+        return fileName ? `Processing ${fileName}` : 'Working...';
     }
   }
 }

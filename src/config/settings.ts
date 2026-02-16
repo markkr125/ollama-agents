@@ -34,6 +34,16 @@ export function getConfig(): ExtensionConfig {
       temperature: config.get('agentMode.temperature', 0.4),
       maxTokens: config.get('agentMode.maxTokens', 8192)
     },
+    exploreMode: {
+      model: config.get('exploreMode.model', ''),
+      temperature: config.get('exploreMode.temperature', 0.5),
+      maxTokens: config.get('exploreMode.maxTokens', 4096)
+    },
+    reviewMode: {
+      model: config.get('reviewMode.model', ''),
+      temperature: config.get('reviewMode.temperature', 0.3),
+      maxTokens: config.get('reviewMode.maxTokens', 4096)
+    },
     agent: {
       maxIterations: config.get('agent.maxIterations', 25),
       toolTimeout: config.get('agent.toolTimeout', 30000),
@@ -52,14 +62,16 @@ export async function updateConfig(section: string, value: any): Promise<void> {
   await config.update(section, value, vscode.ConfigurationTarget.Global);
 }
 
-export function getModeConfig(mode: 'completion' | 'ask' | 'edit' | 'plan' | 'agent'): ModeConfig {
+export function getModeConfig(mode: 'completion' | 'ask' | 'edit' | 'plan' | 'agent' | 'explore' | 'review'): ModeConfig {
   const config = getConfig();
   const modeMap = {
     completion: config.completionMode,
     ask: config.askMode,
     edit: config.editMode,
     plan: config.planMode,
-    agent: config.agentMode
+    agent: config.agentMode,
+    explore: config.exploreMode,
+    review: config.reviewMode
   };
   return modeMap[mode];
 }

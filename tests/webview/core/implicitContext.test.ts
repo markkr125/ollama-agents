@@ -184,6 +184,22 @@ describe('getEffectiveContext', () => {
     expect(result).toEqual([{ fileName: 'app.ts', content: 'full file' }]);
   });
 
+  test('deduplicates: skips implicit file when explicit uses relativePath format', async () => {
+    const state = await import('../../../src/webview/scripts/core/state');
+    const { getEffectiveContext } = await import('../../../src/webview/scripts/core/actions/implicitContext');
+
+    // Backend addContextCurrentFile sends relativePath ("demo-project/app.ts")
+    // while EditorContextTracker sends basename as fileName ("app.ts")
+    state.contextList.value = [{ fileName: 'demo-project/app.ts', content: 'full file' }];
+    state.currentMode.value = 'ask';
+    state.implicitFileEnabled.value = true;
+    state.implicitFile.value = { fileName: 'app.ts', filePath: '/demo-project/app.ts', relativePath: 'demo-project/app.ts', languageId: 'typescript' };
+    state.implicitSelection.value = null;
+
+    const result = getEffectiveContext();
+    expect(result).toEqual([{ fileName: 'demo-project/app.ts', content: 'full file' }]);
+  });
+
   test('combines explicit + selection + implicit file correctly', async () => {
     const state = await import('../../../src/webview/scripts/core/state');
     const { getEffectiveContext } = await import('../../../src/webview/scripts/core/actions/implicitContext');
@@ -331,6 +347,31 @@ describe('handleSend includes implicit context', () => {
       context: [
         { fileName: 'app.ts', content: 'full content', kind: 'explicit', lineRange: undefined }
         // No duplicate implicit file
+      ]
+    });
+  });
+
+  test('does not duplicate file when explicit uses relativePath format', async () => {
+    const state = await import('../../../src/webview/scripts/core/state');
+    const actions = await import('../../../src/webview/scripts/core/actions/index');
+
+    state.isGenerating.value = false;
+    state.currentSessionId.value = 's1';
+    state.inputText.value = 'analyze';
+    state.contextList.value = [{ fileName: 'demo-project/app.ts', content: 'full content' }];
+    state.currentMode.value = 'ask';
+    state.implicitFileEnabled.value = true;
+    state.implicitFile.value = { fileName: 'app.ts', filePath: '/demo-project/app.ts', relativePath: 'demo-project/app.ts', languageId: 'typescript' };
+    state.implicitSelection.value = null;
+
+    actions.handleSend();
+
+    expect(vscodePostMessage).toHaveBeenCalledWith({
+      type: 'sendMessage',
+      text: 'analyze',
+      context: [
+        { fileName: 'demo-project/app.ts', content: 'full content', kind: 'explicit', lineRange: undefined }
+        // No duplicate implicit file — relativePath match
       ]
     });
   });

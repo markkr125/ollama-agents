@@ -363,6 +363,44 @@
           "maximum": 32768,
           "description": "Maximum tokens for Agent mode"
         },
+        "ollamaCopilot.exploreMode.model": {
+          "type": "string",
+          "default": "",
+          "description": "Model to use for Explore mode (read-only codebase exploration)"
+        },
+        "ollamaCopilot.exploreMode.temperature": {
+          "type": "number",
+          "default": 0.5,
+          "minimum": 0,
+          "maximum": 1,
+          "description": "Temperature for Explore mode"
+        },
+        "ollamaCopilot.exploreMode.maxTokens": {
+          "type": "number",
+          "default": 4096,
+          "minimum": 512,
+          "maximum": 32768,
+          "description": "Maximum tokens for Explore mode"
+        },
+        "ollamaCopilot.reviewMode.model": {
+          "type": "string",
+          "default": "",
+          "description": "Model to use for Security Review mode"
+        },
+        "ollamaCopilot.reviewMode.temperature": {
+          "type": "number",
+          "default": 0.3,
+          "minimum": 0,
+          "maximum": 1,
+          "description": "Temperature for Security Review mode"
+        },
+        "ollamaCopilot.reviewMode.maxTokens": {
+          "type": "number",
+          "default": 4096,
+          "minimum": 512,
+          "maximum": 32768,
+          "description": "Maximum tokens for Security Review mode"
+        },
         "ollamaCopilot.agent.maxIterations": {
           "type": "number",
           "default": 25,

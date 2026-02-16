@@ -41,7 +41,10 @@ export const handleSend = () => {
     currentMode.value !== 'agent' &&
     implicitFileEnabled.value &&
     implicitFile.value &&
-    !contextList.value.some(c => c.fileName === implicitFile.value?.fileName)
+    !contextList.value.some(c =>
+      c.fileName === implicitFile.value?.fileName ||
+      c.fileName === implicitFile.value?.relativePath
+    )
   ) {
     safeContext.push({
       fileName: implicitFile.value.relativePath || implicitFile.value.fileName,

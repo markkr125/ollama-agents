@@ -46,7 +46,7 @@ import {
     handleShowWarningBanner,
     handleUpdateSessionStatus
 } from './sessions';
-import { handleCollapseThinking, handleFinalMessage, handleStreamChunk, handleStreamThinking } from './streaming';
+import { handleCollapseThinking, handleFinalMessage, handleStreamChunk, handleStreamThinking, markIterationBoundary } from './streaming';
 
 export const handleMessage = (msg: any) => {
   switch (msg.type) {
@@ -97,6 +97,9 @@ export const handleMessage = (msg: any) => {
       break;
     case 'finishProgressGroup':
       handleFinishProgressGroup(msg);
+      break;
+    case 'iterationBoundary':
+      markIterationBoundary();
       break;
     case 'streamChunk':
       handleStreamChunk(msg as StreamChunkMessage);

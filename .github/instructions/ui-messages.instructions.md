@@ -25,6 +25,7 @@ description: "Backend-to-frontend and frontend-to-backend message protocol for t
 | `streamThinking` | `{content, sessionId}` | Stream thinking content (accumulated, not delta) |
 | `collapseThinking` | `{sessionId, durationSeconds?}` | Collapse the currently open thinking block (with optional accurate duration) |
 | `thinkingBlock` | `{content, sessionId}` | Persisted thinking block (used in history rebuild) |
+| `iterationBoundary` | `{sessionId}` | Signals the start of a new agent iteration (≥ 2). Transient — NOT persisted to DB. Webview saves current text block content as `blockBaseContent` to prefix subsequent `streamChunk` content, preventing iteration 2 from overwriting iteration 1. |
 | `showWarningBanner` | `{message, sessionId}` | Show a warning banner in the chat (e.g., model lacks tool support) |
 | `finalMessage` | `{content, model?, sessionId}` | Finalize response scoped to a session |
 | `generationStarted` | `{sessionId}` | Mark session as generating |
@@ -34,8 +35,8 @@ description: "Backend-to-frontend and frontend-to-backend message protocol for t
 | `clearMessages` | `{sessionId}` | Clear all messages for a session |
 | `showError` | `{message, sessionId}` | Show error message in session |
 | `connectionError` | `{error}` | Show connection error (non-session-scoped) |
-| `addContextItem` | `{context: {fileName, content, languageId?}}` | Add code context from editor selection |
-| `editorContext` | `{activeFile: {fileName, filePath, languageId} \| null, activeSelection: {fileName, content, startLine, endLine, languageId} \| null}` | Push current editor file + selection for implicit context chips |
+| `addContextItem` | `{context: {fileName, content, languageId?}}` | Add code context from editor selection. `fileName` uses `asRelativePath(uri, true)` format. Webview deduplicates by exact `fileName` match (safe — all backend `addContext*` paths use the same format). |
+| `editorContext` | `{activeFile: {fileName, filePath, relativePath, languageId} \| null, activeSelection: {fileName, content, startLine, endLine, languageId} \| null}` | Push current editor file + selection for implicit context chips. **⚠️ Name-format mismatch**: `activeFile.fileName` is a **basename** (`hello_world.py`), while `activeFile.relativePath` is workspace-relative (`demo-project/hello_world.py`) — matching `asRelativePath` format used by `addContextItem`. Dedup checks must compare against both fields (see Pitfall #30). Sent on editor change, selection change, visibility change, AND on webview `ready` message (Pitfall #31). |
 | `loadSessions` | `{sessions, hasMore, nextOffset}` | Replace sessions list |
 | `appendSessions` | `{sessions, hasMore, nextOffset}` | Append to sessions list |
 | `updateSessionStatus` | `{sessionId, status}` | Update a single session's status indicator |
