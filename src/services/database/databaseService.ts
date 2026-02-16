@@ -5,6 +5,7 @@ import { ChatSessionStatus, MessageRecord, SessionRecord, SessionsPage } from '.
 import { OllamaClient } from '../model/ollamaClient';
 import { LanceSearchService, SearchResult } from './lanceSearchService';
 import { SessionIndexService } from './sessionIndexService';
+import { migrateIfNeeded, resolveStoragePath } from './storagePath';
 
 // Re-export SearchResult so existing consumers keep working
 export type { SearchResult } from './lanceSearchService';
@@ -42,15 +43,16 @@ export class DatabaseService {
   private lanceSearch: LanceSearchService;
 
   private context: vscode.ExtensionContext;
+  private readonly storageUri: vscode.Uri;
   private ollamaClient: OllamaClient | null = null;
   private initialized = false;
 
   constructor(context: vscode.ExtensionContext) {
     this.context = context;
-    this.sessionIndex = new SessionIndexService(context);
+    this.storageUri = resolveStoragePath(context);
+    this.sessionIndex = new SessionIndexService(this.storageUri);
 
-    const storageUri = context.storageUri ?? context.globalStorageUri;
-    const dbPath = vscode.Uri.joinPath(storageUri, 'ollama-copilot.lance').fsPath;
+    const dbPath = vscode.Uri.joinPath(this.storageUri, 'ollama-copilot.lance').fsPath;
     this.lanceSearch = new LanceSearchService(dbPath, id => this.getSession(id));
   }
 
@@ -63,16 +65,20 @@ export class DatabaseService {
 
     this.ollamaClient = ollamaClient || null;
 
+    // Ensure storage directory exists
+    await vscode.workspace.fs.createDirectory(this.storageUri);
+
+    // Migrate databases from old context.storageUri if needed (one-time, silent)
+    await migrateIfNeeded(this.context, this.storageUri);
+
     // Eagerly init SQLite (fast, native)
     await this.sessionIndex.initialize();
 
-    // Ensure storage directory exists, then kick off LanceDB in background
-    const storageUri = this.context.storageUri ?? this.context.globalStorageUri;
-    await vscode.workspace.fs.createDirectory(storageUri);
+    // Kick off LanceDB in background
     this.lanceSearch.startInit();
 
     this.initialized = true;
-    console.log('DatabaseService initialized (SQLite ready, LanceDB loading in background)');
+    console.log(`DatabaseService initialized at ${this.storageUri.fsPath} (SQLite ready, LanceDB loading in background)`);
   }
 
   private ensureReady(): void {

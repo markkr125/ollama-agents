@@ -70,7 +70,8 @@ export const settings = reactive({
   maxActiveSessions: 1,
   enableThinking: true,
   temperature: 0.7,
-  sensitiveFilePatterns: ''
+  sensitiveFilePatterns: '',
+  storagePath: ''
 });
 
 export const chatSettings = reactive({

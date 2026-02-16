@@ -1,6 +1,24 @@
 <template>
   <div class="settings-section" :class="{ active: activeSection === 'advanced' }">
     <div class="settings-group">
+      <h3>Storage</h3>
+      <div class="settings-item">
+        <label class="settings-label">Custom Storage Path</label>
+        <div class="settings-desc">
+          Override where databases are stored. Leave empty for the default location
+          (stable across single→multi-root workspace changes). <strong>Requires window reload.</strong>
+        </div>
+        <input
+          class="settings-input"
+          type="text"
+          :value="storagePath"
+          placeholder="Leave empty for default"
+          @change="onStoragePathChange"
+        />
+      </div>
+    </div>
+
+    <div class="settings-group">
       <h3>DB Maintenance</h3>
       <div class="settings-item">
         <label class="settings-label">Sync Sessions</label>
@@ -30,12 +48,19 @@
 <script setup lang="ts">
 import type { StatusMessage } from '../../../scripts/core/settings';
 
-defineProps<{
+const props = defineProps<{
   activeSection: string;
+  storagePath: string;
+  saveStoragePath: (value: string) => void;
   runDbMaintenance: () => void;
   statusClass: (status: StatusMessage) => Record<string, boolean>;
   dbMaintenanceStatus: StatusMessage;
   confirmRecreateMessagesTable: () => void;
   recreateMessagesStatus: StatusMessage;
 }>();
+
+function onStoragePathChange(e: Event) {
+  const value = (e.target as HTMLInputElement).value.trim();
+  props.saveStoragePath(value);
+}
 </script>

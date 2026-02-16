@@ -27,6 +27,7 @@ export type Settings = {
   enableThinking: boolean;
   temperature: number;
   sensitiveFilePatterns: string;
+  storagePath: string;
 };
 
 export type ChatSettings = {
@@ -87,6 +88,7 @@ export interface SettingsPageProps {
   agentStatus: StatusMessage;
   tools: ToolItem[];
   runDbMaintenance: () => void;
+  saveStoragePath: (value: string) => void;
   dbMaintenanceStatus: StatusMessage;
   recreateMessagesTable: () => void;
   recreateMessagesStatus: StatusMessage;

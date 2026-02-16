@@ -441,6 +441,11 @@
           "type": "string",
           "default": "nomic-embed-text",
           "markdownDescription": "Embedding model to use when provider is `ollama`. Common options: `nomic-embed-text`, `mxbai-embed-large`."
+        },
+        "ollamaCopilot.storagePath": {
+          "type": "string",
+          "default": "",
+          "markdownDescription": "Custom absolute path for database storage. Leave empty to use the default location (stable across single→multi-root workspace changes). **Requires window reload.**"
         }
       }
     },

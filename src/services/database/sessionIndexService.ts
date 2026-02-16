@@ -24,8 +24,8 @@ export class SessionIndexService {
   private _messages!: MessageRepository;
   private _checkpoints!: CheckpointRepository;
 
-  constructor(private readonly context: vscode.ExtensionContext) {
-    this.storageUri = this.context.storageUri ?? this.context.globalStorageUri;
+  constructor(storageUri: vscode.Uri) {
+    this.storageUri = storageUri;
   }
 
   // ---------------------------------------------------------------------------

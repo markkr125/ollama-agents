@@ -143,6 +143,7 @@ These are the mistakes most frequently made when editing this codebase. **Check 
 | 25 | `asRelativePath(path, true)` returns folder-name-prefixed paths | `vscode.workspace.asRelativePath(path, true)` returns `"folderName/file.ts"`. Joining this with `folder.uri` via `Uri.joinPath` or `path.join` doubles the folder name: `…/folderName/folderName/file.ts` → `ENOENT`. Affects both agent tools (`resolveMultiRootPath` in `pathUtils.ts`) and UI file opening (`handleOpenWorkspaceFile`/`handleRevealInExplorer` in `fileChangeMessageHandler.ts`). | **Agent tools**: `resolveMultiRootPath` strips the folder-name prefix in single-root mode with an `fs.existsSync` guard (keeps real subdirectories with the same name). **UI handlers**: `stripFolderPrefix()` helper strips the prefix before `Uri.joinPath`. Both iterate workspace folders to find the actual file. |
 | 26 | `closeActiveThinkingGroup()` collapsing at end of generation | The function defaults to `collapse = true`, which hides all tool action groups inside the thinking group's `<details>` element. At end of generation, this makes the scroll area shrink and action groups become unclickable. | Pass `collapse = false` at end-of-generation call sites (`handleGenerationStopped`, `handleFinalMessage`). The default `collapse = true` is correct when a write group starts or when clearing messages. |
 | 27 | Agent re-reads file when selection is already in context | The context format sent to the LLM was too terse (`[fileName]\n```\ncode\n```) — the model didn't understand the code was already available and wasted tool calls on `read_file`. | Context labels must be descriptive: `User's selected code from file.ts:L10-L50 (already provided — do not re-read):`. The system prompt in `buildAgentSystemPrompt()` has a `USER-PROVIDED CONTEXT` section reinforcing this. Both signals are needed — the label alone is insufficient for some models. See `agent-tools.instructions.md` → "User-Provided Context Pipeline". |
+| 28 | Using `context.storageUri` for database storage | `context.storageUri` changes when VS Code reassigns workspace identity — e.g. single-folder → multi-root conversion. All sessions become invisible (orphaned on disk). | Use `resolveStoragePath()` from `src/services/database/storagePath.ts`. It computes `globalStorageUri/<sha256(workspaceFolders[0].uri)>/` which is stable. `DatabaseService` calls `migrateIfNeeded()` on init to copy from the old path. |
 
 ---
 
@@ -221,7 +222,8 @@ src/
 │   │   ├── checkpointRepository.ts  # Checkpoint + file snapshot queries
 │   │   ├── messageRepository.ts     # Message CRUD queries
 │   │   ├── sessionRepository.ts     # Session CRUD queries
-│   │   └── sqliteHelpers.ts         # DB migration + schema helpers
+│   │   ├── sqliteHelpers.ts         # DB migration + schema helpers
+│   │   └── storagePath.ts           # Stable storage path resolution + migration from old context.storageUri
 │   ├── model/                 # Model management
 │   │   ├── ollamaClient.ts          # Ollama/OpenWebUI HTTP client
 │   │   ├── modelManager.ts          # Model listing/selection/caching
@@ -446,6 +448,7 @@ Settings are defined in `package.json` under `contributes.configuration`:
 | `ollamaCopilot.agent.maxIterations` | `25` | Max tool execution cycles |
 | `ollamaCopilot.agent.toolTimeout` | `30000` | Tool timeout in ms |
 | `ollamaCopilot.agent.maxActiveSessions` | `1` | Max concurrent active sessions |
+| `ollamaCopilot.storagePath` | `""` | Custom absolute path for database storage. Empty = stable default under `globalStorageUri`. Requires reload. |
 
 ### Model Management
 
@@ -532,10 +535,7 @@ After **any** code change, run through this checklist:
 1. **Compile check**: `npm run compile` — must exit 0 (builds both webview via Vite and extension via webpack)
 2. **Type check tests**: `npx tsc -p tsconfig.test.json --noEmit` — ensures test files still compile against changed source
 3. **Lint check**: `npm run lint:all` — must exit 0 (ESLint + docs structure + naming conventions)
-4. **Run relevant tests**:
-   - Changed `src/webview/**` → `npm run test:webview`
-   - Changed `src/**` (non-webview) → `npm test`
-   - Changed both or unsure → `npm run test:all`
+4. **Run ALL tests** — `npm run test:all` — runs both webview (Vitest) and extension host (Mocha) tests sequentially. **Always run both harnesses.** A type-check passing does NOT mean tests pass. `npm run test:webview` alone is NOT sufficient when backend code changed — you MUST also run `npm test` (extension host e2e tests).
 5. **Check for regressions**: If you modified a message type, verify both the live handler (in `messageHandlers/`) and `timelineBuilder.ts` still agree
 6. **Verify no stale imports**: If you moved or renamed a file, search for old import paths across the codebase
 
@@ -596,9 +596,27 @@ npm run lint:docs
 vsce package
 ```
 
+### Running Tests
+
+```bash
+# Run ALL tests (ALWAYS do this before pushing)
+npm run test:all
+
+# Webview unit tests only (Vitest — fast, no VS Code host)
+npm run test:webview
+
+# Extension host e2e tests only (Mocha — launches VS Code + mock server)
+npm test
+
+# Type-check test files (does NOT execute tests — compile check only)
+npx tsc -p tsconfig.test.json --noEmit
+```
+
+**⚠️ `npm run test:webview` alone is NEVER sufficient when backend code changed.** Always run `npm test` (or `npm run test:all`) to exercise the extension host tests. See `testing.instructions.md` for full rules.
+
 ---
 
-## Testing the Extension
+## Testing the Extension (Manual)
 
 1. Press F5 in VS Code to launch Extension Development Host
 2. Open the Ollama Copilot sidebar (Activity Bar icon)
@@ -639,6 +657,7 @@ vsce package
 | Modify agent summary/finalization | `src/services/agent/agentSummaryBuilder.ts` | `agent-tools` instructions |
 | Message storage (LanceDB) | `src/services/database/lanceSearchService.ts` + `src/services/database/databaseService.ts` | `database-rules` instructions |
 | Session storage (SQLite) | `src/services/database/sessionIndexService.ts` | `database-rules` instructions |
+| Storage path resolution | `src/services/database/storagePath.ts` (`resolveStoragePath`, `migrateIfNeeded`, `workspaceKey`) | `database-rules` instructions |
 | DB maintenance actions | `src/views/settingsHandler.ts` | `database-rules` instructions |
 | Terminal command execution | `src/services/terminalManager.ts` + `src/utils/commandSafety.ts` | `agent-tools` instructions |
 | File edit approval | `src/utils/fileSensitivity.ts` + `src/services/agent/agentFileEditHandler.ts` | `agent-tools` instructions |

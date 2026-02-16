@@ -9,6 +9,7 @@
 - [Inline Completions](#inline-completions)
 - [Model Capabilities](#model-capabilities)
 - [Embeddings](#embeddings)
+- [Storage](#storage)
 - [Example Configurations](#example-configurations)
 
 ---
@@ -146,6 +147,18 @@ Used for semantic search in session history.
 |---------|---------|-------------|
 | `ollamaCopilot.embedding.provider` | `builtin` | `builtin` (LanceDB sentence-transformers) or `ollama` |
 | `ollamaCopilot.embedding.model` | `nomic-embed-text` | Ollama embedding model (when provider is `ollama`) |
+
+## Storage
+
+| Setting | Default | Description |
+|---------|---------|-------------|
+| `ollamaCopilot.storagePath` | `""` (empty) | Custom absolute path for database storage. Leave empty for the default location, which is stable across single→multi-root workspace changes. **Requires window reload.** |
+
+By default, databases are stored under `globalStorageUri/<sha256(firstWorkspaceFolderUri)>/`. This location is:
+- **Workspace-isolated** — each project gets its own sessions, messages, and search index.
+- **Stable across workspace identity changes** — adding a second folder to your workspace (converting single-root to multi-root) no longer orphans your data.
+
+When upgrading from a previous version, databases at the old `context.storageUri` path are automatically copied to the new location on first activation.
 
 ## Example Configurations
 

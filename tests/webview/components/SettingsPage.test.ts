@@ -31,7 +31,8 @@ function makeProps(overrides: Record<string, any> = {}) {
       maxActiveSessions: 1,
       enableThinking: true,
       temperature: 0.7,
-      sensitiveFilePatterns: ''
+      sensitiveFilePatterns: '',
+      storagePath: ''
     },
     saveBaseUrl: vi.fn(),
     tokenVisible: false,
@@ -64,6 +65,7 @@ function makeProps(overrides: Record<string, any> = {}) {
     refreshCapabilities: vi.fn(),
     toggleModelEnabled: vi.fn(),
     runDbMaintenance: vi.fn(),
+    saveStoragePath: vi.fn(),
     dbMaintenanceStatus: { ...status },
     recreateMessagesTable: vi.fn(),
     recreateMessagesStatus: { ...status },

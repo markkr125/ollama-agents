@@ -93,6 +93,7 @@
         :save-agent-settings="saveAgentSettings"
         :agent-status="agentStatus"
         :run-db-maintenance="runDbMaintenance"
+        :save-storage-path="saveStoragePath"
         :db-maintenance-status="dbMaintenanceStatus"
         :recreate-messages-table="recreateMessagesTable"
         :recreate-messages-status="recreateMessagesStatus"
@@ -214,6 +215,7 @@ import {
     saveBaseUrl,
     saveBearerToken,
     saveModelSettings,
+    saveStoragePath,
     scrollTargetMessageId,
     searchHasMore,
     searchIsRevealing,

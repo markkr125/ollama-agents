@@ -8,6 +8,7 @@ export function getConfig(): ExtensionConfig {
   return {
     baseUrl: config.get('baseUrl', 'http://localhost:11434'),
     contextWindow: config.get('contextWindow', 16000),
+    storagePath: config.get('storagePath', ''),
     completionMode: {
       model: config.get('completionMode.model', ''),
       temperature: config.get('completionMode.temperature', 0.1),

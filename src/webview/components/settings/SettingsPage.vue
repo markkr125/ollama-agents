@@ -77,6 +77,8 @@
           />
           <AdvancedSection
             :activeSection="activeSection"
+            :storagePath="settings.storagePath"
+            :saveStoragePath="saveStoragePath"
             :runDbMaintenance="runDbMaintenance"
             :statusClass="statusClass"
             :dbMaintenanceStatus="dbMaintenanceStatus"

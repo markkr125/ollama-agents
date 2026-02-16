@@ -212,8 +212,12 @@ if (result === 'Delete') {
 
 ## Session Storage Overview
 
-- **Storage scope**: Data is stored per-workspace using `ExtensionContext.storageUri` with a fallback to `globalStorageUri` when no workspace is open.
-- **Session index**: `SessionIndexService` (sql.js, offset pagination, sorted by `updated_at DESC`).
+- **Storage scope**: Data is stored per-workspace under a **stable** directory:
+  1. If `ollamaCopilot.storagePath` is set → use that absolute path.
+  2. Otherwise → `globalStorageUri/<sha256(workspaceFolders[0].uri)>/`. This is stable across single→multi-root workspace conversions (adding a folder does NOT change `folders[0]`).
+  3. If no workspace folder is open → falls back to `globalStorageUri`.
+  - The old `context.storageUri`-based path is NOT used anymore (it changes when VS Code reassigns workspace identity on single→multi-root conversion). On first activation under the new scheme, `migrateIfNeeded()` in `storagePath.ts` silently copies databases from the old `context.storageUri` to the new location.
+- **Session index**: `SessionIndexService` (sql.js, offset pagination, sorted by `updated_at DESC`). Constructor accepts a `vscode.Uri` (the resolved storage URI), not a full `ExtensionContext`.
 - **Messages**: LanceDB `messages` table only (no `sessions` table). Legacy LanceDB sessions are migrated to SQLite on startup.
 - **Deletion**: `deleteSession()` removes from SQLite and deletes messages in LanceDB.
 

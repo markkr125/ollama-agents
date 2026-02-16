@@ -46,7 +46,8 @@ export class SettingsHandler {
       maxActiveSessions: config.agent.maxActiveSessions,
       enableThinking: config.agent.enableThinking,
       temperature: config.agentMode.temperature,
-      sensitiveFilePatterns: JSON.stringify(config.agent.sensitiveFilePatterns, null, 2)
+      sensitiveFilePatterns: JSON.stringify(config.agent.sensitiveFilePatterns, null, 2),
+      storagePath: config.storagePath
     };
   }
 
@@ -117,6 +118,9 @@ export class SettingsHandler {
           `Failed to save sensitive file patterns: ${error?.message || 'Invalid JSON'}`
         );
       }
+    }
+    if (settings.storagePath !== undefined) {
+      await config.update('storagePath', settings.storagePath, vscode.ConfigurationTarget.Global);
     }
 
     this.emitter.postMessage({ type: 'settingsSaved' });

@@ -33,7 +33,7 @@ suite('SessionIndexService', () => {
     const dir = await makeTempDir('sessions-rt');
     const context = makeFakeContext(dir);
 
-    const svc = new SessionIndexService(context);
+    const svc = new SessionIndexService(context.storageUri!);
     await svc.initialize();
 
     const now = Date.now();
@@ -67,7 +67,7 @@ suite('SessionIndexService', () => {
     const dir = await makeTempDir('sessions-page');
     const context = makeFakeContext(dir);
 
-    const svc = new SessionIndexService(context);
+    const svc = new SessionIndexService(context.storageUri!);
     await svc.initialize();
 
     const base = Date.now();
@@ -107,7 +107,7 @@ suite('SessionIndexService', () => {
     const dir = await makeTempDir('sessions-reset');
     const context = makeFakeContext(dir);
 
-    const svc = new SessionIndexService(context);
+    const svc = new SessionIndexService(context.storageUri!);
     await svc.initialize();
 
     const now = Date.now();
@@ -134,7 +134,7 @@ suite('SessionIndexService', () => {
     const dir = await makeTempDir('sessions-msg');
     const context = makeFakeContext(dir);
 
-    const svc = new SessionIndexService(context);
+    const svc = new SessionIndexService(context.storageUri!);
     await svc.initialize();
 
     const now = Date.now();
@@ -180,7 +180,7 @@ suite('SessionIndexService', () => {
     const dir = await makeTempDir('sessions-ts');
     const context = makeFakeContext(dir);
 
-    const svc = new SessionIndexService(context);
+    const svc = new SessionIndexService(context.storageUri!);
     await svc.initialize();
 
     const now = Date.now();
@@ -208,7 +208,7 @@ suite('SessionIndexService', () => {
     const dir = await makeTempDir('sessions-fk');
     const context = makeFakeContext(dir);
 
-    const svc = new SessionIndexService(context);
+    const svc = new SessionIndexService(context.storageUri!);
     await svc.initialize();
 
     let threw = false;
@@ -230,7 +230,7 @@ suite('SessionIndexService', () => {
     const dir = await makeTempDir('sessions-cascade');
     const context = makeFakeContext(dir);
 
-    const svc = new SessionIndexService(context);
+    const svc = new SessionIndexService(context.storageUri!);
     await svc.initialize();
 
     const now = Date.now();
@@ -258,7 +258,7 @@ suite('SessionIndexService', () => {
     const dir = await makeTempDir('sessions-clear');
     const context = makeFakeContext(dir);
 
-    const svc = new SessionIndexService(context);
+    const svc = new SessionIndexService(context.storageUri!);
     await svc.initialize();
 
     const now = Date.now();

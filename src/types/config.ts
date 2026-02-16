@@ -17,6 +17,7 @@ export interface AgentConfig {
 export interface ExtensionConfig {
   baseUrl: string;
   contextWindow: number;
+  storagePath: string;
   completionMode: ModeConfig;
   askMode: ModeConfig;
   editMode: ModeConfig;

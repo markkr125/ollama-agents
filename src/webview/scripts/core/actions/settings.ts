@@ -82,6 +82,14 @@ export const recreateMessagesTable = () => {
   vscode.postMessage({ type: 'recreateMessagesTable' });
 };
 
+export const saveStoragePath = (value: string) => {
+  settings.storagePath = value;
+  vscode.postMessage({
+    type: 'saveSettings',
+    settings: { storagePath: value }
+  });
+};
+
 export const toggleAutocomplete = () => {
   settings.enableAutoComplete = !settings.enableAutoComplete;
   vscode.postMessage({
