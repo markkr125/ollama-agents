@@ -46,7 +46,7 @@ export interface ToolContext {
    * Optional callback for running a sub-agent with read-only tools.
    * Injected by the agent executor; used by `run_subagent` tool.
    */
-  runSubagent?: (task: string, mode: 'explore' | 'review') => Promise<string>;
+  runSubagent?: (task: string, mode: 'explore' | 'review' | 'deep-explore') => Promise<string>;
 }
 
 /**

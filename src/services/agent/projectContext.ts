@@ -1,3 +1,4 @@
+import { execSync } from 'child_process';
 import * as fs from 'fs/promises';
 import * as path from 'path';
 import * as vscode from 'vscode';
@@ -118,9 +119,42 @@ export async function discoverProjectContext(
     return { contextBlock: '', filesRead: [], projectType };
   }
 
+  // Discover git status (branch, uncommitted changes, recent commits)
+  const gitSection = discoverGitContext(rootPath);
+  if (gitSection) {
+    sections.push(gitSection);
+  }
+
   const contextBlock = `<project_context>\n## Project Context (auto-discovered)\nProject type: ${projectType}\n\n${sections.join('\n\n')}\n</project_context>`;
 
   return { contextBlock, filesRead, projectType };
+}
+
+/**
+ * Discover git context: current branch, status, and recent commits.
+ * Runs synchronous git commands — fast and safe for read-only ops.
+ * Returns null if not a git repo or git is unavailable.
+ */
+function discoverGitContext(rootPath: string): string | null {
+  try {
+    const opts = { cwd: rootPath, encoding: 'utf-8' as const, timeout: 3000, stdio: ['pipe', 'pipe', 'pipe'] as ['pipe', 'pipe', 'pipe'] };
+
+    // Check if this is a git repo
+    try { execSync('git rev-parse --is-inside-work-tree', opts); } catch { return null; }
+
+    const branch = execSync('git branch --show-current', opts).trim() || '(detached HEAD)';
+    const status = execSync('git status --short --branch', opts).trim();
+    const log = execSync('git log --oneline -5 --no-decorate 2>/dev/null || true', opts).trim();
+
+    const parts = [`### Git Status\nBranch: ${branch}`];
+    if (status) parts.push(`\`\`\`\n${status}\n\`\`\``);
+    if (log) parts.push(`Recent commits:\n\`\`\`\n${log}\n\`\`\``);
+    parts.push('(This is a snapshot from session start — it will NOT auto-update.)');
+
+    return parts.join('\n');
+  } catch {
+    return null;
+  }
 }
 
 /**

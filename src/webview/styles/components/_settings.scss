@@ -121,6 +121,33 @@ input[type="number"] {
   resize: vertical;
 }
 
+.settings-select {
+  width: 100%;
+  padding: 6px 8px;
+  background: var(--input-bg);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  color: var(--fg);
+  font-size: 12px;
+  appearance: none;
+  -webkit-appearance: none;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6'%3E%3Cpath d='M0 0l5 6 5-6z' fill='%23888'/%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: right 8px center;
+  padding-right: 24px;
+  cursor: pointer;
+
+  &:focus {
+    outline: 1px solid var(--accent);
+    border-color: var(--accent);
+  }
+
+  option {
+    background: var(--input-bg);
+    color: var(--fg);
+  }
+}
+
 .settings-row {
   display: flex;
   gap: 8px;

@@ -1,5 +1,5 @@
 import { scrollToBottom, startAssistantMessage } from '../actions/index';
-import { activeThinkingGroup, currentAssistantThreadId, currentSessionId, currentStreamIndex } from '../state';
+import { activeThinkingGroup, currentAssistantThreadId, currentSessionId, currentStreamIndex, tokenUsage } from '../state';
 import type {
   AssistantThreadTextBlock,
   AssistantThreadThinkingBlock,
@@ -7,7 +7,8 @@ import type {
   CollapseThinkingMessage,
   StreamChunkMessage,
   StreamThinkingMessage,
-  ThinkingGroupSection
+  ThinkingGroupSection,
+  TokenUsageMessage
 } from '../types';
 import { ensureAssistantThread } from './threadUtils';
 
@@ -304,5 +305,24 @@ export const handleCollapseThinking = (msg: CollapseThinkingMessage) => {
       }
       tb.collapsed = true;
     }
+  }
+};
+
+// ---------------------------------------------------------------------------
+// Token Usage — live indicator
+// ---------------------------------------------------------------------------
+
+export const handleTokenUsage = (msg: TokenUsageMessage) => {
+  tokenUsage.visible = true;
+  tokenUsage.promptTokens = msg.promptTokens ?? 0;
+  tokenUsage.completionTokens = msg.completionTokens ?? 0;
+  tokenUsage.contextWindow = msg.contextWindow ?? 0;
+  if (msg.categories) {
+    tokenUsage.categories.system = msg.categories.system;
+    tokenUsage.categories.toolDefinitions = msg.categories.toolDefinitions;
+    tokenUsage.categories.messages = msg.categories.messages;
+    tokenUsage.categories.toolResults = msg.categories.toolResults;
+    tokenUsage.categories.files = msg.categories.files;
+    tokenUsage.categories.total = msg.categories.total;
   }
 };

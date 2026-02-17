@@ -99,7 +99,9 @@ export function extractToolCalls(response: string): ParsedToolCall[] {
   let match: RegExpExecArray | null;
 
   while ((match = toolCallBlockRegex.exec(response)) !== null) {
-    const jsonContent = match[1].trim();
+    // Normalize smart/curly quotes → straight quotes BEFORE any JSON parsing.
+    // Models (especially smaller ones) sometimes emit \u201C/\u201D instead of \u0022.
+    const jsonContent = normalizeQuotes(match[1].trim());
     if (!jsonContent.startsWith('{')) continue;
     
     // Try to extract valid JSON by finding balanced braces

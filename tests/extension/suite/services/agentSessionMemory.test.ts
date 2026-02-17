@@ -303,4 +303,105 @@ suite('AgentSessionMemory', () => {
     assert.strictEqual(restored.iterationCount, 0);
     assert.strictEqual(restored.getCompactSummary(), '');
   });
+
+  // ── functions_explored tracking ─────────────────────────────────
+
+  test('buildIterationSummary captures code intelligence tool findings', () => {
+    const toolResults = [
+      { name: 'find_definition', args: { path: 'src/main.ts', symbolName: 'handleRequest' }, output: 'Found at src/handler.ts:42', success: true },
+      { name: 'get_call_hierarchy', args: { path: 'src/handler.ts', symbolName: 'processData' }, output: 'Outgoing: saveResult', success: true },
+      { name: 'read_file', args: { path: 'src/main.ts' }, output: 'file contents', success: true },
+    ];
+
+    const summary = AgentSessionMemory.buildIterationSummary(1, toolResults);
+
+    // Should have key findings from code intelligence tools
+    const defFindings = summary.keyFindings.filter(f => f.includes('handleRequest'));
+    assert.ok(defFindings.length > 0, 'Should capture find_definition finding for handleRequest');
+
+    const hierarchyFindings = summary.keyFindings.filter(f => f.includes('processData'));
+    assert.ok(hierarchyFindings.length > 0, 'Should capture get_call_hierarchy finding for processData');
+  });
+
+  test('autoExtractFunctionsExplored populates functions_explored entry', () => {
+    memory.addIterationSummary(makeSummary({
+      iteration: 1,
+      toolsCalled: ['find_definition', 'get_call_hierarchy'],
+      keyFindings: [
+        'find_definition: definition of "handleRequest" found',
+        'get_call_hierarchy: definition of "processData" found',
+      ]
+    }));
+
+    const functionsExplored = memory.get('functions_explored');
+    assert.ok(functionsExplored, 'Should have functions_explored entry');
+    assert.ok(functionsExplored.includes('handleRequest'), 'Should include handleRequest');
+    assert.ok(functionsExplored.includes('processData'), 'Should include processData');
+  });
+
+  test('functions_explored deduplicates across iterations', () => {
+    memory.addIterationSummary(makeSummary({
+      iteration: 1,
+      toolsCalled: ['find_definition'],
+      keyFindings: ['find_definition: definition of "handleRequest" found']
+    }));
+    memory.addIterationSummary(makeSummary({
+      iteration: 2,
+      toolsCalled: ['find_definition'],
+      keyFindings: ['find_definition: definition of "handleRequest" found']
+    }));
+
+    const functionsExplored = memory.get('functions_explored')!;
+    const count = functionsExplored.split('handleRequest').length - 1;
+    assert.strictEqual(count, 1, 'handleRequest should appear only once (deduplicated)');
+  });
+
+  test('getCompactSummary includes functions explored count', () => {
+    memory.addIterationSummary(makeSummary({
+      iteration: 1,
+      toolsCalled: ['find_definition', 'find_references'],
+      filesRead: ['a.ts'],
+      keyFindings: [
+        'find_definition: definition of "funcA" found',
+        'find_references: definition of "funcB" found',
+      ]
+    }));
+
+    const summary = memory.getCompactSummary();
+    assert.ok(summary.includes('functions explored'), 'Should show functions explored count');
+  });
+
+  // ── originalTask tracking ───────────────────────────────────────
+
+  test('setOriginalTask / getOriginalTask round-trip', () => {
+    memory.setOriginalTask('Create a documentation file');
+    assert.strictEqual(memory.getOriginalTask(), 'Create a documentation file');
+  });
+
+  test('toSystemReminder includes Original Task as first section', () => {
+    memory.setOriginalTask('Scan processSearch and document all functions');
+    memory.set('project_type', 'TypeScript');
+    const result = memory.toSystemReminder();
+    assert.ok(result.includes('## Original Task'), 'Should have Original Task section');
+    assert.ok(result.includes('Scan processSearch'), 'Should include task text');
+    // Original Task should appear BEFORE Session Notes
+    const taskIdx = result.indexOf('## Original Task');
+    const notesIdx = result.indexOf('## Session Notes');
+    assert.ok(taskIdx < notesIdx, 'Original Task should come before Session Notes');
+  });
+
+  test('toJSON/fromJSON round-trip preserves originalTask', () => {
+    memory.setOriginalTask('Fix the login bug');
+    memory.set('x', 'y');
+    const json = memory.toJSON();
+
+    const restored = AgentSessionMemory.fromJSON(json, createStubOutputChannel());
+    assert.strictEqual(restored.getOriginalTask(), 'Fix the login bug');
+  });
+
+  test('toSystemReminder omits Original Task when not set', () => {
+    memory.set('project_type', 'TypeScript');
+    const result = memory.toSystemReminder();
+    assert.ok(!result.includes('## Original Task'), 'Should not have Original Task if not set');
+  });
 });

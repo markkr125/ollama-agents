@@ -101,6 +101,13 @@
           </button>
         </div>
         <div class="toolbar-right">
+          <TokenUsageIndicator
+            :visible="tokenUsage.visible"
+            :prompt-tokens="tokenUsage.promptTokens"
+            :completion-tokens="tokenUsage.completionTokens"
+            :context-window="tokenUsage.contextWindow"
+            :categories="tokenUsage.categories"
+          />
           <button class="send-btn" :title="isGenerating ? 'Stop' : 'Send'" @click="handleSend">
             <span class="codicon" :class="isGenerating ? 'codicon-debug-stop' : 'codicon-send'"></span>
           </button>
@@ -114,9 +121,11 @@
 import { computed, onMounted, ref } from 'vue';
 import type { ContextItem } from '../../../scripts/core/chat';
 import { fileIconChar, fileIconColor } from '../../../scripts/core/fileIcons';
+import { tokenUsage } from '../../../scripts/core/state';
 import type { DropdownItem } from './DropdownMenu.vue';
 import DropdownMenu from './DropdownMenu.vue';
 import PillPicker from './PillPicker.vue';
+import TokenUsageIndicator from './TokenUsageIndicator.vue';
 
 const props = defineProps<{
   contextList: ContextItem[];

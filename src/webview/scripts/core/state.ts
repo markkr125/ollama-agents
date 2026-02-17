@@ -68,6 +68,7 @@ export const settings = reactive({
   toolTimeout: 30000,
   maxActiveSessions: 1,
   enableThinking: true,
+  continuationStrategy: 'full' as 'full' | 'standard' | 'minimal',
   temperature: 0.7,
   sensitiveFilePatterns: '',
   storagePath: ''
@@ -117,6 +118,8 @@ export const tools = ref([
 export const temperatureSlider = ref(70);
 
 export const currentProgressIndex = ref<number | null>(null);
+/** Stack of parent progress group indices — pushed when nested sub-agent groups start */
+export const progressIndexStack = ref<number[]>([]);
 export const currentStreamIndex = ref<number | null>(null);
 export const currentAssistantThreadId = ref<string | null>(null);
 
@@ -136,6 +139,22 @@ export const searchIsRevealing = ref(false);
 export const isSearching = ref(false);
 export const scrollTargetMessageId = ref<string | null>(null);
 export const autoScrollLocked = ref(false);
+
+// Token usage indicator — live-only, not persisted to DB
+export const tokenUsage = reactive({
+  visible: false,
+  promptTokens: 0,
+  completionTokens: 0,
+  contextWindow: 0,
+  categories: {
+    system: 0,
+    toolDefinitions: 0,
+    messages: 0,
+    toolResults: 0,
+    files: 0,
+    total: 0
+  }
+});
 
 // Plan handoff — shown after plan mode completes
 export const pendingPlanContent = ref<string | null>(null);

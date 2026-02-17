@@ -11,7 +11,7 @@ The codebase has **three different interfaces** for messages. Using the wrong on
 
 | Interface | File | Role | Fields |
 |-----------|------|------|--------|
-| `MessageRecord` | `src/types/session.ts` | **Database persistence** — the source of truth | `snake_case`: `session_id`, `tool_name`, `tool_input`, `tool_output`, `progress_title` |
+| `MessageRecord` | `src/types/session.ts` | **Database persistence** — the source of truth | `snake_case`: `session_id`, `tool_name`, `tool_input`, `tool_output`, `progress_title`, `tool_calls` |
 | `ChatMessage` | `src/views/chatTypes.ts` | **View layer transfer** — enriched with UI metadata | `camelCase`: `toolName`, `actionText`, `actionIcon`, `actionStatus` |
 | Ollama `ChatMessage` | `src/types/ollama.ts` | **API requests/responses** — wire format | `role`, `content`, `tool_calls?`, `tool_name?`, `thinking?` |
 
@@ -118,6 +118,21 @@ Both `getSettingsPayload()` and `saveSettings()` in `settingsHandler.ts` manuall
 ### Streaming
 Both `chat()` and `generate()` return `AsyncGenerator`. Responses are NDJSON (newline-delimited JSON). The NDJSON parser silently swallows parse errors.
 
+### Typed Request Types (`OllamaOptions`)
+
+`ChatRequest` and `GenerateRequest` (in `src/types/ollama.ts`) use `OllamaOptions` for the `options` field. `OllamaOptions` is a comprehensive interface covering all Ollama runtime parameters: `num_ctx`, `seed`, `temperature`, `num_predict`, `stop`, `repeat_penalty`, `repeat_last_n`, `min_p`, `top_k`, `top_p`, `presence_penalty`, `frequency_penalty`, `num_keep`, `num_batch`, `mirostat`, `mirostat_tau`, `mirostat_eta`, `tfs_z`, `typical_p`, `num_gpu`, `main_gpu`, `num_thread`.
+
+Both request types also support top-level `keep_alive?: string | number` and `format?: string | object` fields.
+
+### Agent Request Construction
+
+Both executors (`agentChatExecutor.ts`, `agentExploreExecutor.ts`) construct typed `ChatRequest` objects with:
+- **`keep_alive: '30m'`** — prevents model unloading during long tasks (Ollama default is 5m)
+- **`options.num_ctx`** — set to auto-detected context window from `/api/show` model_info, with user config and 16000 as fallbacks
+- **`options.temperature`** — from mode config (`agentMode.temperature`, etc.)
+- **`options.num_predict`** — from mode config (`agentMode.maxTokens`, etc.)
+- **`options.stop: ['[TASK_COMPLETE]']`** — native stop sequence so the model halts on task completion marker (supplementing post-hoc detection)
+
 ### Error Hierarchy
 ```
 OllamaError           ← base class (has statusCode)
@@ -175,12 +190,26 @@ Reads **model capabilities from the Ollama `/api/show` endpoint** which returns 
 
 No regex arrays or name-based heuristics are used. Capabilities are populated by `OllamaClient.fetchModelsWithCapabilities()`, which calls `listModels()` then `showModel()` in parallel for all models, merging the `capabilities` array into each `Model` object.
 
+### Context Window Detection
+
+`extractContextLength(showResponse)` reads the model's trained context window from the `/api/show` response's `model_info` object. It iterates keys looking for the `*.context_length` pattern (e.g., `llama.context_length`, `qwen2.context_length`, `gemma2.context_length`) and returns the value as a number, or `undefined` if not found.
+
+The extracted value is:
+1. Stored in `ModelCapabilities.contextLength?: number`
+2. Persisted to the `context_length INTEGER DEFAULT NULL` column in the SQLite `models` table
+3. Used by both executors as the **first-priority** context window: `capabilities?.contextLength || userConfigContextWindow || 16000`
+
+### Running Models (`/api/ps`)
+
+`OllamaClient.getRunningModels()` calls `GET /api/ps` and returns `RunningModelsResponse` — an array of `RunningModel` objects with `name`, `size`, `expires_at`, and other runtime fields. Currently used for diagnostics/monitoring; may be wired into the UI in the future.
+
 ### SQLite Model Cache
 
 The model list (name, size, family, quantization, capabilities, `enabled` flag) is persisted in the SQLite `models` table. Key behaviors:
 
 - **Offline fallback**: When Ollama is unreachable, the extension reads the last cached model list so dropdowns and the capabilities table remain populated.
 - **Stale cleanup**: `upsertModels()` does `DELETE FROM models` then re-inserts all models from the latest Ollama response. Models removed from Ollama are automatically dropped.
+- **Context length**: Each model has a `context_length INTEGER DEFAULT NULL` column storing the trained context window (extracted via `extractContextLength()`). Populated during `upsertModels()` from `(model as any).contextLength`.
 - **Enable/disable**: Each model has an `enabled INTEGER NOT NULL DEFAULT 1` column. Disabled models are filtered out of `modelOptions` in the webview. Bulk "Enable All" / "Disable All" toggles loop through `modelInfo` and call `toggleModelEnabled()` for each.
 - **Auto-save**: The Model Selection dropdowns (`ModelCapabilitiesSection.vue`) auto-save on change via `@change="autoSave"` — no explicit Save button.
 

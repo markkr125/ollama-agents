@@ -27,6 +27,7 @@ function createStubToolRegistry(): any {
     { name: 'get_hover_info', description: 'Get hover info', schema: { properties: { path: { type: 'string', description: 'File path' }, symbolName: { type: 'string', description: 'Symbol name' } }, required: ['path', 'symbolName'] } },
     { name: 'get_call_hierarchy', description: 'Get call hierarchy', schema: { properties: { path: { type: 'string', description: 'File path' }, symbolName: { type: 'string', description: 'Symbol name' } }, required: ['path', 'symbolName'] } },
     { name: 'get_type_hierarchy', description: 'Get type hierarchy', schema: { properties: { path: { type: 'string', description: 'File path' }, symbolName: { type: 'string', description: 'Symbol name' } }, required: ['path', 'symbolName'] } },
+    { name: 'run_subagent', description: 'Launch sub-agent for exploration', schema: { properties: { task: { type: 'string', description: 'Task description' }, mode: { type: 'string', description: 'Mode' } }, required: ['task'] } },
   ];
 
   return {
@@ -119,7 +120,7 @@ suite('AgentPromptBuilder', () => {
 
     test('native tool prompt mentions parallel tool calls', () => {
       const prompt = builder.buildNativeToolPrompt(singleRoot, singleRoot[0]);
-      assert.ok(prompt.includes('multiple tool calls are independent'), 'Missing parallel batching');
+      assert.ok(prompt.includes('make ALL independent tool calls in parallel'), 'Missing parallel batching');
     });
   });
 
@@ -255,7 +256,7 @@ suite('AgentPromptBuilder', () => {
     test('tone section includes anti-sycophancy rules', () => {
       const prompt = builder.buildNativeToolPrompt(singleRoot, singleRoot[0]);
       assert.ok(prompt.includes('sycophantic'), 'Should mention sycophantic behavior');
-      assert.ok(prompt.includes('professional and objective'), 'Should mention professional objectivity');
+      assert.ok(prompt.includes('PROFESSIONAL OBJECTIVITY'), 'Should mention professional objectivity');
     });
 
     test('doingTasks section includes diagnostics guidance', () => {
@@ -294,6 +295,150 @@ suite('AgentPromptBuilder', () => {
       assert.ok(prompt.includes('Confidence 9:'), 'Should have confidence 9 definition');
       assert.ok(prompt.includes('Confidence 8:'), 'Should have confidence 8 definition');
       assert.ok(prompt.includes('Low Confidence'), 'Should mention low confidence appendix');
+    });
+  });
+
+  // ── Chat mode prompt ────────────────────────────────────────────
+
+  suite('buildChatPrompt', () => {
+    test('includes helpful assistant identity', () => {
+      const prompt = builder.buildChatPrompt(singleRoot, singleRoot[0], true);
+      assert.ok(prompt.includes('helpful coding assistant'), 'Missing chat identity');
+    });
+
+    test('includes read-only constraint', () => {
+      const prompt = builder.buildChatPrompt(singleRoot, singleRoot[0], true);
+      assert.ok(prompt.includes('MUST NOT create, modify, or delete'), 'Missing read-only rule');
+    });
+
+    test('includes CODE INTELLIGENCE section with all 8 LSP tool references', () => {
+      const prompt = builder.buildChatPrompt(singleRoot, singleRoot[0], true);
+      assert.ok(prompt.includes('CODE INTELLIGENCE'), 'Missing code intelligence section');
+      assert.ok(prompt.includes('find_definition'), 'Missing find_definition');
+      assert.ok(prompt.includes('find_references'), 'Missing find_references');
+      assert.ok(prompt.includes('get_document_symbols'), 'Missing get_document_symbols');
+      assert.ok(prompt.includes('get_hover_info'), 'Missing get_hover_info');
+      assert.ok(prompt.includes('get_call_hierarchy'), 'Missing get_call_hierarchy');
+      assert.ok(prompt.includes('find_implementations'), 'Missing find_implementations');
+      assert.ok(prompt.includes('get_type_hierarchy'), 'Missing get_type_hierarchy');
+      assert.ok(prompt.includes('search_workspace'), 'Missing search_workspace');
+    });
+
+    test('includes USER-PROVIDED CONTEXT section', () => {
+      const prompt = builder.buildChatPrompt(singleRoot, singleRoot[0], true);
+      assert.ok(prompt.includes('USER-PROVIDED CONTEXT'), 'Missing user context section');
+    });
+
+    test('XML fallback includes read-only tool definitions', () => {
+      const prompt = builder.buildChatPrompt(singleRoot, singleRoot[0], false);
+      assert.ok(prompt.includes('TOOLS (read-only):'), 'Missing tool definitions for XML fallback');
+      assert.ok(!prompt.includes('write_file:'), 'Should NOT define write_file');
+      assert.ok(!prompt.includes('run_terminal_command:'), 'Should NOT define run_terminal_command');
+    });
+  });
+
+  // ── Deep explore prompt ─────────────────────────────────────────
+
+  suite('buildDeepExplorePrompt', () => {
+    test('includes deep exploration methodology with 4 phases', () => {
+      const prompt = builder.buildDeepExplorePrompt(singleRoot, singleRoot[0], true);
+      assert.ok(prompt.includes('Phase 1: MAP'), 'Missing Phase 1');
+      assert.ok(prompt.includes('Phase 2: TRACE DEPTH-FIRST'), 'Missing Phase 2');
+      assert.ok(prompt.includes('Phase 3: CROSS-CUTTING ANALYSIS'), 'Missing Phase 3');
+      assert.ok(prompt.includes('Phase 4: SYNTHESIZE'), 'Missing Phase 4');
+    });
+
+    test('includes read-only constraint', () => {
+      const prompt = builder.buildDeepExplorePrompt(singleRoot, singleRoot[0], true);
+      assert.ok(prompt.includes('MUST NOT create, modify, or delete'), 'Missing read-only rule');
+    });
+
+    test('mentions run_subagent for delegation', () => {
+      const prompt = builder.buildDeepExplorePrompt(singleRoot, singleRoot[0], true);
+      assert.ok(prompt.includes('run_subagent'), 'Missing subagent delegation mention');
+    });
+
+    test('includes critical rules about depth-first exploration', () => {
+      const prompt = builder.buildDeepExplorePrompt(singleRoot, singleRoot[0], true);
+      assert.ok(prompt.includes('DEPTH OVER BREADTH'), 'Missing depth over breadth rule');
+      assert.ok(prompt.includes('DON\'T STOP EARLY'), 'Missing don\'t stop early rule');
+      assert.ok(prompt.includes('FOLLOW IMPORTS'), 'Missing follow imports rule');
+    });
+
+    test('XML fallback includes deep-explore tool definitions with run_subagent', () => {
+      const prompt = builder.buildDeepExplorePrompt(singleRoot, singleRoot[0], false);
+      assert.ok(prompt.includes('TOOLS (read-only + sub-agent):'), 'Missing tool definitions');
+      assert.ok(prompt.includes('run_subagent:'), 'Should include run_subagent in tools');
+      assert.ok(!prompt.includes('write_file:'), 'Should NOT include write_file');
+      assert.ok(!prompt.includes('run_terminal_command:'), 'Should NOT include run_terminal_command');
+    });
+  });
+
+  // ── Deep explore tool definitions ───────────────────────────────
+
+  suite('getDeepExploreToolDefinitions', () => {
+    test('includes run_subagent but not write_file or run_terminal_command', () => {
+      const defs = builder.getDeepExploreToolDefinitions();
+      const names = defs.map((d: any) => d.function?.name);
+
+      assert.ok(names.includes('run_subagent'), 'Should include run_subagent');
+      assert.ok(names.includes('read_file'), 'Should include read_file');
+      assert.ok(names.includes('find_definition'), 'Should include find_definition');
+      assert.ok(!names.includes('write_file'), 'Should NOT include write_file');
+      assert.ok(!names.includes('run_terminal_command'), 'Should NOT include run_terminal_command');
+    });
+
+    test('returns exactly 13 tools (12 read-only + run_subagent)', () => {
+      const defs = builder.getDeepExploreToolDefinitions();
+      assert.strictEqual(defs.length, 13, `Expected 13 deep-explore tools, got ${defs.length}`);
+    });
+  });
+
+  // ── Agent prompt debugging and deep explore sections ────────────
+
+  suite('agent prompt enhancements', () => {
+    test('native prompt includes DEBUGGING STRATEGY section', () => {
+      const prompt = builder.buildNativeToolPrompt(singleRoot, singleRoot[0]);
+      assert.ok(prompt.includes('DEBUGGING STRATEGY'), 'Missing debugging strategy');
+      assert.ok(prompt.includes('TRACE'), 'Missing trace step');
+      assert.ok(prompt.includes('get_call_hierarchy'), 'Missing call hierarchy in debugging');
+      assert.ok(prompt.includes('get_hover_info'), 'Missing hover info in debugging');
+    });
+
+    test('native prompt includes DEEP EXPLORATION auto-detection section', () => {
+      const prompt = builder.buildNativeToolPrompt(singleRoot, singleRoot[0]);
+      assert.ok(prompt.includes('DEEP EXPLORATION'), 'Missing deep exploration section');
+      assert.ok(prompt.includes('MAP'), 'Missing map phase');
+      assert.ok(prompt.includes('TRACE DEPTH-FIRST'), 'Missing trace phase');
+      assert.ok(prompt.includes('CROSS-REFERENCE'), 'Missing cross-reference phase');
+      assert.ok(prompt.includes('SYNTHESIZE'), 'Missing synthesize phase');
+    });
+
+    test('plan prompt mentions all 8 LSP tools', () => {
+      const prompt = builder.buildPlanPrompt(singleRoot, singleRoot[0], true);
+      // These were previously missing
+      assert.ok(prompt.includes('find_symbol'), 'Missing find_symbol in plan');
+      assert.ok(prompt.includes('get_hover_info'), 'Missing get_hover_info in plan');
+      assert.ok(prompt.includes('find_implementations'), 'Missing find_implementations in plan');
+      assert.ok(prompt.includes('get_type_hierarchy'), 'Missing get_type_hierarchy in plan');
+      // These were already present
+      assert.ok(prompt.includes('find_definition'), 'Missing find_definition in plan');
+      assert.ok(prompt.includes('find_references'), 'Missing find_references in plan');
+      assert.ok(prompt.includes('get_call_hierarchy'), 'Missing get_call_hierarchy in plan');
+      assert.ok(prompt.includes('get_document_symbols'), 'Missing get_document_symbols in plan');
+    });
+
+    test('security review prompt includes CODE INTELLIGENCE FOR SECURITY REVIEW section', () => {
+      const prompt = builder.buildSecurityReviewPrompt(singleRoot, singleRoot[0], true);
+      assert.ok(prompt.includes('CODE INTELLIGENCE FOR SECURITY REVIEW'), 'Missing code intelligence section in review');
+      assert.ok(prompt.includes('find_definition'), 'Missing find_definition in review intelligence');
+      assert.ok(prompt.includes('find_references'), 'Missing find_references in review intelligence');
+      assert.ok(prompt.includes('get_call_hierarchy'), 'Missing get_call_hierarchy in review intelligence');
+      assert.ok(prompt.includes('find_implementations'), 'Missing find_implementations in review intelligence');
+      assert.ok(prompt.includes('get_document_symbols'), 'Missing get_document_symbols in review intelligence');
+      assert.ok(prompt.includes('get_type_hierarchy'), 'Missing get_type_hierarchy in review intelligence');
+      assert.ok(prompt.includes('find_symbol'), 'Missing find_symbol in review intelligence');
+      assert.ok(prompt.includes('get_hover_info'), 'Missing get_hover_info in review intelligence');
     });
   });
 });

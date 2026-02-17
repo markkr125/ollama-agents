@@ -1,5 +1,5 @@
 import * as vscode from 'vscode';
-import { ToolCall as OllamaToolCall } from '../../types/ollama';
+import { ChatRequest, ToolCall as OllamaToolCall } from '../../types/ollama';
 import { detectPartialToolCall, removeToolCalls } from '../../utils/toolCallParser';
 import { WebviewMessageEmitter } from '../../views/chatTypes';
 import { OllamaClient } from '../model/ollamaClient';
@@ -23,6 +23,14 @@ export interface StreamResult {
   thinkingCollapsed: boolean;
   /** Whether the response was truncated due to context length limits */
   truncated: boolean;
+  /** Real prompt token count from Ollama metrics (final chunk). */
+  promptTokens?: number;
+  /** Real completion token count from Ollama metrics (final chunk). */
+  completionTokens?: number;
+  /** Ollama tool-parse error messages (e.g. smart-quote JSON failures).
+   *  These are recoverable — the executor extracts the raw JSON, fixes quotes,
+   *  and retries. Stored separately so they don't leak into the UI via response. */
+  toolParseErrors: string[];
 }
 
 // ---------------------------------------------------------------------------
@@ -45,7 +53,7 @@ export class AgentStreamProcessor {
    * messages to the webview as chunks arrive. Returns the aggregated result.
    */
   async streamIteration(
-    chatRequest: any,
+    chatRequest: ChatRequest,
     sessionId: string,
     model: string,
     iteration: number,
@@ -58,7 +66,10 @@ export class AgentStreamProcessor {
     let lastThinkingTimestamp = 0;
     let thinkingCollapsed = false;
     let truncated = false;
+    let promptTokens: number | undefined;
+    let completionTokens: number | undefined;
     const nativeToolCalls: OllamaToolCall[] = [];
+    const toolParseErrors: string[] = [];
 
     // Create an AbortController so we can abort the HTTP stream immediately
     // when the user clicks Stop. Without this, the `for await` loop blocks on
@@ -84,9 +95,30 @@ export class AgentStreamProcessor {
     for await (const chunk of stream) {
       if (token.isCancellationRequested) break;
 
+      // Detect Ollama error chunks — `{"error":"..."}` NDJSON lines.
+      // These are silently yielded by parseNDJSON but have no `message`
+      // or `done` fields. Without this check, the error is completely lost.
+      if (chunk.error) {
+        // Tool parse errors (e.g. smart/curly quotes in JSON arguments) are
+        // recoverable — the executor extracts the raw JSON, fixes quotes,
+        // and retries. Store separately so they don't leak into `response`
+        // (which would be streamed to the UI as assistant text).
+        if (chunk.error.includes('error parsing tool call')) {
+          toolParseErrors.push(chunk.error);
+          continue;
+        }
+        throw new Error(chunk.error);
+      }
+
       // Detect output truncation due to context/token limits
       if (chunk.done && chunk.done_reason === 'length') {
         truncated = true;
+      }
+
+      // Capture real token counts from the final chunk (Ollama populates these when done=true)
+      if (chunk.done) {
+        if (chunk.prompt_eval_count != null) promptTokens = chunk.prompt_eval_count;
+        if (chunk.eval_count != null) completionTokens = chunk.eval_count;
       }
 
       // Accumulate thinking tokens
@@ -223,6 +255,6 @@ export class AgentStreamProcessor {
     // (It stays visible during streaming as a "still generating" indicator.)
     this.emitter.postMessage({ type: 'hideThinking', sessionId });
 
-    return { response, thinkingContent, nativeToolCalls, firstChunkReceived, lastThinkingTimestamp, thinkingCollapsed, truncated };
+    return { response, thinkingContent, nativeToolCalls, firstChunkReceived, lastThinkingTimestamp, thinkingCollapsed, truncated, promptTokens, completionTokens, toolParseErrors };
   }
 }

@@ -98,11 +98,12 @@ Uses a read-only tool set (same tools as Agent mode except no `write_file`, `run
 
 ## Chat Mode
 
-General Q&A about code. The model responds in a single turn without using tools.
+General Q&A about code with access to read-only tools. Chat mode routes through the exploration engine, giving the model access to all 12 read-only code intelligence tools (same as Plan mode) so it can look up definitions, search the codebase, and check types to give accurate answers.
 
-- Good for: explaining code, answering questions, brainstorming, requesting code edits
+- Good for: explaining code, answering questions with tool-verified accuracy, quick code lookups
 - Uses the `chatMode.model` and temperature settings
 - Conversation history is maintained per session
+- Read-only: cannot create, modify, or delete files
 - Replaces the former Ask and Edit modes
 
 ## Slash Commands
@@ -114,6 +115,8 @@ Special commands that can be typed in any mode:
 | `/review` | Run a security and quality code review using the read-only review agent |
 | `/review <instructions>` | Review with specific focus (e.g., `/review check for SQL injection`) |
 | `/security-review` | Alias for `/review` with a security-focused prompt |
+| `/deep-explore` | Deep recursive code exploration — traces every function call to its source using a 4-phase methodology (Map → Trace depth-first → Cross-cutting analysis → Synthesize) |
+| `/deep-explore <instructions>` | Deep explore with specific focus (e.g., `/deep-explore trace all auth handlers`) |
 
 The `/review` command internally uses the explore executor in review mode. It has access to all read-only code intelligence tools plus limited git commands (`git log`, `git diff`, `git show`). Output includes severity ratings, affected files, and remediation steps.
 
@@ -123,14 +126,23 @@ The `run_subagent` tool allows the main Agent to spawn a read-only sub-agent for
 
 **How it works:**
 1. The agent identifies a research task that requires multiple tool calls
-2. It calls `run_subagent` with a task description and mode (`explore` or `review`)
-3. A lightweight explore/review executor runs the sub-task independently
-4. The results are returned as text to the main agent
+2. It calls `run_subagent` with a task description and mode (`explore`, `review`, or `deep-explore`)
+3. A lightweight explore/review/deep-explore executor runs the sub-task in **isolated mode**
+4. The sub-agent's findings are returned as text to the main agent — they are **not** shown to the user automatically
+5. The parent agent must act on the findings itself (e.g., write files, make edits)
+
+**Isolation:** The sub-agent runs with a filtered emitter that only passes tool UI events (progress groups, tool actions) to the chat. Streaming text, thinking blocks, token usage, and the final message are all suppressed to prevent interference with the parent agent's timeline. The user sees the sub-agent's tool activity (so they know work is happening) but not its raw output.
+
+**Key constraints:**
+- Sub-agents are **strictly read-only** — they cannot write files, create files, or run terminal commands
+- Sub-agent output goes **only to the parent agent**, not to the user
+- The parent agent is responsible for acting on findings (writing code, making edits, etc.)
 
 **Use cases:**
 - Researching code patterns across a large codebase
 - Investigating a specific subsystem before making changes
 - Running a security review of a component mid-task
+- Deep exploration of a module's call hierarchy before documenting it
 
 ## Thinking Blocks
 

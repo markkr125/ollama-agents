@@ -39,7 +39,10 @@ export function getConfig(): ExtensionConfig {
         DEFAULT_SENSITIVE_FILE_PATTERNS
       ),
       enableThinking: config.get('agent.enableThinking', true),
-      continuationStrategy: config.get('agent.continuationStrategy', 'full') as 'full' | 'standard' | 'minimal'
+      continuationStrategy: config.get('agent.continuationStrategy', 'full') as 'full' | 'standard' | 'minimal',
+      keepAlive: config.get('agent.keepAlive', ''),
+      sessionTitleGeneration: config.get('agent.sessionTitleGeneration', 'firstMessage') as 'currentModel' | 'selectModel' | 'firstMessage',
+      sessionTitleModel: config.get('agent.sessionTitleModel', '')
     }
   };
 }

@@ -373,19 +373,19 @@ suite('ChatMessageHandler – contextFiles in sendMessage', () => {
 suite('ChatMessageHandler – explore/plan/review dispatch', () => {
   /**
    * sendMessage with currentMode='explore' now falls through to chat mode
-   * since explore is no longer a user-facing mode (it's internal-only via /review and plan).
+   * which routes through ExploreExecutor with mode='chat'.
    */
-  test('explore mode value falls through to chat mode', async () => {
+  test('explore mode value falls through to chat mode via ExploreExecutor', async () => {
     const { emitter } = createStubEmitter();
     const state = createStubViewState();
     state.currentMode = 'explore';
     state.currentModel = 'test-model';
 
-    let exploreCalled = false;
+    let capturedMode = '';
     const exploreExecutor = {
       execute: async (_task: string, _config: any, _token: any, _sessionId: string, _model: string, mode: string) => {
-        exploreCalled = true;
-        return { summary: 'Explored', assistantMessage: {} };
+        capturedMode = mode;
+        return { summary: 'Chat response', assistantMessage: {} };
       }
     };
 
@@ -412,9 +412,9 @@ suite('ChatMessageHandler – explore/plan/review dispatch', () => {
 
     await handler.handle({ type: 'sendMessage', text: 'Find the main entry point' });
 
-    // explore is no longer a valid user mode — falls through to chat (not explore executor)
-    assert.ok(!exploreCalled, 'explore executor should NOT be called for "explore" mode (no longer user-facing)');
-    assert.ok(!agentCalled, 'agent executor should NOT be called either');
+    // explore is no longer a valid user mode — falls through to chat (which uses ExploreExecutor with mode='chat')
+    assert.strictEqual(capturedMode, 'chat', 'Should route through ExploreExecutor with mode="chat"');
+    assert.ok(!agentCalled, 'agent executor should NOT be called');
   });
 
   /**
@@ -457,19 +457,19 @@ suite('ChatMessageHandler – explore/plan/review dispatch', () => {
 
   /**
    * sendMessage with currentMode='review' now falls through to chat mode
-   * since review is no longer a user-facing mode (use /review slash command instead).
+   * which routes through ExploreExecutor with mode='chat'.
    */
-  test('review mode value falls through to chat mode', async () => {
+  test('review mode value falls through to chat mode via ExploreExecutor', async () => {
     const { emitter } = createStubEmitter();
     const state = createStubViewState();
     state.currentMode = 'review';
     state.currentModel = 'test-model';
 
-    let exploreCalled = false;
+    let capturedMode = '';
     const exploreExecutor = {
       execute: async (_task: string, _config: any, _token: any, _sessionId: string, _model: string, mode: string) => {
-        exploreCalled = true;
-        return { summary: 'Reviewed', assistantMessage: {} };
+        capturedMode = mode;
+        return { summary: 'Chat response', assistantMessage: {} };
       }
     };
 
@@ -490,8 +490,8 @@ suite('ChatMessageHandler – explore/plan/review dispatch', () => {
     );
 
     await handler.handle({ type: 'sendMessage', text: 'Review security of auth module' });
-    // review is no longer a valid user mode — falls through to chat
-    assert.ok(!exploreCalled, 'explore executor should NOT be called for "review" mode (no longer user-facing)');
+    // review is no longer a valid user mode — falls through to chat (which uses ExploreExecutor with mode='chat')
+    assert.strictEqual(capturedMode, 'chat', 'Should route through ExploreExecutor with mode="chat"');
   });
 
   /**
@@ -599,5 +599,73 @@ suite('ChatMessageHandler – /review slash command', () => {
 
     await handler.handle({ type: 'sendMessage', text: '/security-review check for XSS' });
     assert.ok(exploreCalled, '/security-review should route to explore executor');
+  });
+
+  test('/deep-explore dispatches to explore executor with deep-explore mode', async () => {
+    const { emitter } = createStubEmitter();
+    const state = createStubViewState();
+    state.currentMode = 'agent'; // /deep-explore works in any mode
+    state.currentModel = 'test-model';
+
+    let capturedMode = '';
+    const exploreExecutor = {
+      execute: async (_task: string, _config: any, _token: any, _sessionId: string, _model: string, mode: string) => {
+        capturedMode = mode;
+        return { summary: 'Deep explored', assistantMessage: {} };
+      }
+    };
+
+    const handler = new ChatMessageHandler(
+      state,
+      emitter,
+      createStubSessionController(),
+      createStubSettingsHandler(),
+      createStubAgentExecutor(),
+      exploreExecutor as any,
+      createStubDatabaseService(),
+      createStubClient(),
+      createStubTokenManager(),
+      createStubSessionManager(),
+      createStubGitOps(),
+      createStubModelHandler(),
+      undefined
+    );
+
+    await handler.handle({ type: 'sendMessage', text: '/deep-explore trace all functions in src/main.ts' });
+    assert.strictEqual(capturedMode, 'deep-explore', '/deep-explore should route with mode="deep-explore"');
+  });
+
+  test('chat mode routes through ExploreExecutor with mode=chat', async () => {
+    const { emitter } = createStubEmitter();
+    const state = createStubViewState();
+    state.currentMode = 'chat';
+    state.currentModel = 'test-model';
+
+    let capturedMode = '';
+    const exploreExecutor = {
+      execute: async (_task: string, _config: any, _token: any, _sessionId: string, _model: string, mode: string) => {
+        capturedMode = mode;
+        return { summary: 'Chat response', assistantMessage: {} };
+      }
+    };
+
+    const handler = new ChatMessageHandler(
+      state,
+      emitter,
+      createStubSessionController(),
+      createStubSettingsHandler(),
+      createStubAgentExecutor(),
+      exploreExecutor as any,
+      createStubDatabaseService(),
+      createStubClient(),
+      createStubTokenManager(),
+      createStubSessionManager(),
+      createStubGitOps(),
+      createStubModelHandler(),
+      undefined
+    );
+
+    await handler.handle({ type: 'sendMessage', text: 'What does handleRequest do?' });
+    assert.strictEqual(capturedMode, 'chat', 'Chat mode should route through ExploreExecutor with mode="chat"');
   });
 });

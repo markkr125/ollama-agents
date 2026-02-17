@@ -84,7 +84,8 @@ suite('AgentContextCompactor', () => {
     const contextWindow = 1000; // 70% = 700, well below estimated tokens
 
     const result = await compactor.compactIfNeeded(messages, contextWindow, 'test-model');
-    assert.strictEqual(result, true, 'Should compact');
+    assert.ok(result !== false, 'Should compact');
+    assert.ok(typeof result === 'object' && result.summarizedMessages > 0, 'Should return compaction stats');
     assert.ok(messages.length < originalLength, 'Message array should be shorter after compaction');
 
     // System prompt should still be first
@@ -105,7 +106,8 @@ suite('AgentContextCompactor', () => {
     const tailMessages = messages.slice(-6).map(m => m.content);
 
     const result = await compactor.compactIfNeeded(messages, contextWindow, 'test-model');
-    assert.strictEqual(result, true);
+    assert.ok(result !== false, 'Should compact');
+    assert.ok(typeof result === 'object' && result.summarizedMessages > 0, 'Should return compaction stats');
 
     // After compaction: [system, summary, ...last6] = 8 messages
     assert.strictEqual(messages.length, 8, `Expected 8 messages after compaction, got ${messages.length}`);

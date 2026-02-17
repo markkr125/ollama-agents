@@ -35,10 +35,24 @@ export class AgentSessionMemory {
   private entries: Map<string, MemoryEntry> = new Map();
   private iterationHistory: IterationSummary[] = [];
   private userPreferences: string[] = [];
+  private originalTask: string = '';
 
   constructor(
     private readonly outputChannel: vscode.OutputChannel
   ) {}
+
+  /**
+   * Record the user's original request so the model never loses sight of
+   * what it's supposed to be doing. Called once at the start of a session.
+   */
+  setOriginalTask(task: string): void {
+    this.originalTask = task;
+  }
+
+  /** Returns the original task string set at session start. */
+  getOriginalTask(): string {
+    return this.originalTask;
+  }
 
   // -------------------------------------------------------------------------
   // Public API
@@ -90,6 +104,11 @@ export class AgentSessionMemory {
     if (allFilesWritten.size > 0) parts.push(`${allFilesWritten.size} files written`);
     if (totalErrors > 0) parts.push(`${totalErrors} errors encountered`);
     if (this.userPreferences.length > 0) parts.push(`${this.userPreferences.length} prefs noted`);
+    const functionsExplored = this.get('functions_explored');
+    if (functionsExplored) {
+      const count = functionsExplored.split(', ').length;
+      parts.push(`${count} functions explored`);
+    }
 
     return parts.join(', ');
   }
@@ -99,7 +118,8 @@ export class AgentSessionMemory {
     return JSON.stringify({
       entries: Array.from(this.entries.entries()),
       iterationHistory: this.iterationHistory,
-      userPreferences: this.userPreferences
+      userPreferences: this.userPreferences,
+      originalTask: this.originalTask
     });
   }
 
@@ -119,6 +139,9 @@ export class AgentSessionMemory {
       if (data.userPreferences) {
         memory.userPreferences = data.userPreferences;
       }
+      if (data.originalTask) {
+        memory.originalTask = data.originalTask;
+      }
     } catch {
       // If parsing fails, return empty memory
     }
@@ -133,6 +156,11 @@ export class AgentSessionMemory {
     if (this.entries.size === 0 && this.iterationHistory.length === 0) return '';
 
     const sections: string[] = [];
+
+    // Original task — always first so the model never forgets what it's doing
+    if (this.originalTask) {
+      sections.push(`## Original Task\n${this.originalTask}`);
+    }
 
     // Session notes
     if (this.entries.size > 0) {
@@ -217,6 +245,15 @@ export class AgentSessionMemory {
           summary.keyFindings.push(`Found ${matchCount} matches for "${result.args?.query || 'unknown'}"`);
         }
       }
+
+      // Track code intelligence tool usage for function exploration
+      if (['find_definition', 'get_call_hierarchy', 'find_references',
+        'find_implementations', 'get_type_hierarchy', 'get_hover_info'].includes(result.name)) {
+        const symbolName = result.args?.symbolName || result.args?.symbol || '';
+        if (symbolName && result.success) {
+          summary.keyFindings.push(`${result.name}: definition of "${symbolName}" found`);
+        }
+      }
     }
 
     return summary;
@@ -253,6 +290,40 @@ export class AgentSessionMemory {
       const existing = this.get('files_modified') || '';
       const allWritten = new Set([...existing.split(', ').filter(Boolean), ...summary.filesWritten]);
       this.set('files_modified', Array.from(allWritten).join(', '));
+    }
+
+    // Track functions explored via code intelligence tools
+    this.autoExtractFunctionsExplored(summary);
+  }
+
+  /**
+   * Extract function/symbol names from find_definition, get_call_hierarchy,
+   * and find_references tool calls and track them in memory.
+   */
+  private autoExtractFunctionsExplored(summary: IterationSummary): void {
+    const symbolTools = ['find_definition', 'get_call_hierarchy', 'find_references',
+      'find_implementations', 'get_type_hierarchy', 'get_hover_info'];
+    const hasSymbolTools = summary.toolsCalled.some(t => symbolTools.includes(t));
+    if (!hasSymbolTools) return;
+
+    // The iteration summary doesn't carry tool args, but we can record the tools used.
+    // Detailed function names will be extracted from keyFindings.
+    const existing = this.get('functions_explored') || '';
+    const existingSet = new Set(existing.split(', ').filter(Boolean));
+
+    // Extract function names from key findings (tool results are captured there)
+    for (const finding of summary.keyFindings) {
+      // Look for patterns like "Definition of X found" or "call hierarchy for X"
+      const defMatch = finding.match(/(?:definition|hierarchy|references|implementations)\s+(?:of|for)\s+['"`]?(\w+)['"`]?/i);
+      if (defMatch) {
+        existingSet.add(defMatch[1]);
+      }
+    }
+
+    if (existingSet.size > 0) {
+      // Cap at 50 entries to avoid bloat
+      const arr = Array.from(existingSet).slice(-50);
+      this.set('functions_explored', arr.join(', '));
     }
   }
 }

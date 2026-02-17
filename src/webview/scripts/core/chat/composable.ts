@@ -1,6 +1,10 @@
 import { nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue';
+import { autoScrollLocked } from '../state';
 import type { CommandApprovalItem, FileEditApprovalItem, ProgressItem } from '../types';
 import type { ChatPageProps } from './types';
+
+/** Threshold in pixels — user is "near bottom" if within this distance. */
+const SCROLL_BOTTOM_THRESHOLD = 50;
 
 export function useChatPage(props: ChatPageProps) {
   const localMessagesEl = ref<HTMLDivElement | null>(null);
@@ -117,6 +121,18 @@ export function useChatPage(props: ChatPageProps) {
     props.openFileDiff(approvalId);
   };
 
+  /**
+   * Sticky-scroll: detect whether the user is near the bottom of the messages
+   * container. If they scroll away, lock auto-scroll so streaming doesn't yank
+   * them back. If they scroll back to the bottom, unlock.
+   */
+  const onMessagesScroll = () => {
+    const el = localMessagesEl.value;
+    if (!el) return;
+    const nearBottom = el.scrollTop + el.clientHeight >= el.scrollHeight - SCROLL_BOTTOM_THRESHOLD;
+    autoScrollLocked.value = !nearBottom;
+  };
+
   const onMessagesClick = async (event: MouseEvent) => {
     const target = event.target as HTMLElement | null;
     if (!target) return;
@@ -156,6 +172,7 @@ export function useChatPage(props: ChatPageProps) {
     props.setMessagesEl(localMessagesEl.value);
     if (localMessagesEl.value) {
       localMessagesEl.value.addEventListener('click', onMessagesClick);
+      localMessagesEl.value.addEventListener('scroll', onMessagesScroll, { passive: true });
     }
   });
 
@@ -197,6 +214,7 @@ export function useChatPage(props: ChatPageProps) {
   onBeforeUnmount(() => {
     if (localMessagesEl.value) {
       localMessagesEl.value.removeEventListener('click', onMessagesClick);
+      localMessagesEl.value.removeEventListener('scroll', onMessagesScroll);
     }
   });
 

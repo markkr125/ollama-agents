@@ -48,7 +48,7 @@ describe('ProgressGroup', () => {
   describe('isCompletedFileGroup guard', () => {
 
     test('renders flat view for completed FILE EDIT actions (with checkpointId)', () => {
-      const item = makeProgressItem({}, [
+      const item = makeProgressItem({ title: 'Writing files' }, [
         makeAction({ filePath: 'src/a.ts', checkpointId: 'cp1', text: 'Edited a.ts' }),
         makeAction({ filePath: 'src/b.ts', checkpointId: 'cp1', text: 'Added b.ts' })
       ]);
@@ -98,7 +98,7 @@ describe('ProgressGroup', () => {
   describe('file click handling', () => {
 
     test('clicking action with checkpointId opens diff', async () => {
-      const item = makeProgressItem({}, [
+      const item = makeProgressItem({ title: 'Writing files' }, [
         makeAction({ filePath: 'src/x.ts', checkpointId: 'cp1', text: 'Edited x.ts' })
       ]);
       const wrapper = mount(ProgressGroup, { props: { item, ...defaultProps } });

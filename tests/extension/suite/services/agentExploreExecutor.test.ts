@@ -43,6 +43,7 @@ function createStubToolRegistry(): any {
     { name: 'get_hover_info', description: 'Hover info', schema: { properties: { path: { type: 'string' }, symbolName: { type: 'string' } }, required: ['path'] } },
     { name: 'get_call_hierarchy', description: 'Call hierarchy', schema: { properties: { path: { type: 'string' }, symbolName: { type: 'string' } }, required: ['path'] } },
     { name: 'get_type_hierarchy', description: 'Type hierarchy', schema: { properties: { path: { type: 'string' }, symbolName: { type: 'string' } }, required: ['path'] } },
+    { name: 'run_subagent', description: 'Launch sub-agent', schema: { properties: { task: { type: 'string' }, mode: { type: 'string' } }, required: ['task'] } },
   ];
 
   return {
@@ -114,5 +115,58 @@ suite('AgentExploreExecutor — tool filtering', () => {
     );
     assert.ok(prompt.includes('run_terminal_command:'), 'Review prompt should define run_terminal_command');
     assert.ok(!prompt.includes('write_file:'), 'Review prompt should NOT define write_file');
+  });
+
+  // ── Deep-explore mode ───────────────────────────────────────────
+
+  test('deep-explore tool definitions include run_subagent', () => {
+    const builder = new AgentPromptBuilder(createStubToolRegistry());
+    const defs = builder.getDeepExploreToolDefinitions();
+    const names = new Set(defs.map((d: any) => d.function?.name));
+    assert.ok(names.has('run_subagent'), 'Deep-explore should include run_subagent');
+    assert.ok(names.has('read_file'), 'Deep-explore should include read_file');
+    assert.ok(names.has('find_definition'), 'Deep-explore should include find_definition');
+    assert.ok(!names.has('write_file'), 'Deep-explore should NOT include write_file');
+    assert.ok(!names.has('run_terminal_command'), 'Deep-explore should NOT include run_terminal_command');
+  });
+
+  test('deep-explore tool definitions return exactly 13 tools (12 read-only + subagent)', () => {
+    const builder = new AgentPromptBuilder(createStubToolRegistry());
+    const defs = builder.getDeepExploreToolDefinitions();
+    assert.strictEqual(defs.length, 13, `Expected 13 deep-explore tools, got ${defs.length}`);
+  });
+
+  test('deep-explore prompt includes 4-phase methodology', () => {
+    const builder = new AgentPromptBuilder(createStubToolRegistry());
+    const prompt = builder.buildDeepExplorePrompt(
+      [{ name: 'test', uri: { fsPath: '/test' } } as any],
+      { name: 'test', uri: { fsPath: '/test' } } as any,
+      true
+    );
+    assert.ok(prompt.includes('Phase 1: MAP'), 'Missing Phase 1');
+    assert.ok(prompt.includes('Phase 2: TRACE DEPTH-FIRST'), 'Missing Phase 2');
+    assert.ok(prompt.includes('Phase 3: CROSS-CUTTING'), 'Missing Phase 3');
+    assert.ok(prompt.includes('Phase 4: SYNTHESIZE'), 'Missing Phase 4');
+  });
+
+  // ── Chat mode ───────────────────────────────────────────────────
+
+  test('chat mode uses read-only tool definitions (same as explore)', () => {
+    const builder = new AgentPromptBuilder(createStubToolRegistry());
+    const readOnlyDefs = builder.getReadOnlyToolDefinitions();
+    const names = new Set(readOnlyDefs.map((d: any) => d.function?.name));
+    // Chat mode reuses read-only tools — verify the set matches
+    assert.deepStrictEqual(names, EXPECTED_READ_ONLY, 'Chat mode tools should match read-only set');
+  });
+
+  test('chat mode prompt includes CODE INTELLIGENCE section', () => {
+    const builder = new AgentPromptBuilder(createStubToolRegistry());
+    const prompt = builder.buildChatPrompt(
+      [{ name: 'test', uri: { fsPath: '/test' } } as any],
+      { name: 'test', uri: { fsPath: '/test' } } as any,
+      true
+    );
+    assert.ok(prompt.includes('CODE INTELLIGENCE'), 'Chat prompt should include code intelligence section');
+    assert.ok(prompt.includes('helpful coding assistant'), 'Chat prompt should have chat identity');
   });
 });

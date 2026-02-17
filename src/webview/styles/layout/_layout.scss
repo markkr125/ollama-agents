@@ -24,3 +24,39 @@
     display: flex;
   }
 }
+
+/* Vue error overlay — makes render crashes visible (see main.ts errorHandler) */
+.vue-error-overlay {
+  padding: 16px;
+  margin: 12px;
+  background: var(--vscode-inputValidation-errorBackground, #5a1d1d);
+  border: 1px solid var(--vscode-inputValidation-errorBorder, #be1100);
+  border-radius: 4px;
+  color: var(--vscode-errorForeground, #f48771);
+  font-size: 12px;
+  line-height: 1.5;
+
+  .vue-error-title {
+    font-weight: 600;
+    font-size: 13px;
+    margin-bottom: 8px;
+  }
+
+  .vue-error-detail {
+    font-family: var(--vscode-editor-font-family, monospace);
+    font-size: 11px;
+    white-space: pre-wrap;
+    word-break: break-word;
+    margin: 0 0 8px;
+    padding: 8px;
+    background: rgba(0, 0, 0, 0.2);
+    border-radius: 3px;
+    max-height: 120px;
+    overflow: auto;
+  }
+
+  .vue-error-hint {
+    font-size: 11px;
+    opacity: 0.8;
+  }
+}

@@ -65,6 +65,8 @@ export interface MessageRecord {
   tool_input?: string;
   tool_output?: string;
   progress_title?: string;
+  /** Serialized JSON of native tool_calls array (only on assistant messages). */
+  tool_calls?: string;
   timestamp: number;
   vector?: number[] | Float32Array;
 }

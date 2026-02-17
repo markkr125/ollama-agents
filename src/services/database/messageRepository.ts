@@ -23,19 +23,21 @@ export class MessageRepository {
       tool_input: row.tool_input ?? undefined,
       tool_output: row.tool_output ?? undefined,
       progress_title: row.progress_title ?? undefined,
+      tool_calls: row.tool_calls ?? undefined,
       timestamp: Number(row.timestamp ?? 0)
     };
   }
 
   async addMessage(record: MessageRecord): Promise<void> {
     await dbRun(this.db(),
-      `INSERT INTO messages (id, session_id, role, content, model, tool_name, tool_input, tool_output, progress_title, timestamp)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?);`,
+      `INSERT INTO messages (id, session_id, role, content, model, tool_name, tool_input, tool_output, progress_title, tool_calls, timestamp)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);`,
       [
         record.id, record.session_id, record.role, record.content ?? '',
         record.model ?? null, record.tool_name ?? null,
         record.tool_input ?? null, record.tool_output ?? null,
-        record.progress_title ?? null, record.timestamp
+        record.progress_title ?? null, record.tool_calls ?? null,
+        record.timestamp
       ]
     );
 
@@ -113,6 +115,7 @@ export class MessageRepository {
         tool_input TEXT,
         tool_output TEXT,
         progress_title TEXT,
+        tool_calls TEXT,
         timestamp INTEGER NOT NULL,
         FOREIGN KEY (session_id) REFERENCES sessions(id) ON DELETE CASCADE
       );

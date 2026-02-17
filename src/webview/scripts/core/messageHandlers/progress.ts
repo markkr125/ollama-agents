@@ -1,5 +1,5 @@
 import { scrollToBottom } from '../actions/index';
-import { activeThinkingGroup, currentProgressIndex, currentSessionId } from '../state';
+import { activeThinkingGroup, currentProgressIndex, currentSessionId, progressIndexStack } from '../state';
 import type { ActionItem, AssistantThreadToolsBlock, ProgressItem, ShowToolActionMessage, StartProgressGroupMessage } from '../types';
 import { closeActiveThinkingGroup } from './streaming';
 import { ensureAssistantThread, getOrCreateToolsBlock } from './threadUtils';
@@ -44,6 +44,11 @@ export const handleStartProgressGroup = (msg: StartProgressGroupMessage) => {
   // Write actions go at thread level — not buried inside the thinking group
   if (isWriteGroupTitle(msg.title || '') && activeThinkingGroup.value) {
     closeActiveThinkingGroup();
+  }
+
+  // Push current group index onto stack so nested sub-agent groups don't clobber parent
+  if (currentProgressIndex.value !== null) {
+    progressIndexStack.value.push(currentProgressIndex.value);
   }
 
   const toolsBlock = resolveToolsBlock();
@@ -159,7 +164,8 @@ export const handleFinishProgressGroup = (msg: any) => {
     const lastAction = group.actions[group.actions.length - 1];
     group.lastActionStatus = lastAction?.status || 'success';
   }
-  currentProgressIndex.value = null;
+  // Restore parent group index from the stack (supports nested sub-agent groups)
+  currentProgressIndex.value = progressIndexStack.value.pop() ?? null;
 };
 
 export const handleShowError = (msg: any) => {
@@ -193,5 +199,5 @@ export const handleShowError = (msg: any) => {
   group.lastActionStatus = action.status;
   group.status = 'error';
   group.collapsed = true;
-  currentProgressIndex.value = null;
+  currentProgressIndex.value = progressIndexStack.value.pop() ?? null;
 };

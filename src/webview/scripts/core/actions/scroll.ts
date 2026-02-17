@@ -9,6 +9,11 @@ export const scrollToBottom = () => {
     if (messagesEl.value) {
       messagesEl.value.scrollTop = messagesEl.value.scrollHeight;
     }
+    // Also auto-scroll the inner content of an actively streaming thinking group
+    const streamingContent = document.querySelector('.thinking-group.is-streaming .thinking-group-content');
+    if (streamingContent) {
+      streamingContent.scrollTop = streamingContent.scrollHeight;
+    }
   });
 };
 

@@ -21,6 +21,8 @@ class TimelineBuilder {
   private restoredFcBlocks: AssistantThreadFilesChangedBlock[] = [];
   private currentThread: AssistantThreadItem | null = null;
   private currentGroup: ProgressItem | null = null;
+  /** Stack of parent progress groups — pushed when a nested group starts, popped on finish */
+  private groupStack: ProgressItem[] = [];
 
   /**
    * The active thinking group being built during history reconstruction.
@@ -226,6 +228,11 @@ class TimelineBuilder {
       this.closeThinkingGroup();
     }
 
+    // Push current group onto stack so nested sub-agent groups don't clobber parent
+    if (this.currentGroup) {
+      this.groupStack.push(this.currentGroup);
+    }
+
     const toolsBlock = this.resolveToolsBlock();
     this.currentGroup = {
       id: payload?.groupId || `progress_${messageId}`,
@@ -307,7 +314,8 @@ class TimelineBuilder {
     );
     this.currentGroup.status = this.currentGroup.actions.some(a => a.status === 'error') ? 'error' : 'done';
     this.currentGroup.collapsed = true;
-    this.currentGroup = null;
+    // Restore parent group from the stack (supports nested sub-agent groups)
+    this.currentGroup = this.groupStack.pop() || null;
   }
 
   private handleRequestToolApproval(payload: any, messageId: string): void {

@@ -36,7 +36,8 @@ export class AgentSummaryBuilder {
     agentSession: any,
     accumulatedExplanation: string,
     hasPersistedIterationText: boolean,
-    currentCheckpointId: string | undefined
+    currentCheckpointId: string | undefined,
+    lastThinkingContent?: string
   ): Promise<SummaryResult> {
     const filesChanged = agentSession.filesChanged?.length || 0;
 
@@ -52,26 +53,31 @@ export class AgentSummaryBuilder {
       filesChangedPayload = { checkpointId: currentCheckpointId, files: fileInfos, status: 'pending' };
     }
 
-    // Build tool summary lines for fallback
-    const toolSummaryLines = (agentSession.toolCalls || [])
-      .slice(-6)
-      .map((tool: any) => {
-        const toolName = tool.tool || tool.name || 'tool';
-        const outputLine = (tool.output || '').toString().split('\n').filter(Boolean)[0] || '';
-        const detail = tool.error ? `Error: ${tool.error}` : outputLine;
-        return `- ${toolName}${detail ? `: ${detail}` : ''}`;
-      })
-      .filter(Boolean)
-      .join('\n');
-
-    // If no explanation accumulated during streaming, ask the LLM for one
+    // If no explanation accumulated during streaming, ask the LLM for one.
+    // The LLM summary is always preferred over the raw bullet list because it
+    // produces a human-readable, actionable description of what was done.
+    // The bullet list ("Summary of actions") is only used as a last resort
+    // when the LLM call itself fails (e.g., connection error, empty response).
     let explanation = accumulatedExplanation;
     if (!explanation.trim()) {
-      explanation = await this.generateFallbackSummary(model, agentSession, sessionId);
+      explanation = await this.generateFallbackSummary(model, agentSession, sessionId, lastThinkingContent);
     }
 
-    if (!explanation.trim() && toolSummaryLines) {
-      explanation = `Summary of actions:\n${toolSummaryLines}`;
+    // Last-resort fallback: raw tool bullet list (only if LLM summary failed)
+    if (!explanation.trim()) {
+      const toolSummaryLines = (agentSession.toolCalls || [])
+        .slice(-6)
+        .map((tool: any) => {
+          const toolName = tool.tool || tool.name || 'tool';
+          const outputLine = (tool.output || '').toString().split('\n').filter(Boolean)[0] || '';
+          const detail = tool.error ? `Error: ${tool.error}` : outputLine;
+          return `- ${toolName}${detail ? `: ${detail}` : ''}`;
+        })
+        .filter(Boolean)
+        .join('\n');
+      if (toolSummaryLines) {
+        explanation = `Summary of actions:\n${toolSummaryLines}`;
+      }
     }
 
     // Compose final summary
@@ -141,7 +147,8 @@ export class AgentSummaryBuilder {
   private async generateFallbackSummary(
     model: string,
     agentSession: any,
-    sessionId: string
+    sessionId: string,
+    lastThinkingContent?: string
   ): Promise<string> {
     this.emitter.postMessage({ type: 'showThinking', message: 'Working...', sessionId });
 
@@ -151,6 +158,13 @@ export class AgentSummaryBuilder {
         `Tool: ${tool.tool || tool.name}\nOutput:\n${(tool.output || '').toString().slice(0, 2000)}`
       )
       .join('\n\n');
+
+    // Include condensed thinking content for richer context.
+    // When native tool calling returns empty content, thinking is the only
+    // window into the model's reasoning about what it did and why.
+    const thinkingContext = lastThinkingContent
+      ? `\n\nAgent's reasoning (condensed):\n${lastThinkingContent.slice(0, 1500)}`
+      : '';
 
     try {
       const finalStream = this.client.chat({
@@ -162,7 +176,7 @@ export class AgentSummaryBuilder {
           },
           {
             role: 'user',
-            content: `User request: ${agentSession.task}\n\nRecent tool results:\n${toolResults}\n\nProvide a specific, actionable summary of what was done.`
+            content: `User request: ${agentSession.task}\n\nRecent tool results:\n${toolResults}${thinkingContext}\n\nProvide a specific, actionable summary of what was done.`
           }
         ]
       });

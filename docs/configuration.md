@@ -57,6 +57,9 @@ Each mode also has `temperature` and `maxTokens` settings:
 | `ollamaCopilot.agent.maxActiveSessions` | `1` | 1–5 | Max concurrent generating sessions |
 | `ollamaCopilot.agent.continuationStrategy` | `full` | `full`, `standard`, `minimal` | Detail level of continuation messages between agent iterations. `full` includes iteration budget, files modified, and session memory summary. `standard` includes budget + brief context. `minimal` sends a bare continuation. |
 | `ollamaCopilot.agent.enableThinking` | `true` | — | Enable chain-of-thought reasoning (`think: true` in Ollama API) |
+| `ollamaCopilot.agent.keepAlive` | `""` | — | How long Ollama keeps the model loaded after a request. Examples: `5m`, `30m`, `1h`, `-1` (forever), `0` (unload immediately). Empty = Ollama server default (typically 5m). |
+| `ollamaCopilot.agent.sessionTitleGeneration` | `firstMessage` | `firstMessage`, `currentModel`, `selectModel` | How to generate session titles. `firstMessage` truncates the first message (instant). `currentModel` calls the active model (slower, higher quality). `selectModel` uses a specific small model. |
+| `ollamaCopilot.agent.sessionTitleModel` | `""` | — | Model for title generation when `sessionTitleGeneration` is `selectModel`. If empty, falls back to `firstMessage`. |
 | `ollamaCopilot.agent.sensitiveFilePatterns` | *(see below)* | — | Glob→boolean map for file edit approval |
 
 ### Sensitive File Patterns

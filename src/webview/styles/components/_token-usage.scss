@@ -1,0 +1,164 @@
+// Token Usage Indicator — Copilot-style context window meter
+// Shows a ring chart in the input toolbar that expands to a category breakdown
+
+.token-usage-indicator {
+  display: flex;
+  align-items: center;
+
+  // Color levels
+  --token-ring-bg: var(--vscode-editorWidget-border, rgba(255,255,255,0.1));
+
+  &.level-ok {
+    --token-ring-fg: var(--vscode-charts-green, #89d185);
+  }
+  &.level-warning {
+    --token-ring-fg: var(--vscode-charts-yellow, #cca700);
+  }
+  &.level-danger {
+    --token-ring-fg: var(--vscode-charts-red, #f14c4c);
+  }
+}
+
+.token-ring-btn {
+  background: none;
+  border: none;
+  cursor: pointer;
+  padding: 2px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 50%;
+  transition: background 0.15s;
+
+  &:hover {
+    background: var(--vscode-toolbar-hoverBackground, rgba(255,255,255,0.1));
+  }
+
+  svg {
+    display: block;
+    transform: rotate(-90deg); // start arc from top
+  }
+
+  .usage-arc {
+    transition: stroke-dashoffset 0.4s ease;
+  }
+}
+
+// Popup overlay (click-away)
+.token-usage-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 999;
+}
+
+// Popup panel
+.token-usage-popup {
+  position: fixed;
+  bottom: 60px;
+  right: 16px;
+  z-index: 1000;
+  width: 260px;
+  background: var(--vscode-editorWidget-background, var(--vscode-sideBar-background));
+  border: 1px solid var(--vscode-editorWidget-border, var(--vscode-panel-border));
+  border-radius: 6px;
+  padding: 12px;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.3);
+  font-size: 12px;
+  color: var(--vscode-foreground);
+
+  .popup-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 10px;
+  }
+
+  .popup-title {
+    font-weight: 600;
+    font-size: 13px;
+  }
+
+  .popup-close {
+    background: none;
+    border: none;
+    color: var(--vscode-foreground);
+    cursor: pointer;
+    padding: 2px;
+    opacity: 0.7;
+    &:hover { opacity: 1; }
+  }
+}
+
+// Usage bar
+.usage-bar-container {
+  margin-bottom: 12px;
+}
+
+.usage-bar {
+  height: 6px;
+  background: var(--vscode-editorWidget-border, rgba(255,255,255,0.1));
+  border-radius: 3px;
+  overflow: hidden;
+  margin-bottom: 4px;
+}
+
+.usage-bar-fill {
+  height: 100%;
+  border-radius: 3px;
+  transition: width 0.4s ease;
+
+  &.level-ok { background: var(--vscode-charts-green, #89d185); }
+  &.level-warning { background: var(--vscode-charts-yellow, #cca700); }
+  &.level-danger { background: var(--vscode-charts-red, #f14c4c); }
+}
+
+.usage-bar-label {
+  font-size: 11px;
+  color: var(--vscode-descriptionForeground, var(--muted));
+  font-variant-numeric: tabular-nums;
+}
+
+// Category sections
+.category-section {
+  margin-bottom: 8px;
+
+  &:last-of-type {
+    margin-bottom: 4px;
+  }
+}
+
+.category-group-label {
+  font-weight: 600;
+  font-size: 11px;
+  margin-bottom: 4px;
+  color: var(--vscode-foreground);
+}
+
+.category-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 1px 0 1px 8px;
+  font-size: 11px;
+}
+
+.category-name {
+  color: var(--vscode-descriptionForeground, var(--muted));
+}
+
+.category-pct {
+  font-variant-numeric: tabular-nums;
+  color: var(--vscode-foreground);
+  min-width: 36px;
+  text-align: right;
+}
+
+// Warning text
+.usage-warning {
+  margin-top: 8px;
+  padding-top: 8px;
+  border-top: 1px solid var(--vscode-editorWidget-border, rgba(255,255,255,0.1));
+  font-size: 11px;
+  color: var(--vscode-charts-yellow, #cca700);
+  font-style: italic;
+}

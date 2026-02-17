@@ -207,6 +207,22 @@ export type StreamChunkMessage = {
   model?: string;
 };
 
+export type TokenUsageMessage = {
+  type: 'tokenUsage';
+  sessionId?: string;
+  promptTokens?: number;
+  completionTokens?: number;
+  contextWindow?: number;
+  categories?: {
+    system: number;
+    toolDefinitions: number;
+    messages: number;
+    toolResults: number;
+    files: number;
+    total: number;
+  };
+};
+
 export type StartProgressGroupMessage = {
   type: 'startProgressGroup';
   sessionId?: string;

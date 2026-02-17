@@ -75,6 +75,26 @@ Stores original file content captured BEFORE agent edits, enabling undo:
 5. `updateFileDiffStats()` batch-updates `additions`/`deletions` on `file_snapshots` for a checkpoint
 6. `updateCheckpointDiffStats()` caches `total_additions`/`total_deletions` on `checkpoints`
 
+### SQLite `messages` Table
+
+Stores all chat messages (user, assistant, tool, system) with metadata for session history reconstruction:
+
+| Column | Type | Purpose |
+|--------|------|---------|
+| `id` | `TEXT PRIMARY KEY` | UUID |
+| `session_id` | `TEXT NOT NULL` | FK → sessions (CASCADE delete) |
+| `role` | `TEXT NOT NULL` | `'user'`, `'assistant'`, `'tool'`, `'system'` |
+| `content` | `TEXT NOT NULL DEFAULT ''` | Message text content |
+| `model` | `TEXT` | Model name that generated this message |
+| `tool_name` | `TEXT` | Tool name (on `role: 'tool'` messages) |
+| `tool_input` | `TEXT` | Serialized tool input arguments |
+| `tool_output` | `TEXT` | Tool output text |
+| `progress_title` | `TEXT` | UI event type for `__ui__` messages |
+| `tool_calls` | `TEXT` | Serialized JSON of native `tool_calls` array (only on assistant messages). Used to reconstruct the `assistant(tool_calls) → tool(result)` pairing in multi-turn history. |
+| `timestamp` | `INTEGER NOT NULL` | Creation timestamp |
+
+**Migration:** `tool_calls` column was added via `ensureColumn('messages', 'tool_calls', 'TEXT DEFAULT NULL')` — existing sessions gracefully have NULL values.
+
 ### Session Stats (`getSessionsPendingStats`)
 
 The sessions panel shows `+N -N` badges per session. This is computed by `getSessionsPendingStats()` via a **two-level aggregation query**:

@@ -223,6 +223,8 @@ suite('toolRegistry', () => {
       
       assert.ok(result.error);
       assert.ok(result.error.includes('Unknown tool'));
+      assert.ok(result.error.includes('You can ONLY use these tools'), 'Should list available tools');
+      assert.ok(result.error.includes('read_file'), 'Should mention read_file as available');
     });
   });
 
@@ -240,7 +242,7 @@ suite('toolRegistry', () => {
     test('calls runSubagent callback and returns result', async () => {
       const subagentContext: ToolContext = {
         ...context,
-        runSubagent: async (task: string, mode: 'explore' | 'review') => {
+        runSubagent: async (task: string, mode: 'explore' | 'review' | 'deep-explore') => {
           return `Found 3 TODOs in ${mode} mode: ${task}`;
         }
       };
@@ -259,7 +261,7 @@ suite('toolRegistry', () => {
       let capturedMode = '';
       const subagentContext: ToolContext = {
         ...context,
-        runSubagent: async (task: string, mode: 'explore' | 'review') => {
+        runSubagent: async (task: string, mode: 'explore' | 'review' | 'deep-explore') => {
           capturedMode = mode;
           return 'done';
         }

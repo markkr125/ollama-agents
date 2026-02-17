@@ -467,7 +467,7 @@ suite('toolUIFormatter', () => {
     test('run_subagent action shows rocket icon', () => {
       const info = getToolActionInfo('run_subagent', { task: 'Search for patterns', mode: 'explore' });
       assert.strictEqual(info.actionIcon, '🤖');
-      assert.ok(info.actionText.toLowerCase().includes('sub-agent') || info.actionText.toLowerCase().includes('subagent'));
+      assert.strictEqual(info.actionText, 'Search for patterns');
     });
 
     test('run_subagent review mode shows review detail', () => {

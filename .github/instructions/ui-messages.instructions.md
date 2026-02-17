@@ -57,6 +57,7 @@ description: "Backend-to-frontend and frontend-to-backend message protocol for t
 | `fileChangeResult` | `{checkpointId, filePath, action, success, sessionId}` | Single file kept/undone — remove from widget |
 | `keepUndoResult` | `{checkpointId, action, success, sessionId}` | Keep All / Undo All — remove entire widget block |
 | `reviewChangePosition` | `{checkpointId, current, total, filePath?}` | Update "Change X of Y" counter + active file indicator in widget |
+| `tokenUsage` | `{promptTokens, completionTokens, contextWindow, categories: {system, toolDefinitions, messages, toolResults, files, total}}` | Update token usage indicator (ring + popup). Emitted after each LLM streaming iteration by both executors. **Not persisted** to DB — purely transient UI state. Reset on `generationStarted`, hidden on `generationStopped`. |
 
 ## Frontend → Backend Messages
 

@@ -564,3 +564,25 @@ The chat UI is a Vue app under `src/webview/`:
 **Important**: Vue lifecycle hooks like `onMounted` must be called inside a Vue component's `<script setup>` block. Do NOT place them in plain `.ts` files - they won't execute!
 
 Build output goes to `media/` and is loaded by `ChatViewProvider`.
+
+### Component: `TokenUsageIndicator.vue`
+
+Copilot-style token usage ring + popup. Located in `src/webview/components/chat/components/TokenUsageIndicator.vue`, rendered in `ChatInput.vue`'s `.toolbar-right` (before the send button).
+
+**Props**: `visible`, `promptTokens`, `completionTokens`, `contextWindow`, `categories` (all bound from `tokenUsage` reactive state).
+
+**Ring (20px SVG)**: Usage arc colored by level:
+- Green (`.level-ok`) — <50% usage
+- Yellow (`.level-warning`) — 50–80% usage
+- Red (`.level-danger`) — >80% usage
+
+**Popup** (Teleported to `<body>`, positioned bottom-right):
+- Context Window header with close ✕ button
+- Usage bar: `{used}K / {total}K tokens · {pct}%`
+- Category sections: System (Instructions + Tool Definitions), User Context (Messages + Tool Results + Files)
+- Warning text when >70%: "Quality may decline as limit nears."
+- Closes on Escape key or click-away backdrop
+
+**State**: `tokenUsage` reactive object in `state.ts`. Reset on `generationStarted`, hidden on `generationStopped`. Updated by `handleTokenUsage()` in `streaming.ts`.
+
+**Styles**: `_token-usage.scss` — uses VS Code theme variables (`--vscode-editor-foreground`, `--vscode-badge-background`, etc.).

@@ -83,6 +83,7 @@ export class SessionIndexService {
         tool_input TEXT,
         tool_output TEXT,
         progress_title TEXT,
+        tool_calls TEXT,
         timestamp INTEGER NOT NULL,
         FOREIGN KEY (session_id) REFERENCES sessions(id) ON DELETE CASCADE
       );
@@ -115,6 +116,7 @@ export class SessionIndexService {
     await this.ensureColumn('sessions', 'sensitive_file_patterns', 'TEXT DEFAULT NULL');
     await this.ensureColumn('models', 'capabilities', 'TEXT DEFAULT NULL');
     await this.ensureColumn('models', 'enabled', 'INTEGER NOT NULL DEFAULT 1');
+    await this.ensureColumn('models', 'context_length', 'INTEGER DEFAULT NULL');
 
     // ---- Checkpoints table (file-change tracking per agent request) ----
     await dbExec(this.db, `
@@ -161,6 +163,9 @@ export class SessionIndexService {
 
     // Session memory persistence (serialized JSON of structured agent notes)
     await this.ensureColumn('sessions', 'session_memory', 'TEXT DEFAULT NULL');
+
+    // Tool calls metadata on assistant messages (serialized JSON)
+    await this.ensureColumn('messages', 'tool_calls', 'TEXT DEFAULT NULL');
 
     // Create repositories now that DB is ready
     const getDb = () => this.getDb();
@@ -296,8 +301,8 @@ export class SessionIndexService {
     for (const m of models) {
       const enabled = m.enabled !== undefined ? (m.enabled ? 1 : 0) : (enabledMap.get(m.name) ?? 1);
       await dbRun(this.db!,
-        `INSERT OR REPLACE INTO models (name, size, modified_at, digest, family, families, parameter_size, quantization_level, capabilities, enabled, fetched_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);`,
+        `INSERT OR REPLACE INTO models (name, size, modified_at, digest, family, families, parameter_size, quantization_level, capabilities, enabled, context_length, fetched_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);`,
         [
           m.name,
           m.size ?? 0,
@@ -309,6 +314,7 @@ export class SessionIndexService {
           m.details?.quantization_level ?? null,
           m.capabilities ? JSON.stringify(m.capabilities) : null,
           enabled,
+          (m as any).contextLength ?? null,
           now
         ]
       );
@@ -347,8 +353,9 @@ export class SessionIndexService {
         quantization_level: row.quantization_level ?? undefined
       },
       capabilities,
-      enabled: row.enabled === undefined ? true : !!row.enabled
-    };
+      enabled: row.enabled === undefined ? true : !!row.enabled,
+      contextLength: row.context_length != null ? Number(row.context_length) : undefined
+    } as any;
   }
 
   // ---------------------------------------------------------------------------

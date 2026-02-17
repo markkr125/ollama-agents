@@ -37,6 +37,8 @@ export const applySettings = (msg: any) => {
   settings.toolTimeout = msg.settings.toolTimeout || settings.toolTimeout;
   settings.maxActiveSessions = msg.settings.maxActiveSessions ?? settings.maxActiveSessions;
   settings.enableThinking = msg.settings.enableThinking ?? settings.enableThinking;
+  settings.continuationStrategy = msg.settings.continuationStrategy ?? settings.continuationStrategy;
   settings.temperature = msg.settings.temperature ?? settings.temperature;
   settings.sensitiveFilePatterns = msg.settings.sensitiveFilePatterns ?? settings.sensitiveFilePatterns;
+  settings.storagePath = msg.settings.storagePath ?? settings.storagePath;
 };

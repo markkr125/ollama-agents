@@ -193,9 +193,10 @@ async function searchManual(
 // Format matches for LLM consumption
 // ---------------------------------------------------------------------------
 
-function formatMatches(matches: SearchMatch[], query: string): string {
+function formatMatches(matches: SearchMatch[], query: string, rootPaths: string[]): string {
   if (matches.length === 0) {
-    return `No matches found for "${query}"`;
+    const searchedIn = rootPaths.map(p => vscode.workspace.asRelativePath(p, true)).join(', ');
+    return `No matches for "${query}" in ${rootPaths.length} workspace folder${rootPaths.length !== 1 ? 's' : ''}: ${searchedIn}`;
   }
 
   // Group by file
@@ -236,13 +237,13 @@ function formatMatches(matches: SearchMatch[], query: string): string {
 
 export const searchWorkspaceTool: Tool = {
   name: 'search_workspace',
-  description: 'Search for text or regex patterns across workspace files. Returns matching lines with file paths, line numbers, and surrounding context. Use plain text for exact known strings. Set isRegex=true when: the exact casing/spelling is uncertain, you need case-insensitive matching (e.g. "(?i)error"), you want to match variations or alternatives (e.g. "fetch|request|axios"), or you need pattern matching (e.g. "TODO|FIXME|HACK", "import.*react").',
+  description: 'Search for text or regex patterns across workspace files. Returns matching lines with file paths, line numbers, and surrounding context. IMPORTANT: To find multiple functions/symbols/classes, combine them ALL in ONE call with isRegex=true using | alternation (e.g. query="funcA|funcB|funcC" isRegex=true). Do NOT make separate calls for each symbol. Use plain text (isRegex=false) only for a single known exact string.',
   schema: {
     type: 'object',
     properties: {
-      query: { type: 'string', description: 'Text or regex pattern to search for. For regex: use (?i) for case-insensitive, | for alternatives, .* for wildcards.' },
+      query: { type: 'string', description: 'Text or regex pattern to search for. To find MULTIPLE symbols at once, use regex alternation: "funcA|funcB|funcC" with isRegex=true. For regex: use (?i) for case-insensitive, | for alternatives, .* for wildcards.' },
       filePattern: { type: 'string', description: 'Glob pattern to filter files (e.g. "**/*.ts", "src/**/*.py"). Optional.' },
-      isRegex: { type: 'boolean', description: 'Set to true for regex searches: case-insensitive matching, alternatives (a|b), wildcards, or when unsure of exact spelling. Default: false (plain text, exact match).' },
+      isRegex: { type: 'boolean', description: 'Set to true when searching for multiple symbols (a|b|c), case-insensitive, patterns, or when unsure of exact spelling. Default: false.' },
       maxResults: { type: 'number', description: 'Maximum number of matching lines to return. Default: 30' },
       contextLines: { type: 'number', description: 'Number of context lines before and after each match. Default: 2' }
     },
@@ -276,6 +277,6 @@ export const searchWorkspaceTool: Tool = {
       allMatches = await searchManual(rootPaths, query, { filePattern, maxResults, contextLines });
     }
 
-    return formatMatches(allMatches, query);
+    return formatMatches(allMatches, query, rootPaths);
   }
 };

@@ -47,7 +47,7 @@ import {
     handleShowWarningBanner,
     handleUpdateSessionStatus
 } from './sessions';
-import { handleCollapseThinking, handleFinalMessage, handleStreamChunk, handleStreamThinking, markIterationBoundary } from './streaming';
+import { handleCollapseThinking, handleFinalMessage, handleStreamChunk, handleStreamThinking, handleTokenUsage, markIterationBoundary } from './streaming';
 
 export const handleMessage = (msg: any) => {
   switch (msg.type) {
@@ -197,6 +197,9 @@ export const handleMessage = (msg: any) => {
       break;
     case 'modeChanged':
       currentMode.value = msg.mode;
+      break;
+    case 'tokenUsage':
+      handleTokenUsage(msg);
       break;
   }
 };

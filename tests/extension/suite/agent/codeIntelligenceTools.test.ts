@@ -121,13 +121,13 @@ suite('Code Intelligence Tools', () => {
       assert.ok(result.output?.includes('TODO'), 'Output should contain the query');
     });
 
-    test('returns "No matches found" for nonexistent text', async () => {
+    test('returns "No matches" for nonexistent text', async () => {
       const result = await toolRegistry.execute('search_workspace', {
         query: 'ZZZZNONEXISTENT_STRING_NEVER_FOUND',
       }, context);
 
       assert.ok(!result.error, `Unexpected error: ${result.error}`);
-      assert.ok(result.output?.includes('No matches found'));
+      assert.ok(result.output?.includes('No matches for'), `Expected "No matches for" in output, got: ${result.output}`);
     });
 
     test('respects filePattern filter', async () => {

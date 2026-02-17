@@ -5,6 +5,7 @@ import { SessionManager } from '../../agent/sessionManager';
 import { getConfig, getModeConfig } from '../../config/settings';
 import { AgentChatExecutor } from '../../services/agent/agentChatExecutor';
 import { AgentExploreExecutor, ExploreMode } from '../../services/agent/agentExploreExecutor';
+import { generateSessionTitle } from '../../services/agent/titleGenerator';
 import { DatabaseService } from '../../services/database/databaseService';
 import { getModelCapabilities, ModelCapabilities } from '../../services/model/modelCompatibility';
 import { OllamaClient } from '../../services/model/ollamaClient';
@@ -367,9 +368,32 @@ export class ChatMessageHandler implements IMessageHandler {
     }
 
     if (sessionMessagesSnapshot.length === 0) {
-      const newTitle = text.substring(0, 40) + (text.length > 40 ? '...' : '');
-      await this.databaseService.updateSession(sessionIdAtStart, { title: newTitle });
+      // Always set an immediate fallback title from the message text
+      const fallbackTitle = text.substring(0, 40) + (text.length > 40 ? '...' : '');
+      await this.databaseService.updateSession(sessionIdAtStart, { title: fallbackTitle });
       await this.sessionController.sendSessionsList();
+
+      // If configured, fire-and-forget model-generated title in background.
+      // The fallback title remains until the model responds. If the model
+      // times out (15s) or fails, the fallback stays.
+      const { agent: agentConf } = getConfig();
+      const titleMode = agentConf.sessionTitleGeneration || 'firstMessage';
+      let titleModel: string | undefined;
+      if (titleMode === 'currentModel') {
+        titleModel = this.state.currentModel;
+      } else if (titleMode === 'selectModel' && agentConf.sessionTitleModel) {
+        titleModel = agentConf.sessionTitleModel;
+      }
+      if (titleModel) {
+        generateSessionTitle(this.client, titleModel, text).then(async (title) => {
+          if (title) {
+            try {
+              await this.databaseService.updateSession(sessionIdAtStart, { title });
+              await this.sessionController.sendSessionsList();
+            } catch { /* non-fatal — keep fallback title */ }
+          }
+        }).catch(() => { /* non-fatal — keep fallback title */ });
+      }
     }
 
     // Build context file references for UI display (names only, no content)
@@ -404,17 +428,18 @@ export class ChatMessageHandler implements IMessageHandler {
 
     let finalStatus: ChatSessionStatus = 'completed';
     try {
-      // /review slash command — works in any mode
-      if (this.isReviewCommand(text)) {
-        const reviewPrompt = this.extractReviewPrompt(text, fullPrompt);
-        await this.handleExploreMode(reviewPrompt, token, sessionIdAtStart, 'review', sessionMessagesSnapshot);
+      // Slash commands — work in any mode
+      const slashCommand = this.detectSlashCommand(text);
+      if (slashCommand) {
+        const slashPrompt = this.extractSlashPrompt(text, fullPrompt, slashCommand.prefix);
+        await this.handleExploreMode(slashPrompt, token, sessionIdAtStart, slashCommand.mode, sessionMessagesSnapshot);
       } else if (this.state.currentMode === 'agent') {
         await this.handleAgentMode(fullPrompt, token, sessionIdAtStart, sessionMessagesSnapshot);
       } else if (this.state.currentMode === 'plan') {
         await this.handleExploreMode(fullPrompt, token, sessionIdAtStart, 'plan', sessionMessagesSnapshot);
       } else {
-        // 'chat' mode (also handles legacy 'ask'/'edit' values)
-        await this.handleChatMode(fullPrompt, token, sessionIdAtStart, sessionMessagesSnapshot);
+        // 'chat' mode — routes through ExploreExecutor with read-only tools
+        await this.handleExploreMode(fullPrompt, token, sessionIdAtStart, 'chat', sessionMessagesSnapshot);
       }
     } catch (error: any) {
       finalStatus = 'error';
@@ -428,8 +453,33 @@ export class ChatMessageHandler implements IMessageHandler {
     }
   }
 
+  /**
+   * Detect which workspace folder the user is most likely working in,
+   * based on the active editor URI, then falling back to workspaceFolders[0].
+   */
+  private detectPrimaryWorkspace(): vscode.WorkspaceFolder | undefined {
+    const folders = vscode.workspace.workspaceFolders;
+    if (!folders || folders.length === 0) return undefined;
+    if (folders.length === 1) return folders[0];
+
+    // Prefer the workspace folder that contains the active editor's file
+    const activeUri = vscode.window.activeTextEditor?.document.uri;
+    if (activeUri) {
+      const match = vscode.workspace.getWorkspaceFolder(activeUri);
+      if (match) return match;
+    }
+
+    // Fallback: check all visible editors
+    for (const editor of vscode.window.visibleTextEditors) {
+      const match = vscode.workspace.getWorkspaceFolder(editor.document.uri);
+      if (match) return match;
+    }
+
+    return folders[0];
+  }
+
   private async handleAgentMode(prompt: string, token: vscode.CancellationToken, sessionId: string, sessionMessages?: MessageRecord[]) {
-    const workspace = vscode.workspace.workspaceFolders?.[0];
+    const workspace = this.detectPrimaryWorkspace();
     if (!workspace) {
       this.emitter.postMessage({ type: 'showError', message: 'No workspace folder open', sessionId });
       return;
@@ -501,7 +551,8 @@ export class ChatMessageHandler implements IMessageHandler {
 
     const config: ExecutorConfig = { maxIterations: getConfig().agent.maxIterations, toolTimeout: getConfig().agent.toolTimeout, temperature: 0.7 };
 
-    const result = await this.exploreExecutor.execute(prompt, config, token, sessionId, this.state.currentModel, mode, capabilities, sessionMessages);
+    const primaryWorkspace = this.detectPrimaryWorkspace();
+    const result = await this.exploreExecutor.execute(prompt, config, token, sessionId, this.state.currentModel, mode, capabilities, sessionMessages, /* isSubagent */ false, primaryWorkspace);
 
     if (this.sessionController.getCurrentSessionId() === sessionId) {
       this.sessionController.pushMessage(result.assistantMessage);
@@ -518,73 +569,6 @@ export class ChatMessageHandler implements IMessageHandler {
         });
       } catch { /* non-fatal */ }
     }
-  }
-
-  private async handleChatMode(
-    prompt: string,
-    token: vscode.CancellationToken,
-    sessionId: string,
-    sessionMessages: MessageRecord[]
-  ) {
-    let fullResponse = '';
-
-    const chatMessages = sessionMessages
-      .filter(m => m.role !== 'tool')
-      .map(m => ({ role: m.role as 'user' | 'assistant', content: m.content }));
-
-    const systemPrompt = 'You are a helpful coding assistant. Provide clear, concise answers and code modifications when asked.';
-
-    const stream = this.client.chat({
-      model: this.state.currentModel,
-      messages: [
-        { role: 'system', content: systemPrompt },
-        ...chatMessages,
-        { role: 'user', content: prompt }
-      ]
-    });
-
-    // Show thinking spinner until first token arrives
-    this.emitter.postMessage({ type: 'showThinking', message: 'Thinking...', sessionId });
-    let firstChunk = true;
-
-    let streamTimer: ReturnType<typeof setTimeout> | null = null;
-    const STREAM_THROTTLE_MS = 32; // ~30fps — balances responsiveness with CPU usage
-
-    for await (const chunk of stream) {
-      if (token.isCancellationRequested) break;
-      if (chunk.message?.content) {
-        fullResponse += chunk.message.content;
-        if (firstChunk) {
-          firstChunk = false;
-          this.emitter.postMessage({ type: 'hideThinking', sessionId });
-        }
-        // Throttle: schedule a trailing-edge post instead of posting every token
-        if (!streamTimer) {
-          streamTimer = setTimeout(() => {
-            streamTimer = null;
-            this.emitter.postMessage({ type: 'streamChunk', content: fullResponse, model: this.state.currentModel, sessionId });
-          }, STREAM_THROTTLE_MS);
-        }
-      }
-    }
-
-    // Flush any pending throttled update
-    if (streamTimer) {
-      clearTimeout(streamTimer);
-      streamTimer = null;
-    }
-
-    const assistantMessage = await this.databaseService.addMessage(
-      sessionId,
-      'assistant',
-      fullResponse,
-      { model: this.state.currentModel }
-    );
-    if (this.sessionController.getCurrentSessionId() === sessionId) {
-      this.sessionController.pushMessage(assistantMessage);
-    }
-
-    this.emitter.postMessage({ type: 'finalMessage', content: fullResponse, model: this.state.currentModel, sessionId });
   }
 
   /**
@@ -616,31 +600,43 @@ export class ChatMessageHandler implements IMessageHandler {
   }
 
   // -------------------------------------------------------------------------
-  // /review slash command detection
+  // Slash command detection
   // -------------------------------------------------------------------------
 
+  /** Supported slash commands and their target ExploreMode. */
+  private static readonly SLASH_COMMANDS: Array<{ prefix: string; mode: ExploreMode }> = [
+    { prefix: '/security-review', mode: 'review' },
+    { prefix: '/review', mode: 'review' },
+    { prefix: '/deep-explore', mode: 'deep-explore' },
+  ];
+
   /**
-   * Detect `/review` slash command.
-   * Matches: `/review`, `/review <instructions>`, `/security-review`.
+   * Detect a slash command at the start of the message.
+   * Returns the matching command or undefined.
    */
-  private isReviewCommand(text: string): boolean {
+  private detectSlashCommand(text: string): { prefix: string; mode: ExploreMode } | undefined {
     const trimmed = text.trim().toLowerCase();
-    return trimmed.startsWith('/review') || trimmed.startsWith('/security-review');
+    return ChatMessageHandler.SLASH_COMMANDS.find(cmd => trimmed.startsWith(cmd.prefix));
   }
 
   /**
-   * Extract the review prompt from a slash command, preserving any context prefix.
+   * Extract the prompt from a slash command, preserving any context prefix.
    */
-  private extractReviewPrompt(rawText: string, fullPrompt: string): string {
+  private extractSlashPrompt(rawText: string, fullPrompt: string, commandPrefix: string): string {
     // Remove the slash command prefix from the raw text
-    const stripped = rawText.trim().replace(/^\/(security-)?review\s*/i, '').trim();
-    const reviewTask = stripped || 'Perform a thorough security and quality review of the codebase.';
+    const stripped = rawText.trim().replace(new RegExp(`^${commandPrefix.replace('/', '\\/')}\\s*`, 'i'), '').trim();
+    const defaultPrompts: Record<string, string> = {
+      '/review': 'Perform a thorough security and quality review of the codebase.',
+      '/security-review': 'Perform a thorough security and quality review of the codebase.',
+      '/deep-explore': 'Perform a deep exploration of the provided code, tracing every function call to its source.',
+    };
+    const task = stripped || defaultPrompts[commandPrefix] || 'Explore the codebase.';
 
     // If fullPrompt has context prefix (from attached files), keep it
     if (fullPrompt.length > rawText.length) {
       const contextPrefix = fullPrompt.substring(0, fullPrompt.length - rawText.length);
-      return contextPrefix + reviewTask;
+      return contextPrefix + task;
     }
-    return reviewTask;
+    return task;
   }
 }

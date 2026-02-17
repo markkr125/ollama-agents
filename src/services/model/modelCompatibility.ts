@@ -5,7 +5,7 @@
 // This module maps those strings to the UI-facing ModelCapabilities type and
 // provides helpers for the model-selection quick pick.
 
-import type { Model } from '../../types/ollama';
+import type { Model, ShowModelResponse } from '../../types/ollama';
 
 // ---- Capability names returned by /api/show ---------------------
 // Known values (as of Ollama 0.6+):
@@ -25,6 +25,47 @@ export interface ModelCapabilities {
   tools: boolean;
   vision: boolean;
   embedding: boolean;
+  /** Model's native context window size in tokens, as reported by /api/show model_info. */
+  contextLength?: number;
+}
+
+/**
+ * Extract context length from a ShowModelResponse.
+ * Ollama nests it under architecture-specific keys like `llama.context_length`,
+ * `qwen2.context_length`, `gemma2.context_length`, etc.
+ * Also checks for direct `context_length`, `context_window`, and `num_ctx` keys
+ * for compatibility with OpenWebUI and other proxies.
+ * As a last resort, parses the Modelfile parameters string for `num_ctx`.
+ */
+export function extractContextLength(showResponse: ShowModelResponse): number | undefined {
+  const info = showResponse.model_info;
+  if (info) {
+    // First: standard Ollama format — architecture-prefixed key
+    for (const key of Object.keys(info)) {
+      if (key.endsWith('.context_length')) {
+        const val = Number(info[key]);
+        if (val > 0) return val;
+      }
+    }
+    // Fallback: direct keys (OpenWebUI, custom Modelfiles, etc.)
+    for (const key of ['context_length', 'context_window', 'num_ctx']) {
+      if (info[key] != null) {
+        const val = Number(info[key]);
+        if (val > 0) return val;
+      }
+    }
+  }
+
+  // Last resort: parse Modelfile parameters string for "num_ctx <value>"
+  if (showResponse.parameters) {
+    const match = showResponse.parameters.match(/\bnum_ctx\s+(\d+)/);
+    if (match) {
+      const val = Number(match[1]);
+      if (val > 0) return val;
+    }
+  }
+
+  return undefined;
 }
 
 /**
@@ -38,7 +79,9 @@ export function getModelCapabilities(model: Model): ModelCapabilities {
     fim: caps.includes('insert'),
     tools: caps.includes('tools'),
     vision: caps.includes('vision'),
-    embedding: caps.includes('embedding')
+    embedding: caps.includes('embedding'),
+    // contextLength is populated separately via extractContextLength + DB cache
+    contextLength: (model as any).contextLength ?? undefined
   };
 }
 

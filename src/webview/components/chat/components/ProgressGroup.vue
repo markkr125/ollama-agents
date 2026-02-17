@@ -21,6 +21,21 @@
     </div>
   </div>
 
+  <!-- Flat rendering for sub-agent actions (no collapsible group) -->
+  <div v-else-if="isFlatSubagentGroup" class="flat-subagent-actions">
+    <div v-for="action in item.actions" :key="action.id" class="flat-subagent-action">
+      <span class="action-status" :class="actionStatusClass(action.status)">
+        <span v-if="action.status === 'running'" class="spinner"></span>
+        <span v-else-if="action.status === 'success'">✓</span>
+        <span v-else-if="action.status === 'error'">✗</span>
+        <span v-else>○</span>
+      </span>
+      <span class="subagent-icon">{{ action.icon }}</span>
+      <span class="subagent-text">{{ action.text }}</span>
+      <span v-if="action.detail" class="subagent-mode">{{ action.detail }}</span>
+    </div>
+  </div>
+
   <!-- Normal progress group rendering -->
   <div v-else class="progress-group" :class="{ collapsed: item.collapsed }">
     <div class="progress-header" @click="toggleProgress(item)">
@@ -93,13 +108,17 @@ const props = defineProps<{
  */
 const isFlatFileGroup = computed(() => {
   if (props.item.actions.length === 0) return false;
-  // Write-only groups always render flat
-  if (/\b(writ|modif|creat)/i.test(props.item.title)) return true;
-  // Completed file groups with checkpoints
-  return (
-    props.item.status === 'done' &&
-    props.item.actions.every(a => a.filePath && a.checkpointId)
-  );
+  // Only file-write groups render flat (by group title)
+  return /\b(writ|modif|creat)/i.test(props.item.title);
+});
+
+/**
+ * True when the group contains only sub-agent actions.
+ * Sub-agent actions render flat with full task text visible.
+ */
+const isFlatSubagentGroup = computed(() => {
+  if (props.item.actions.length === 0) return false;
+  return /delegat|subtask|sub-?agent/i.test(props.item.title);
 });
 
 const getVerb = (action: ActionItem): string => {
@@ -115,7 +134,7 @@ const getFileName = (action: ActionItem): string => {
 const parseDiffStats = (detail: string): { adds: string; dels: string } => {
   const match = detail.match(/^(\+\d+)\s*(-\d+)?$/);
   if (match) return { adds: match[1], dels: match[2] || '' };
-  return { adds: detail, dels: '' };
+  return { adds: '', dels: '' };
 };
 
 /** True when detail contains a multi-line listing (e.g. from list_files or search_workspace). */

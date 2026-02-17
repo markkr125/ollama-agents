@@ -15,6 +15,9 @@ export interface AgentConfig {
   sensitiveFilePatterns: Record<string, boolean>;
   enableThinking: boolean;
   continuationStrategy: ContinuationStrategy;
+  keepAlive: string;
+  sessionTitleGeneration: 'currentModel' | 'selectModel' | 'firstMessage';
+  sessionTitleModel: string;
 }
 
 export interface ExtensionConfig {

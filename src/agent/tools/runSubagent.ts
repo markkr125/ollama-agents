@@ -19,11 +19,12 @@ import { Tool } from '../../types/agent';
 export const runSubagentTool: Tool = {
   name: 'run_subagent',
   description:
-    'Launch a sub-agent to perform a complex, multi-step read-only task. ' +
-    'The sub-agent can use all code intelligence tools (read files, search, find definitions, etc.) ' +
-    'to explore the codebase and return findings. Use this when a task requires multiple tool calls ' +
-    'to research or investigate, and the results can be summarized as text. ' +
-    'The sub-agent is read-only — it cannot write files or run commands.',
+    'Launch a read-only sub-agent to perform complex, multi-step research tasks. ' +
+    'The sub-agent can search files, read code, find definitions, trace call hierarchies, and analyze patterns. ' +
+    'It returns its findings as text — the findings are NOT shown to the user automatically. ' +
+    'After receiving the sub-agent\'s result, YOU must act on those findings yourself ' +
+    '(e.g., write files, summarize to the user, or use the information for your next step). ' +
+    'The sub-agent CANNOT write files, run commands, or modify the workspace — it is strictly read-only.',
   schema: {
     type: 'object',
     properties: {
@@ -34,9 +35,9 @@ export const runSubagentTool: Tool = {
       },
       mode: {
         type: 'string',
-        enum: ['explore', 'review'],
+        enum: ['explore', 'review', 'deep-explore'],
         description: 'The mode for the sub-agent. "explore" (default) for general codebase exploration, ' +
-          '"review" for security and quality review.'
+          '"review" for security and quality review, "deep-explore" for recursive depth-first code tracing.'
       }
     },
     required: ['task']
@@ -46,7 +47,8 @@ export const runSubagentTool: Tool = {
     if (!task || typeof task !== 'string') {
       return 'Error: "task" parameter is required and must be a string.';
     }
-    const mode = (params.mode === 'review' ? 'review' : 'explore') as 'explore' | 'review';
+    const validModes = ['explore', 'review', 'deep-explore'] as const;
+    const mode = (validModes.includes(params.mode) ? params.mode : 'explore') as 'explore' | 'review' | 'deep-explore';
 
     if (!context.runSubagent) {
       return 'Error: Sub-agent execution is not available in this context.';

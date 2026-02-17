@@ -73,11 +73,12 @@ export class ToolRegistry {
     const tool = this.tools.get(name);
 
     if (!tool) {
+      const available = Array.from(this.tools.keys()).join(', ');
       return {
         tool: name,
         input: params,
         output: '',
-        error: `Unknown tool: ${name}`,
+        error: `Unknown tool: ${name}. You can ONLY use these tools: ${available}`,
         timestamp: Date.now()
       };
     }

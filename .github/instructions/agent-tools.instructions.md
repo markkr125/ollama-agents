@@ -14,14 +14,14 @@ The agent execution logic lives in `src/services/agent/` and follows a **strict 
 ```
 src/services/agent/
 ├── agentChatExecutor.ts      # ORCHESTRATOR ONLY — wires sub-handlers, runs main loop
-├── agentExploreExecutor.ts   # Read-only executor for explore/plan/review modes
+├── agentExploreExecutor.ts   # Read-only executor for explore/plan/review/deep-explore/chat modes
 ├── agentStreamProcessor.ts   # LLM streaming — chunk accumulation, throttled UI emission
 ├── agentToolRunner.ts        # Tool batch execution — routing, UI events, diff stats, contextual reminders
 ├── agentSummaryBuilder.ts    # Post-loop — summary generation, final message, filesChanged, scratch cleanup
 ├── agentPromptBuilder.ts     # Modular system prompt assembly (native + XML + mode-specific)
 ├── agentContextCompactor.ts  # Conversation summarization when approaching context limit
 ├── agentSessionMemory.ts     # Structured in-memory notes maintained across iterations
-├── projectContext.ts         # Auto-discovers project files (package.json, CLAUDE.md, etc.)
+├── projectContext.ts         # Auto-discovers project files + git context at session start
 ├── approvalManager.ts        # Approval promise lifecycle — waitForApproval / handleResponse
 ├── agentTerminalHandler.ts   # Terminal commands — safety check, approval, execution
 ├── agentFileEditHandler.ts   # File edits — sensitivity check, approval, diff preview
@@ -74,6 +74,25 @@ The executor builds rich continuation messages via `buildContinuationMessage()` 
 
 The method is called at two sites: (1) when the LLM returns text with no tool calls, and (2) as the standard continuation after a tool batch completes.
 
+#### Task Reminder After Native Tool Results
+
+When using **native tool calling**, tool results are pushed as `role: 'tool'` messages. After large tool outputs (e.g., `read_file` returning 500+ lines), smaller models (&le;20B params) can lose sight of the original task and start responding to the file *content* instead of the user's *request*.
+
+To prevent this, **both executors inject a short `role: 'user'` task-anchoring reminder** immediately after the last `role: 'tool'` message:
+
+```
+[Iteration X/Y — N remaining]
+Reminder — your task: <truncated task text>
+Proceed directly with tool calls or [TASK_COMPLETE]. Do NOT restate your plan or summarize what you just did.
+Files modified so far: file1.ts, file2.ts
+```
+
+The reminder includes the iteration budget, the original task (truncated to 200 chars), an anti-restatement instruction, and a list of files already modified (so the model avoids re-editing the same files unnecessarily).
+
+This is only needed for native tool calling. XML-mode tool results are already wrapped in `buildContinuationMessage()` which includes the task reminder. The explore executor uses the same pattern but without iteration budget info.
+
+**Do NOT remove** these reminders. They are the primary defense against mid-task context drift for smaller models.
+
 #### Post-Task Verification Gate
 
 When the LLM emits `[TASK_COMPLETE]`, the executor does NOT immediately accept it. Instead:
@@ -83,17 +102,72 @@ When the LLM emits `[TASK_COMPLETE]`, the executor does NOT immediately accept i
 4. Uses `agentSession._verificationDone` guard to prevent infinite verification loops (only runs once)
 5. If no errors, accepts the completion normally
 
+#### Thinking-in-History Fix (Thinking Model Loop Prevention)
+
+With thinking models (QwQ, DeepSeek-R1 derivatives, etc.), the model's reasoning lives in the `thinking` field while `response` (the `content` field) is often empty or minimal. Ollama includes a `thinking` field on assistant messages in conversation history, but **not all model architectures properly attend to previous turns' thinking content during generation**. This means the model enters the next iteration with no memory of what it planned — and re-derives the same plan from scratch, causing infinite loops.
+
+**The fix**: When the model produces thinking content but empty/minimal response text (`< 200 chars`), the thinking content (truncated to 800 chars, preferring the end which contains conclusions) is injected into the assistant message's `content` field for conversation history. This ensures the model always sees its own previous reasoning.
+
+```typescript
+// Both executors — tool path AND no-tool path:
+let historyContent = response;
+if (thinkingContent && response.trim().length < 200) {
+  const maxLen = 800;
+  historyContent = thinkingContent.length > maxLen
+    ? '...' + thinkingContent.substring(thinkingContent.length - maxLen)
+    : thinkingContent;
+}
+const assistantMsg: any = { role: 'assistant', content: historyContent };
+```
+
+The same `historyContent` is persisted to the DB (not the raw `response`) so that multi-turn session continuations also have context.
+
+**Safety nets**: Thinking/text repetition detection exists as a last-resort break (similarity > 0.6 for thinking, > 0.7 for text, hard-break at 4/5 consecutive hits respectively). These are NOT the primary fix — the root cause fix above should prevent most loops. The duplicate tool call detection (exact match at 50%+ overlap, nudge at 2, break at 3) is a separate reasonable guard.
+
+**Do NOT** lower the safety net thresholds or make them more aggressive — the primary fix handles the root cause. The safety nets are for pathological edge cases only.
+
 ### `AgentExploreExecutor` — Read-Only Modes
 
-Handles explore, plan, and review modes. Key differences from `AgentChatExecutor`:
+Handles explore, plan, review, deep-explore, and chat modes. Key differences from `AgentChatExecutor`:
 - **No checkpoints** — read-only tools don't modify files
 - **No approval flow** — no writes or destructive commands to approve
 - **Tool filtering** — blocks any non-read-only tools the model attempts to call
-- **Lower iteration cap** — defaults to 10 (vs 25 for agent mode)
-- **Mode-specific prompts** via `AgentPromptBuilder.buildExplorePrompt()` / `buildPlanPrompt()` / `buildSecurityReviewPrompt()`
+- **Per-mode iteration caps** — `{ review: 15, 'deep-explore': 20, plan: 10, chat: 10, explore: 10 }` (vs 25 for agent mode)
+- **Mode-specific prompts** via `AgentPromptBuilder.buildExplorePrompt()` / `buildPlanPrompt()` / `buildSecurityReviewPrompt()` / `buildDeepExplorePrompt()` / `buildChatPrompt()`
 - Review mode additionally allows `run_terminal_command` (restricted to git read commands in the prompt)
+- Deep-explore mode additionally allows `run_subagent` (13 tools total: 12 read-only + run_subagent)
 
 **It does NOT own** streaming, tool execution, diff stats, summary generation, terminal safety, or file sensitivity. Those are in the sub-handlers.
+
+#### Sub-Agent Isolation (`isSubagent` Mode)
+
+When `execute()` is called with `isSubagent=true` (via `executeSubagent()`), the executor runs in an **isolated mode** that prevents the sub-agent from polluting the parent agent's webview timeline or session state. This fixes three critical bugs: duplicate assistant messages, leaked thinking text, and hallucinated file writes.
+
+**Filtered emitter pattern:** The executor creates a filtered `emit` helper that only passes through tool UI event types to the parent's webview:
+
+| Passes Through | Suppressed |
+|----------------|------------|
+| `startProgressGroup` | `streamChunk` |
+| `showToolAction` | `iterationBoundary` |
+| `finishProgressGroup` | `thinkingBlock` |
+| `showError` | `collapseThinking` |
+| `showWarningBanner` | `tokenUsage` |
+| | `finalMessage` |
+| | `hideThinking` |
+| | Iteration text DB messages |
+
+**Silent stream processor:** A separate `AgentStreamProcessor` instance is created with a no-op emitter — the sub-agent's streaming text accumulates internally but is never posted to the webview. The user sees progress groups and tool actions (so they know the sub-agent is working) but not the raw LLM output.
+
+**Why each suppression matters:**
+- `finalMessage` — Resets `currentStreamIndex` in the webview, which causes the parent's next `streamChunk` to create a NEW assistant thread instead of continuing the existing one (Pitfall #34).
+- `streamChunk` — Sub-agent's inner monologue would interleave with the parent's timeline text.
+- `thinkingBlock` / `collapseThinking` — Would insert orphan thinking blocks into the parent's assistant message.
+- `tokenUsage` — Would overwrite the parent's token usage indicator with the sub-agent's counts.
+- `iterationBoundary` — Would corrupt the parent's `blockBaseContent` tracking for multi-iteration streaming.
+
+**Sub-agent text return:** The sub-agent's accumulated text is returned as a string to the `run_subagent` tool, which passes it back to the parent agent as a tool result. The parent can then act on the findings.
+
+**Prompt enforcement:** `buildExplorePrompt()` tells the sub-agent it is read-only and its output goes to the calling agent (not the user). `toolUsagePolicy()` tells the parent agent that sub-agent results are returned only to it and the user doesn't see them — the parent must act on the findings itself.
 
 ### `AgentStreamProcessor` — LLM Streaming
 
@@ -108,8 +182,14 @@ interface StreamResult {
   lastThinkingTimestamp: number; // Timestamp (ms) of last thinking token
   thinkingCollapsed: boolean;    // Whether collapseThinking was already sent
   truncated: boolean;            // Whether output was truncated (done_reason === 'length')
+  promptTokens?: number;         // Real prompt_eval_count from Ollama's final chunk
+  completionTokens?: number;     // Real eval_count from Ollama's final chunk
 }
 ```
+
+The `promptTokens` and `completionTokens` fields are captured from the final chunk's `prompt_eval_count` and `eval_count` fields. These are **real token counts** from Ollama (not heuristics). Used by:
+- Both executors to emit `tokenUsage` messages to the webview (category breakdown via `estimateTokensByCategory()`)
+- `agentContextCompactor.ts` `compactIfNeeded()` — uses real `promptTokens` when available, falls back to `estimateTokens()` heuristic for the first iteration
 
 Handles: thinking token accumulation, native tool_call accumulation, text content accumulation with 32ms throttled UI emission, first-chunk gate (≥8 word chars), `[TASK_COMPLETE]` partial-prefix stripping, partial tool call detection (XML fallback freezing), output truncation detection.
 
@@ -198,7 +278,8 @@ Maintains categorized notes (files read, files written, errors, user preferences
 | Method | Purpose |
 |--------|---------|")
 | `addEntry(category, content)` | Add a note under a category |
-| `getCompactSummary()` | One-line summary: "2 files read, 1 files written, 3 errors encountered" |
+| `getCompactSummary()` | One-line summary: "2 files read, 1 files written, 3 errors encountered, 5 functions explored" |
+| `autoExtractFunctionsExplored()` | Extracts function names from keyFindings matching code intelligence tool patterns (find_definition, get_call_hierarchy, etc.) |
 | `toSystemPromptBlock()` | Render notes as `<session_memory>` XML block for system prompt |
 | `toJSON()` | Serialize to JSON for DB persistence |
 | `static fromJSON(json, outputChannel)` | Restore from persisted JSON (gracefully handles invalid input) |
@@ -219,21 +300,42 @@ Triggered when conversation tokens exceed ~70% of the model's context window. Su
 
 The summary is wrapped in `<analysis>` XML tags to encourage structured output.
 
+#### Token Category Breakdown (`estimateTokensByCategory`)
+
+`estimateTokensByCategory(messages, contextWindow)` provides a heuristic breakdown of token usage by role/category. Returns a `TokenCategoryBreakdown` object:
+
+| Category | Source |
+|----------|--------|
+| `system` | System prompt + non-tool-definition instructions |
+| `toolDefinitions` | Tool schemas (extracted from system message JSON blocks) |
+| `messages` | User + assistant conversation messages |
+| `toolResults` | Tool role messages (function call results) |
+| `files` | File content within user messages (heuristic: content >500 chars) |
+| `total` | Sum of all categories |
+
+Used by both executors to emit `tokenUsage` messages after each iteration. The breakdown feeds `TokenUsageIndicator.vue`'s popup panel. The estimates are **heuristic** (word count × 1.3) — the ring/bar use real `promptTokens` when available.
+
 ### `AgentPromptBuilder` — System Prompt Assembly
 
-Builds the system prompt from modular sections. Key behavioral sections (enhanced with anti-sycophancy and professional objectivity rules):
+Builds the system prompt from modular sections. Key behavioral sections (inspired by Claude Code v2.1.42 system prompt patterns):
 
 | Section | Key Rules |
-|---------|-----------|")
-| `toneAndStyle()` | Professional objectivity, no apologizing for tool failures, explicit uncertainty handling |
-| `doingTasks()` | Use `get_diagnostics` to verify after writes, fix errors immediately, complete one logical step end-to-end |
-| `toolUsagePolicy()` | Delegate complex investigation to `run_subagent`, diagnostics are auto-checked after writes, try alternative approaches on failure |
-| `executingWithCare()` | Investigate cause before fixing, verify package names exist before installing |
+|---------|-----------|
+| `toneAndStyle()` | PROFESSIONAL OBJECTIVITY subsection (technical accuracy over validation, investigate truth rather than confirming beliefs), no colons before tool calls, no time estimates or predictions |
+| `doingTasks()` | Match scope to request, trust internal code and framework guarantees (only validate at boundaries), backwards-compatibility hacks ban (no `_var` renames, no `// removed` comments), diagnostics verification after writes |
+| `toolUsagePolicy()` | Explicit parallel tool call policy ("make ALL independent tool calls in parallel. Maximize use of parallel tool calls"), specialized tools over terminal commands, delegate complex investigation to `run_subagent` |
+| `executingWithCare()` | Reversibility and blast radius assessment, investigate unexpected state before deleting, scope-matching: "Match the scope of your actions to what was actually requested" |
 | `completionSignal()` | Verify work compiles/lints cleanly before `[TASK_COMPLETE]`, include brief summary |
 
 Mode-specific prompts:
-- **Plan mode** — includes PLAN QUALITY RULES section (estimated complexity, concrete plans, risk callouts)
-- **Security review** — expanded confidence scale (10/9/8 definitions, Low Confidence appendix)
+- **Plan mode** — includes PLAN QUALITY RULES section (estimated complexity, concrete plans, risk callouts), EXPLORATION STRATEGY references all 12 tools
+- **Security review** — expanded confidence scale (10/9/8 definitions, Low Confidence appendix), CODE INTELLIGENCE FOR SECURITY REVIEW maps all 8 LSP tools to security analysis patterns
+- **Chat mode** — TOOL USAGE guidance, CODE INTELLIGENCE section with all 8 LSP tools, USER-PROVIDED CONTEXT section
+- **Deep-explore mode** — 4-phase methodology (MAP → TRACE DEPTH-FIRST → CROSS-CUTTING ANALYSIS → SYNTHESIZE), CRITICAL RULES (DEPTH OVER BREADTH, DON'T STOP EARLY, FOLLOW IMPORTS, USE PARALLEL CALLS)
+
+Agent mode prompts include:
+- **Debugging strategy** — 6-step systematic approach (REPRODUCE → TRACE → INSPECT → FIND PATTERNS → CHECK IMPLEMENTATIONS → VERIFY) in `codeNavigationStrategy()`
+- **Deep exploration auto-detection** — 4 phases (MAP → TRACE DEPTH-FIRST → CROSS-REFERENCE → SYNTHESIZE) triggered automatically when user requests deep analysis
 
 ### Shared Types Location
 
@@ -357,6 +459,31 @@ The executor supports two tool calling paths, selected based on model capabiliti
 - Do NOT deduplicate tool calls — Ollama sends each as a complete object in its own chunk; dedup would drop legitimate repeated calls
 - `ToolCall` type has optional `id`, `type`, and `function.index` fields — Ollama returns `type: 'function'` and `function.index` but NOT `id`
 
+### tool_calls DB Persistence
+
+Native `tool_calls` metadata is persisted in the `messages` table so that multi-turn session history correctly reconstructs the full `assistant(tool_calls) → tool(result)` pairing. Without this, reloaded sessions would show orphaned `role: 'tool'` results with no preceding assistant tool_calls — causing the model to lose context about which tool produced which result.
+
+**Schema:** The `messages` table has a `tool_calls TEXT` column (nullable). Assistant messages with native tool calls store the serialized JSON array: `JSON.stringify(nativeToolCalls)`.
+
+**Persistence (both executors):** After pushing the assistant message to in-memory history, the executor also persists it to the DB. Note: `historyContent` (not raw `response`) is stored so that thinking model sessions have context on reload:
+```typescript
+if (useNativeTools && nativeToolCalls.length > 0 && sessionId) {
+  const serializedToolCalls = JSON.stringify(nativeToolCalls);
+  await this.databaseService.addMessage(sessionId, 'assistant', historyContent || '', {
+    model, toolCalls: serializedToolCalls
+  });
+}
+```
+
+**History reconstruction:** When loading messages from the DB for a continued session, the history builder reconstructs `tool_calls` from the stored JSON:
+```typescript
+if (m.role === 'assistant' && m.tool_calls) {
+  try { msg.tool_calls = JSON.parse(m.tool_calls); } catch { }
+}
+```
+
+**Filter rule:** Assistant messages with empty `content` but non-empty `tool_calls` are preserved (not filtered out). This is critical because some models emit tool calls with no accompanying text.
+
 ## ToolRegistry (`src/agent/toolRegistry.ts`)
 
 Manages tool registration, lookup, and execution. The registry itself is a slim class (~110 LOC) — individual tool implementations live in `src/agent/tools/`, one file per tool.
@@ -422,7 +549,7 @@ All core agent types are centralised in `src/types/agent.ts`:
 *Sub-agent tool:*
 | Tool | Mechanism | Description |
 |------|-----------|-------------|
-| `run_subagent` | `context.runSubagent()` callback → `AgentExploreExecutor.executeSubagent()` | Launch an independent read-only sub-agent for complex investigation tasks. Accepts `task` (string) and optional `mode` (`'explore'` or `'review'`). Returns the sub-agent's summary text. |
+| `run_subagent` | `context.runSubagent()` callback → `AgentExploreExecutor.executeSubagent()` | Launch an isolated read-only sub-agent for complex investigation tasks. Accepts `task` (string) and optional `mode` (`'explore'`, `'review'`, or `'deep-explore'`). Runs with `isSubagent=true` — suppresses streaming, thinking, token usage, and `finalMessage` to prevent polluting the parent's webview timeline. Only tool UI events (progress groups, tool actions) are visible to the user. Findings are returned as text to the parent agent only — the user does NOT see them. The parent must act on the findings itself. |
 
 **Tool Call Format (in LLM responses):**
 ```xml

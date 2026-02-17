@@ -544,6 +544,7 @@
     color: var(--muted);
     max-height: 300px;
     overflow-y: auto;
+    scrollbar-gutter: stable;
     line-height: 1.5;
     border: 1px solid var(--surface-border);
   }
@@ -557,6 +558,7 @@
     color: var(--muted);
     max-height: 500px;
     overflow-y: auto;
+    scrollbar-gutter: stable;
     line-height: 1.5;
   }
 

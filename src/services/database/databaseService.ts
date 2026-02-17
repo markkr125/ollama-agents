@@ -201,6 +201,7 @@ export class DatabaseService {
       toolInput?: string;
       toolOutput?: string;
       progressTitle?: string;
+      toolCalls?: string;
     } = {}
   ): Promise<MessageRecord> {
     this.ensureReady();
@@ -215,6 +216,7 @@ export class DatabaseService {
       tool_input: options.toolInput,
       tool_output: options.toolOutput,
       progress_title: options.progressTitle,
+      tool_calls: options.toolCalls,
       timestamp: await this.sessionIndex.getNextTimestamp(sessionId)
     };
 

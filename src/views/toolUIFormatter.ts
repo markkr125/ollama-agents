@@ -107,7 +107,7 @@ export function getToolActionInfo(
       };
     case 'run_subagent':
       return {
-        actionText: `Sub-agent: ${(args?.task || '').substring(0, 40)}${(args?.task || '').length > 40 ? '...' : ''}`,
+        actionText: args?.task || 'Subtask',
         actionDetail: args?.mode === 'review' ? 'Security review' : 'Explore',
         actionIcon: '🤖'
       };
@@ -280,8 +280,8 @@ export function getToolSuccessInfo(
       const count = Math.max(0, symbolLines.length - 1); // minus header line
       return {
         actionText: `Found ${count} symbol${count !== 1 ? 's' : ''}`,
-        actionDetail: path ? fileName : '',
-        filePath: path
+        actionDetail: path ? fileName : ''
+        // No filePath — read-only tool has no checkpoint diff to navigate to
       };
     }
     case 'find_definition': {

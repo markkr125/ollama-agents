@@ -1,15 +1,17 @@
 import {
-  ChatRequest,
-  GenerateRequest,
-  Model,
-  ModelsResponse,
-  OllamaAuthError,
-  OllamaConnectionError,
-  OllamaError,
-  ShowModelResponse,
-  StreamChunk
+    ChatRequest,
+    GenerateRequest,
+    Model,
+    ModelsResponse,
+    OllamaAuthError,
+    OllamaConnectionError,
+    OllamaError,
+    RunningModelsResponse,
+    ShowModelResponse,
+    StreamChunk
 } from '../../types/ollama';
 import { parseNDJSON } from '../../utils/streamParser';
+import { extractContextLength } from '../model/modelCompatibility';
 
 export class OllamaClient {
   private baseUrl: string;
@@ -67,7 +69,22 @@ export class OllamaClient {
       }
 
       if (!response.ok && response.status >= 500) {
-        throw new OllamaError(`Server error: ${response.status} ${response.statusText}`, response.status);
+        // Try to extract Ollama's error message from the response body
+        let detail = '';
+        try {
+          const text = await response.text();
+          try {
+            const body = JSON.parse(text);
+            if (body?.error) detail = `: ${body.error}`;
+          } catch {
+            // Not JSON — use the raw text (trimmed, capped)
+            if (text.trim()) detail = `: ${text.trim().substring(0, 500)}`;
+          }
+        } catch { /* completely unreadable body */ }
+        if (!detail) {
+          detail = ' (empty response body — this usually means the model crashed, ran out of memory, or failed to load)';
+        }
+        throw new OllamaError(`Server error: ${response.status} ${response.statusText}${detail}`, response.status);
       }
 
       return response;
@@ -206,12 +223,39 @@ export class OllamaClient {
 
     for (let i = 0; i < models.length; i++) {
       const result = showResults[i];
-      if (result.status === 'fulfilled' && result.value.capabilities) {
-        models[i].capabilities = result.value.capabilities;
+      if (result.status === 'fulfilled') {
+        const show = result.value;
+        if (show.capabilities) {
+          models[i].capabilities = show.capabilities;
+        }
+        const ctxLen = extractContextLength(show);
+        if (ctxLen) {
+          (models[i] as any).contextLength = ctxLen;
+        }
       }
     }
 
     return models;
+  }
+
+  /**
+   * List currently running/loaded models.
+   * Calls GET /api/ps — useful for checking if a model is already loaded
+   * and what effective context length it has.
+   */
+  async getRunningModels(): Promise<RunningModelsResponse> {
+    const url = `${this.baseUrl}/api/ps`;
+
+    const response = await this.fetchWithRetry(url, {
+      method: 'GET',
+      headers: this.getHeaders()
+    });
+
+    if (!response.ok) {
+      throw new OllamaError(`Failed to list running models: ${response.statusText}`, response.status);
+    }
+
+    return await response.json() as RunningModelsResponse;
   }
 
   /**

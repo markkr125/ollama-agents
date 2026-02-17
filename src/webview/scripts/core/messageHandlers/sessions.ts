@@ -12,6 +12,7 @@ import {
   autoApproveCommands,
   autoApproveConfirmVisible,
   autoApproveSensitiveEdits,
+  autoScrollLocked,
   capabilityCheckProgress,
   connectionStatus,
   contextList,
@@ -34,6 +35,7 @@ import {
   modelInfo,
   modelOptions,
   pendingPlanContent,
+  progressIndexStack,
   recreateMessagesStatus,
   scrollTargetMessageId,
   selectedSessionIds,
@@ -47,6 +49,7 @@ import {
   settings,
   temperatureSlider,
   timeline,
+  tokenUsage,
   vscode,
   warningBanner
 } from '../state';
@@ -127,6 +130,7 @@ export const handleLoadSessionMessages = (msg: LoadSessionMessagesMessage) => {
   }
   timeline.value = buildTimelineFromMessages(messages);
   currentProgressIndex.value = null;
+  progressIndexStack.value = [];
   currentStreamIndex.value = null;
   currentAssistantThreadId.value = null;
   if (!scrollTargetMessageId.value) {
@@ -182,6 +186,7 @@ export const handleAddMessage = (msg: any) => {
       });
       currentStreamIndex.value = null;
       currentProgressIndex.value = null;
+      progressIndexStack.value = [];
       currentAssistantThreadId.value = null;
     }
     scrollToBottom();
@@ -216,7 +221,17 @@ export const handleGenerationStarted = (msg: any) => {
     setGenerating(true);
     currentStreamIndex.value = null;
     currentProgressIndex.value = null;
+    progressIndexStack.value = [];
     currentAssistantThreadId.value = null;
+    // Reset scroll lock so auto-scroll is active for the new generation.
+    // The user can still scroll up during streaming to pause auto-scroll.
+    autoScrollLocked.value = false;
+    // Reset token usage indicator for the new generation
+    tokenUsage.visible = false;
+    tokenUsage.promptTokens = 0;
+    tokenUsage.completionTokens = 0;
+    tokenUsage.contextWindow = 0;
+    tokenUsage.categories = { system: 0, toolDefinitions: 0, messages: 0, toolResults: 0, files: 0, total: 0 };
   }
 };
 
@@ -228,6 +243,8 @@ export const handleGenerationStopped = (msg: any) => {
     // visible and clickable after generation ends (don't collapse).
     closeActiveThinkingGroup(/* collapse */ false);
     resetActiveStreamBlock();
+    // Hide the token usage indicator when generation ends
+    tokenUsage.visible = false;
   }
 };
 
@@ -252,6 +269,7 @@ export const handleClearMessages = (msg: any) => {
   filesChangedBlocks.value = [];
   currentStreamIndex.value = null;
   currentProgressIndex.value = null;
+  progressIndexStack.value = [];
   currentAssistantThreadId.value = null;
   pendingPlanContent.value = null;
   closeActiveThinkingGroup();

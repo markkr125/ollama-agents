@@ -36,6 +36,18 @@ export interface ToolBatchResult {
 // ---------------------------------------------------------------------------
 
 export class AgentToolRunner {
+  /** Cache of tool results keyed by `toolName:JSON(args)`. Prevents re-executing
+   *  identical read-only tool calls across iterations. Write operations are never cached. */
+  private readonly toolResultCache = new Map<string, { output: string; iteration: number }>();
+  private currentIteration = 0;
+
+  /** Tools whose output is deterministic within a session (no side effects). */
+  private static readonly CACHEABLE_TOOLS = new Set([
+    'search_workspace', 'list_files', 'find_definition', 'find_references',
+    'find_symbol', 'get_document_symbols', 'get_hover_info', 'get_call_hierarchy',
+    'find_implementations', 'get_type_hierarchy',
+  ]);
+
   constructor(
     private readonly toolRegistry: ToolRegistry,
     private readonly databaseService: DatabaseService,
@@ -65,6 +77,7 @@ export class AgentToolRunner {
     token: vscode.CancellationToken,
     messages?: ChatMessage[]
   ): Promise<ToolBatchResult> {
+    this.currentIteration++;
     const nativeResults: ToolBatchResult['nativeResults'] = [];
     const xmlResults: string[] = [];
     let wroteFiles = false;
@@ -76,6 +89,27 @@ export class AgentToolRunner {
       const isTerminalCommand = toolCall.name === 'run_terminal_command' || toolCall.name === 'run_command';
       const isFileEdit = toolCall.name === 'write_file' || toolCall.name === 'create_file';
       const isReadFile = toolCall.name === 'read_file';
+
+      // --- Tool result cache: return cached output for identical read-only calls ---
+      const cacheKey = `${toolCall.name}:${JSON.stringify(toolCall.args)}`;
+      if (AgentToolRunner.CACHEABLE_TOOLS.has(toolCall.name)) {
+        const cached = this.toolResultCache.get(cacheKey);
+        if (cached) {
+          const cacheNote = `[CACHED — You already called ${toolCall.name} with identical arguments in iteration ${cached.iteration}. The result has NOT changed. Do NOT call this again. Use different search terms, read specific files, or proceed with [TASK_COMPLETE].]`;
+          const cachedOutput = cached.output + '\n\n' + cacheNote;
+
+          const cachePayload = { status: 'success' as const, icon: actionIcon, text: `${actionText} (cached)`, detail: 'Identical call — returning cached result' };
+          this.emitter.postMessage({ type: 'showToolAction', ...cachePayload, sessionId });
+          await this.persistUiEvent(sessionId, 'showToolAction', cachePayload);
+
+          if (useNativeTools) {
+            nativeResults.push({ role: 'tool', content: cachedOutput, tool_name: toolCall.name });
+          } else {
+            xmlResults.push(`Tool result for ${toolCall.name}:\n${cachedOutput}`);
+          }
+          continue;
+        }
+      }
 
       // --- Chunked read_file handling ---
       // ALL read_file calls go through chunked streaming to avoid loading
@@ -271,6 +305,23 @@ export class AgentToolRunner {
 
         const contextualHint = this.buildContextualReminder(toolCall.name, toolCall.args, result.output || '', isFileEdit, autoDiagnosticsText);
         const enrichedOutput = contextualHint ? (result.output || '') + contextualHint : (result.output || '');
+
+        // Cache successful read-only tool results
+        if (AgentToolRunner.CACHEABLE_TOOLS.has(toolCall.name)) {
+          this.toolResultCache.set(cacheKey, { output: result.output || '', iteration: this.currentIteration });
+        }
+
+        // Invalidate read_file cache entries when files are written
+        // (the written file's content has changed, so cached reads are stale)
+        if (isFileEdit && !isSkipped && !isFileEditSkipped) {
+          const writtenPath = String(toolCall.args?.path || toolCall.args?.file || '');
+          for (const [key] of this.toolResultCache) {
+            if (key.startsWith('read_file:') && key.includes(writtenPath)) {
+              this.toolResultCache.delete(key);
+            }
+          }
+        }
+
         if (useNativeTools) {
           nativeResults.push({ role: 'tool', content: enrichedOutput, tool_name: toolCall.name });
         } else {

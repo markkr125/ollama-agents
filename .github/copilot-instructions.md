@@ -147,6 +147,10 @@ These are the mistakes most frequently made when editing this codebase. **Check 
 | 29 | Agent multi-iteration streaming overwrites previous text | `activeStreamBlock` persists between agent iterations. `handleStreamChunk` uses REPLACEMENT semantics (`block.content = msg.content`). Stream processor resets `response = ''` each iteration. Result: iteration 2's text replaces iteration 1's explanation. Only affects non-thinking models with no tool calls (thinking models reset `activeStreamBlock`; tool models insert non-text blocks). | `agentChatExecutor.ts` sends `iterationBoundary` before each iteration ≥ 2. `streaming.ts` saves current block content as `blockBaseContent` and prepends it to subsequent `streamChunk` content. Cleared on block switch (thinking group insertion, tool blocks, etc.). Regression tests in `messageHandlers.test.ts`. |
 | 30 | Context name-format mismatch: basename vs relative path | `EditorContextTracker` sends `fileName` as **basename** (`hello_world.py` via `doc.fileName.split('/').pop()`), but backend `handleAddContext*` handlers use `asRelativePath(uri, true)` for `fileName` (e.g., `demo-project/hello_world.py`). Any dedup that compares these two formats with `===` silently fails — implicit chip stays visible after promoting to explicit context, implicit file gets double-sent on submit. | Dedup checks must compare against **both** `implicitFile.fileName` (basename) AND `implicitFile.relativePath` (workspace-relative). Three locations: `showImplicitFile` computed in `ChatInput.vue`, `handleSend` in `actions/input.ts`, `getEffectiveContext` in `actions/implicitContext.ts`. The `handleAddContextItem` handler in `sessions.ts` uses exact `fileName` match (safe — all backend paths use the same `asRelativePath` format). |
 | 31 | Implicit file chip missing on IDE startup | `EditorContextTracker.sendNow()` was only called in `onDidChangeVisibility`, which doesn't fire on initial `resolveWebviewView`. The `ready` message is the first message the webview sends after mounting — if `sendNow()` isn't called in response, the implicit chip never appears until the user switches files. | `chatView.ts` calls `editorContextTracker?.sendNow()` on the `ready` message inside the `onDidReceiveMessage` callback. This is in `chatView.ts` (not a message handler) because `editorContextTracker` is owned by `ChatViewProvider` and not accessible from handler classes. |
+| 32 | Native tool calling has no task reminder after tool results | For XML mode, tool results are wrapped in `buildContinuationMessage()` which includes the task text. For native tool calling, tool results were pushed as bare `role: 'tool'` messages with NO context. After large `read_file` outputs (500+ lines), smaller models (≤20B) confuse file *content* with their *task* and go off-topic (e.g., start "fixing" code they read instead of documenting it). | Both executors now inject a short `role: 'user'` task-anchoring reminder immediately after the last native tool result: `"Reminder — your task: <text>"`. See `agent-tools.instructions.md` → "Task Reminder After Native Tool Results". Do NOT remove these reminders. |
+| 33 | Deleting composable functions silently kills components | If a function returned from `useChatPage()` (or any composable) is deleted but still referenced in the `return` statement, the `ReferenceError` crashes the entire component at runtime. Vue silently replaces the component with empty content — no visible error unless Developer Tools are open. TypeScript/Vite do NOT catch this at compile time. | The `app.config.errorHandler` in `main.ts` now shows a red error overlay in the webview. The `chatComposable.test.ts` smoke test verifies all returned members are defined. **Always run the composable smoke test after editing composable return statements.** |
+| 34 | Sub-agent `finalMessage` resets webview `currentStreamIndex` | `AgentExploreExecutor.execute()` posts `finalMessage` at the end of its run. When called as a sub-agent inside a parent agent loop, this resets `currentStreamIndex` in the webview — the parent's next `streamChunk` creates a NEW assistant thread instead of continuing the existing one. The user sees a second assistant message appear mid-response. | `execute()` accepts `isSubagent` parameter. When `true`, a filtered emitter suppresses `finalMessage`, `streamChunk`, `thinkingBlock`, `collapseThinking`, `tokenUsage`, `iterationBoundary`, and `hideThinking`. Only tool UI events (`startProgressGroup`, `showToolAction`, `finishProgressGroup`, `showError`, `showWarningBanner`) pass through. A silent `AgentStreamProcessor` with a no-op emitter prevents streaming text from leaking. See `agent-tools.instructions.md` → "Sub-Agent Isolation". |
+| 35 | Thinking models loop because `content` is empty in conversation history | With thinking models (QwQ, DeepSeek-R1 derivatives), the model's plan lives in the `thinking` field while `response`/`content` is empty. Ollama's `thinking` field may not replay properly in all model architectures. The model enters the next iteration with NO memory of what it planned → re-derives the same plan → infinite loop. | Both executors inject thinking content (truncated to 800 chars, preferring the end) into the assistant message's `content` field when `response.trim().length < 200`. The same `historyContent` is persisted to the DB. Safety net: thinking repetition detection (similarity > 0.6, hard-break at 4) is a LAST RESORT only — do NOT make it more aggressive. See `agent-tools.instructions.md` → "Thinking-in-History Fix". |
 
 ---
 
@@ -159,8 +163,8 @@ These are the mistakes most frequently made when editing this codebase. **Check 
 - **Chat Interface** - GitHub Copilot-style sidebar chat with 3 modes (Agent, Plan, Chat)
 - **Agent Mode** - Autonomous coding agent that can read/write files, search, run commands, and spawn sub-agents
 - **Plan Mode** - Tool-powered multi-step implementation planning with "Start Implementation" handoff
-- **Chat Mode** - General Q&A about code (replaces former Ask and Edit modes)
-- **Slash Commands** - `/review` and `/security-review` for on-demand code review in any mode
+- **Chat Mode** - Tool-powered Q&A about code with read-only code intelligence tools (replaces former Ask and Edit modes)
+- **Slash Commands** - `/review`, `/security-review`, and `/deep-explore` for on-demand code review and deep exploration in any mode
 
 ---
 
@@ -212,7 +216,7 @@ src/
 │   ├── tokenManager.ts        # Bearer token management
 │   ├── agent/                 # Agent execution engine (decomposed — see agent-tools instructions)
 │   │   ├── agentChatExecutor.ts     # Thin orchestrator — wires sub-handlers, runs main loop
-│   │   ├── agentExploreExecutor.ts  # Read-only executor for explore/plan/review modes
+│   │   ├── agentExploreExecutor.ts  # Read-only executor for explore/plan/review/deep-explore/chat modes
 │   │   ├── agentStreamProcessor.ts  # Owns streaming: LLM chunk loop, throttled UI, thinking
 │   │   ├── agentToolRunner.ts       # Executes tool batches: progress groups, approvals, results
 │   │   ├── agentSummaryBuilder.ts   # Post-loop: summary generation, final message, filesChanged
@@ -221,7 +225,8 @@ src/
 │   │   ├── agentPromptBuilder.ts    # Modular system prompt assembly (native + XML + mode-specific)
 │   │   ├── agentContextCompactor.ts # Conversation summarization — 7-section structured analysis
 │   │   ├── agentSessionMemory.ts    # Structured notes across iterations with DB persistence
-│   │   ├── projectContext.ts        # Auto-discovers project files (package.json, CLAUDE.md, etc.)
+│   │   ├── projectContext.ts        # Auto-discovers project files + git context at session start
+│   │   ├── titleGenerator.ts        # Fire-and-forget LLM session title generation with timeout
 │   │   ├── approvalManager.ts       # Shared approval state tracking
 │   │   └── checkpointManager.ts     # Checkpoint/snapshot lifecycle
 │   ├── database/              # Persistence layer
@@ -279,7 +284,8 @@ src/
 │   │   │       ├── MarkdownBlock.vue
 │   │   │       ├── PillPicker.vue        # Compact pill button → opens DropdownMenu
 │   │   │       ├── ProgressGroup.vue
-│   │   │       └── SessionControls.vue
+│   │   │       ├── SessionControls.vue
+│   │   │       └── TokenUsageIndicator.vue  # Copilot-style token usage ring + popup
 │   │   └── settings/           # Settings feature folder
 │   │       ├── SettingsPage.vue     # Main page component (entry point)
 │   │       └── components/          # Settings sub-components
@@ -312,7 +318,7 @@ src/
 ├── templates/            # Prompt templates
 ├── types/                # TypeScript type definitions
 │   ├── agent.ts           # Shared agent types: ExecutorConfig, Tool, ToolContext, PersistUiEventFn
-│   ├── ollama.ts          # Ollama API wire format types (ChatMessage, ChatRequest, etc.)
+│   ├── ollama.ts          # Ollama API wire format types (ChatMessage, ChatRequest, OllamaOptions, etc.)
 │   └── session.ts         # Shared chat + agent session types
 └── utils/                # Utility functions
     ├── asyncMutex.ts      # Reusable promise-chain mutex
@@ -459,6 +465,9 @@ Settings are defined in `package.json` under `contributes.configuration`:
 | `ollamaCopilot.agent.toolTimeout` | `30000` | Tool timeout in ms |
 | `ollamaCopilot.agent.maxActiveSessions` | `1` | Max concurrent active sessions |
 | `ollamaCopilot.agent.continuationStrategy` | `full` | Agent continuation detail level: `full` (iteration budget + files + memory), `standard` (budget + brief), `minimal` (bare message) |
+| `ollamaCopilot.agent.keepAlive` | `""` | How long Ollama keeps the model loaded. Empty = server default. Examples: `5m`, `30m`, `-1` (forever) |
+| `ollamaCopilot.agent.sessionTitleGeneration` | `firstMessage` | Session title mode: `firstMessage` (instant, no LLM), `currentModel` (uses active model), `selectModel` (uses specific model) |
+| `ollamaCopilot.agent.sessionTitleModel` | `""` | Model for title generation when `sessionTitleGeneration` is `selectModel` |
 | `ollamaCopilot.storagePath` | `""` | Custom absolute path for database storage. Empty = stable default under `globalStorageUri`. Requires reload. |
 
 ### Model Management
@@ -478,7 +487,7 @@ The agent executor is **decomposed into focused sub-handlers** — each owning a
 | File | Responsibility |
 |------|----------------|
 | `agentChatExecutor.ts` | **Thin orchestrator** — wires sub-handlers, runs main `while` loop, owns `persistUiEvent`, session memory injection, continuation strategy, post-task verification gate, truncation handling |
-| `agentExploreExecutor.ts` | **Read-only executor** — explore/plan/review modes with restricted tool set (no writes, no terminal by default) |
+| `agentExploreExecutor.ts` | **Read-only executor** — explore/plan/review/deep-explore/chat modes with restricted tool set (no writes, no terminal by default) |
 | `agentStreamProcessor.ts` | Owns the `for await (chunk)` streaming loop — thinking accumulation, throttled UI emission, first-chunk gate, output truncation detection (`done_reason === 'length'`) |
 | `agentToolRunner.ts` | Executes a batch of tool calls per iteration — progress groups, approvals, inline diff stats, contextual reminders, auto-diagnostics injection after file writes |
 | `agentSummaryBuilder.ts` | Post-loop finalization — summary generation (LLM or fallback), final message, `filesChanged` event, scratch cleanup |
@@ -487,7 +496,8 @@ The agent executor is **decomposed into focused sub-handlers** — each owning a
 | `agentPromptBuilder.ts` | Modular system prompt assembly — identity, workspace, tone, tasks, tools, safety, navigation. Anti-sycophancy rules, auto-diagnostics guidance. Builds mode-specific prompts (explore/plan/review) |
 | `agentContextCompactor.ts` | Conversation summarization when tokens exceed 70% of context window — 7-section structured analysis (including failed approaches & promises made) |
 | `agentSessionMemory.ts` | Structured in-memory notes (files explored, errors, preferences) with `toJSON()`/`fromJSON()` serialization and DB persistence via `session_memory` column |
-| `projectContext.ts` | Auto-discovers project files (package.json, CLAUDE.md, tsconfig, etc.) at session start and builds `<project_context>` block |
+| `projectContext.ts` | Auto-discovers project files (package.json, CLAUDE.md, tsconfig, etc.) + git context (branch, status, recent commits) at session start and builds `<project_context>` block |
+| `titleGenerator.ts` | Fire-and-forget LLM session title generation with 15s timeout; used by `chatMessageHandler.ts` |
 | `approvalManager.ts` | Shared approval state tracking |
 | `checkpointManager.ts` | Checkpoint/snapshot lifecycle |
 
@@ -688,5 +698,8 @@ npx tsc -p tsconfig.test.json --noEmit
 | LSP symbol position resolution | `src/agent/tools/symbolResolver.ts` (`resolveSymbolPosition`, `formatLocation`) | `agent-tools` instructions |
 | UI file opening from tool results | `src/views/messageHandlers/fileChangeMessageHandler.ts` (`handleOpenWorkspaceFile`, `stripFolderPrefix`) + `src/webview/components/chat/components/ProgressGroup.vue` (click handlers) | `webview-ui` instructions |
 | Tool UI formatting | `src/views/toolUIFormatter.ts` (maps tool names/output → icons, text, listing format) | `agent-tools` + `webview-ui` instructions |
+| Token usage indicator | `src/webview/components/chat/components/TokenUsageIndicator.vue` + `src/webview/scripts/core/messageHandlers/streaming.ts` (`handleTokenUsage`) + `src/services/agent/agentContextCompactor.ts` (`estimateTokensByCategory`) | `ui-messages` + `webview-ui` + `extension-architecture` instructions |
+| Model context window detection | `src/services/model/modelCompatibility.ts` (`extractContextLength`) + `src/services/database/sessionIndexService.ts` (`context_length` column) + `src/services/model/ollamaClient.ts` (`fetchModelsWithCapabilities`) | `extension-architecture` instructions |
+| Running models (API /api/ps) | `src/services/model/ollamaClient.ts` (`getRunningModels`) | `extension-architecture` instructions |
 | Write/edit instructions | `.github/instructions/` + `.github/skills/` | `copilot-custom-instructions` skill |
 | Add a new test | `tests/extension/suite/` or `tests/webview/` | `add-test` skill |
