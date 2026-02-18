@@ -150,7 +150,8 @@ These are the mistakes most frequently made when editing this codebase. **Check 
 | 32 | Native tool calling has no task reminder after tool results | For XML mode, tool results are wrapped in `buildContinuationMessage()` which includes the task text. For native tool calling, tool results were pushed as bare `role: 'tool'` messages with NO context. After large `read_file` outputs (500+ lines), smaller models (≤20B) confuse file *content* with their *task* and go off-topic (e.g., start "fixing" code they read instead of documenting it). | Both executors now inject a short `role: 'user'` task-anchoring reminder immediately after the last native tool result: `"Reminder — your task: <text>"`. See `agent-tools.instructions.md` → "Task Reminder After Native Tool Results". Do NOT remove these reminders. |
 | 33 | Deleting composable functions silently kills components | If a function returned from `useChatPage()` (or any composable) is deleted but still referenced in the `return` statement, the `ReferenceError` crashes the entire component at runtime. Vue silently replaces the component with empty content — no visible error unless Developer Tools are open. TypeScript/Vite do NOT catch this at compile time. | The `app.config.errorHandler` in `main.ts` now shows a red error overlay in the webview. The `chatComposable.test.ts` smoke test verifies all returned members are defined. **Always run the composable smoke test after editing composable return statements.** |
 | 34 | Sub-agent `finalMessage` resets webview `currentStreamIndex` | `AgentExploreExecutor.execute()` posts `finalMessage` at the end of its run. When called as a sub-agent inside a parent agent loop, this resets `currentStreamIndex` in the webview — the parent's next `streamChunk` creates a NEW assistant thread instead of continuing the existing one. The user sees a second assistant message appear mid-response. | `execute()` accepts `isSubagent` parameter. When `true`, a filtered emitter suppresses `finalMessage`, `streamChunk`, `thinkingBlock`, `collapseThinking`, `tokenUsage`, `iterationBoundary`, and `hideThinking`. Only tool UI events (`startProgressGroup`, `showToolAction`, `finishProgressGroup`, `showError`, `showWarningBanner`) pass through. A silent `AgentStreamProcessor` with a no-op emitter prevents streaming text from leaking. See `agent-tools.instructions.md` → "Sub-Agent Isolation". |
-| 35 | Thinking models loop because `content` is empty in conversation history | With thinking models (QwQ, DeepSeek-R1 derivatives), the model's plan lives in the `thinking` field while `response`/`content` is empty. Ollama's `thinking` field may not replay properly in all model architectures. The model enters the next iteration with NO memory of what it planned → re-derives the same plan → infinite loop. | Both executors inject thinking content (truncated to 800 chars, preferring the end) into the assistant message's `content` field when `response.trim().length < 200`. The same `historyContent` is persisted to the DB. Safety net: thinking repetition detection (similarity > 0.6, hard-break at 4) is a LAST RESORT only — do NOT make it more aggressive. See `agent-tools.instructions.md` → "Thinking-in-History Fix". |
+| 35 | Thinking models loop because `content` is empty in conversation history | Many Ollama model templates (chatml, llama3, phi-3, etc.) render ONLY `{{ .Content }}` and silently drop `{{ .Thinking }}`. Custom Go renderers vary: DeepSeek3 renders thinking only for current turn, LFM2 actively strips it, OLMo3/Cogito ignore it. When a thinking model produces `content: ""` + `thinking: "..."`, the model sees blank assistant turns → amnesia → re-derives the same plan → infinite loop. | Both executors use `response \|\| thinkingContent \|\| ''` as `content` in the in-memory messages array. This ensures thinking survives in a field ALL templates render. The `thinking` field is still sent for templates that support it. DB persist uses original `response` (unmodified). TASK_COMPLETE detection also checks `thinkingContent`. See `agent-tools.instructions.md` → "Thinking-in-History". |
+| 36 | `historyContent` persisted to DB causes triple-display on restore | Per iteration, the DB had: (1) `thinkingBlock` UI event, (2) assistant message with `iterationDelta` (clean text), (3) assistant message with `historyContent` containing `[My previous reasoning: ...]` prefix (for tool_calls metadata). On restore, all three render: thinking box + clean text + thinking-as-text. | DB persist now uses `hasPersistedIterationText ? '' : response.trim()` for the tool_calls metadata message — never `historyContent`. `timelineBuilder.handleAssistantMessage` strips `[My previous reasoning: ...]` prefix for backward compat with existing corrupt sessions. |
 
 ---
 
@@ -217,6 +218,7 @@ src/
 │   ├── agent/                 # Agent execution engine (decomposed — see agent-tools instructions)
 │   │   ├── agentChatExecutor.ts     # Thin orchestrator — wires sub-handlers, runs main loop
 │   │   ├── agentExploreExecutor.ts  # Read-only executor for explore/plan/review/deep-explore/chat modes
+│   │   ├── agentDispatcher.ts       # Intent classifier — LLM + heuristic, routes to executor + prompt framing
 │   │   ├── agentStreamProcessor.ts  # Owns streaming: LLM chunk loop, throttled UI, thinking
 │   │   ├── agentToolRunner.ts       # Executes tool batches: progress groups, approvals, results
 │   │   ├── agentSummaryBuilder.ts   # Post-loop: summary generation, final message, filesChanged
@@ -353,8 +355,12 @@ User types message in webview
       ├─ Persist user message to DB (MessageRecord)
       ├─ Post 'addMessage' + 'generationStarted' to webview
       └─ handleAgentMode()
+          ├─ AgentDispatcher.classify(message, model) ← Intent classification
+          │    ├─ analyze + no writes → route to explore executor (deep-explore)
+          │    ├─ analyze + needs writes → route to explore executor (deep-explore-write, adds write_file)
+          │    └─ all other intents → continue to agent executor (intent adapts doingTasks())
           ├─ Create agent session + git branch (if git available)
-          └─ agentChatExecutor.execute()          ← Thin orchestrator
+          └─ agentChatExecutor.execute(dispatch)      ← Thin orchestrator
               ├─ Detect: useNativeTools / useThinking
               └─ LOOP (max iterations):
                   │
@@ -488,6 +494,7 @@ The agent executor is **decomposed into focused sub-handlers** — each owning a
 |------|----------------|
 | `agentChatExecutor.ts` | **Thin orchestrator** — wires sub-handlers, runs main `while` loop, owns `persistUiEvent`, session memory injection, continuation strategy, post-task verification gate, truncation handling |
 | `agentExploreExecutor.ts` | **Read-only executor** — explore/plan/review/deep-explore/chat modes with restricted tool set (no writes, no terminal by default) |
+| `agentDispatcher.ts` | **Intent classifier** — LLM classification (10s timeout), defaults to `mixed` on failure. Routes pure analysis to explore executor; all other intents to agent executor with `intent` passed to `AgentPromptBuilder.doingTasks()` |
 | `agentStreamProcessor.ts` | Owns the `for await (chunk)` streaming loop — thinking accumulation, throttled UI emission, first-chunk gate, output truncation detection (`done_reason === 'length'`) |
 | `agentToolRunner.ts` | Executes a batch of tool calls per iteration — progress groups, approvals, inline diff stats, contextual reminders, auto-diagnostics injection after file writes |
 | `agentSummaryBuilder.ts` | Post-loop finalization — summary generation (LLM or fallback), final message, `filesChanged` event, scratch cleanup |
@@ -678,6 +685,7 @@ npx tsc -p tsconfig.test.json --noEmit
 | Change API behavior | `src/services/model/ollamaClient.ts` | `extension-architecture` instructions |
 | Change inline completions | `src/providers/completionProvider.ts` | — |
 | Modify agent prompts | `src/services/agent/agentPromptBuilder.ts` | `agent-tools` instructions |
+| Modify agent intent classification | `src/services/agent/agentDispatcher.ts` + `src/types/agent.ts` (`TaskIntent`, `DispatchResult`) | `agent-tools` instructions → "Agent Dispatcher — Intent Classification" |
 | Modify agent streaming | `src/services/agent/agentStreamProcessor.ts` | `agent-tools` instructions |
 | Modify agent tool execution | `src/services/agent/agentToolRunner.ts` | `agent-tools` instructions |
 | Modify agent summary/finalization | `src/services/agent/agentSummaryBuilder.ts` | `agent-tools` instructions |

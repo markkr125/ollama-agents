@@ -68,7 +68,7 @@ suite('AgentPromptBuilder', () => {
       const prompt = builder.buildNativeToolPrompt(singleRoot, singleRoot[0]);
 
       // Identity
-      assert.ok(prompt.includes('expert coding agent'), 'Missing identity section');
+      assert.ok(prompt.includes('interactive coding assistant'), 'Missing identity section');
 
       // Workspace info
       assert.ok(prompt.includes('/home/user/myproject'), 'Missing workspace path');
@@ -77,22 +77,21 @@ suite('AgentPromptBuilder', () => {
       assert.ok(prompt.includes('COMMUNICATION RULES'), 'Missing communication rules');
 
       // Task execution
-      assert.ok(prompt.includes('TASK EXECUTION RULES'), 'Missing task execution rules');
+      assert.ok(prompt.includes('TASK EXECUTION'), 'Missing task execution rules');
 
       // Tool usage policy
-      assert.ok(prompt.includes('TOOL USAGE RULES'), 'Missing tool usage rules');
+      assert.ok(prompt.includes('TOOL USAGE'), 'Missing tool usage rules');
 
       // Safety
-      assert.ok(prompt.includes('SAFETY AND REVERSIBILITY'), 'Missing safety rules');
-
-      // Code navigation
-      assert.ok(prompt.includes('CODE NAVIGATION STRATEGY'), 'Missing code navigation');
+      assert.ok(prompt.includes('SAFETY'), 'Missing safety rules');
 
       // User-provided context
       assert.ok(prompt.includes('USER-PROVIDED CONTEXT'), 'Missing user context');
 
-      // Search tips
-      assert.ok(prompt.includes('SEARCH TIPS'), 'Missing search tips');
+      // Native tool prompt uses compact deepExplorationReminder (not verbose codeNavigationStrategy)
+      assert.ok(!prompt.includes('CODE NAVIGATION STRATEGY'), 'Native prompt should not have verbose code nav');
+      assert.ok(!prompt.includes('SEARCH TIPS'), 'Native prompt should not have search tips (in tool descriptions)');
+      assert.ok(prompt.includes('DEEP EXPLORATION'), 'Missing compact deep exploration reminder');
 
       // Scratch dir
       assert.ok(prompt.includes('.ollama-copilot-scratch'), 'Missing scratch dir');
@@ -120,7 +119,7 @@ suite('AgentPromptBuilder', () => {
 
     test('native tool prompt mentions parallel tool calls', () => {
       const prompt = builder.buildNativeToolPrompt(singleRoot, singleRoot[0]);
-      assert.ok(prompt.includes('make ALL independent tool calls in parallel'), 'Missing parallel batching');
+      assert.ok(prompt.includes('parallel'), 'Missing parallel batching');
     });
   });
 
@@ -140,10 +139,10 @@ suite('AgentPromptBuilder', () => {
     test('also includes all mandatory behavioral sections', () => {
       const prompt = builder.buildXmlFallbackPrompt(singleRoot, singleRoot[0]);
 
-      assert.ok(prompt.includes('expert coding agent'), 'Missing identity');
+      assert.ok(prompt.includes('interactive coding assistant'), 'Missing identity');
       assert.ok(prompt.includes('COMMUNICATION RULES'), 'Missing tone');
-      assert.ok(prompt.includes('TASK EXECUTION RULES'), 'Missing tasks');
-      assert.ok(prompt.includes('SAFETY AND REVERSIBILITY'), 'Missing safety');
+      assert.ok(prompt.includes('TASK EXECUTION'), 'Missing tasks');
+      assert.ok(prompt.includes('SAFETY'), 'Missing safety');
       assert.ok(prompt.includes('[TASK_COMPLETE]'), 'Missing completion signal');
     });
   });
@@ -262,7 +261,7 @@ suite('AgentPromptBuilder', () => {
     test('doingTasks section includes diagnostics guidance', () => {
       const prompt = builder.buildNativeToolPrompt(singleRoot, singleRoot[0]);
       assert.ok(prompt.includes('get_diagnostics'), 'Should mention get_diagnostics');
-      assert.ok(prompt.includes('Complete one logical step'), 'Should mention completing steps');
+      assert.ok(prompt.includes('Complete each step'), 'Should mention completing steps');
     });
 
     test('toolUsagePolicy section includes subagent delegation', () => {
@@ -273,7 +272,7 @@ suite('AgentPromptBuilder', () => {
 
     test('executingWithCare includes investigation before fixing', () => {
       const prompt = builder.buildNativeToolPrompt(singleRoot, singleRoot[0]);
-      assert.ok(prompt.includes('investigate the cause'), 'Should mention investigating errors');
+      assert.ok(prompt.includes('investigate before'), 'Should mention investigating before acting');
       assert.ok(prompt.includes('verify the package name'), 'Should mention package verification');
     });
 
@@ -397,21 +396,20 @@ suite('AgentPromptBuilder', () => {
   // ── Agent prompt debugging and deep explore sections ────────────
 
   suite('agent prompt enhancements', () => {
-    test('native prompt includes DEBUGGING STRATEGY section', () => {
+    test('native prompt uses compact deepExplorationReminder (not verbose sections)', () => {
       const prompt = builder.buildNativeToolPrompt(singleRoot, singleRoot[0]);
-      assert.ok(prompt.includes('DEBUGGING STRATEGY'), 'Missing debugging strategy');
-      assert.ok(prompt.includes('TRACE'), 'Missing trace step');
-      assert.ok(prompt.includes('get_call_hierarchy'), 'Missing call hierarchy in debugging');
-      assert.ok(prompt.includes('get_hover_info'), 'Missing hover info in debugging');
+      // Native prompt should use the compact reminder, NOT the verbose codeNavigationStrategy
+      assert.ok(prompt.includes('DEEP EXPLORATION'), 'Missing deep exploration reminder in native prompt');
+      assert.ok(!prompt.includes('DEBUGGING STRATEGY'), 'Verbose debugging strategy should not be in native prompt');
+      assert.ok(!prompt.includes('CODE NAVIGATION STRATEGY'), 'Verbose code nav should not be in native prompt');
     });
 
-    test('native prompt includes DEEP EXPLORATION auto-detection section', () => {
-      const prompt = builder.buildNativeToolPrompt(singleRoot, singleRoot[0]);
-      assert.ok(prompt.includes('DEEP EXPLORATION'), 'Missing deep exploration section');
-      assert.ok(prompt.includes('MAP'), 'Missing map phase');
-      assert.ok(prompt.includes('TRACE DEPTH-FIRST'), 'Missing trace phase');
-      assert.ok(prompt.includes('CROSS-REFERENCE'), 'Missing cross-reference phase');
-      assert.ok(prompt.includes('SYNTHESIZE'), 'Missing synthesize phase');
+    test('XML fallback still includes codeNavigationStrategy sections', () => {
+      const prompt = builder.buildXmlFallbackPrompt(singleRoot, singleRoot[0]);
+      assert.ok(prompt.includes('CODE NAVIGATION STRATEGY'), 'XML fallback should keep code nav');
+      assert.ok(prompt.includes('DEBUGGING STRATEGY'), 'XML fallback should keep debugging');
+      assert.ok(prompt.includes('DEEP EXPLORATION'), 'XML fallback should keep deep exploration');
+      assert.ok(prompt.includes('SEARCH TIPS'), 'XML fallback should keep search tips');
     });
 
     test('plan prompt mentions all 8 LSP tools', () => {

@@ -74,24 +74,25 @@ The executor builds rich continuation messages via `buildContinuationMessage()` 
 
 The method is called at two sites: (1) when the LLM returns text with no tool calls, and (2) as the standard continuation after a tool batch completes.
 
-#### Task Reminder After Native Tool Results
+#### Continuation Message After Tool Results
 
-When using **native tool calling**, tool results are pushed as `role: 'tool'` messages. After large tool outputs (e.g., `read_file` returning 500+ lines), smaller models (&le;20B params) can lose sight of the original task and start responding to the file *content* instead of the user's *request*.
+After tool execution, both native and XML tool-calling paths inject a `role: 'user'` continuation message via `buildContinuationMessage()`. This ensures the `continuationStrategy` setting (`full`/`standard`/`minimal`) works consistently regardless of tool-calling mode.
 
-To prevent this, **both executors inject a short `role: 'user'` task-anchoring reminder** immediately after the last `role: 'tool'` message:
+**`buildContinuationMessage(iteration, maxIterations, sessionMemory, strategy, filesChanged, toolResults?, originalTask?)`** assembles the reminder based on strategy:
 
-```
-[Iteration X/Y — N remaining]
-Reminder — your task: <truncated task text>
-Proceed directly with tool calls or [TASK_COMPLETE]. Do NOT restate your plan or summarize what you just did.
-Files modified so far: file1.ts, file2.ts
-```
+| Strategy | Content |
+|----------|---------|
+| `minimal` | `Continue. Respond with [TASK_COMPLETE] when done.` |
+| `standard` | Task reminder (100 chars) + continue instruction |
+| `full` | Iteration budget + task reminder (200 chars) + files modified + session memory summary + continue instruction |
 
-The reminder includes the iteration budget, the original task (truncated to 200 chars), an anti-restatement instruction, and a list of files already modified (so the model avoids re-editing the same files unnecessarily).
+**Native tool path**: `batchResult.nativeResults` (role: 'tool' messages) are pushed first, then `buildContinuationMessage()` is called with `toolResults=undefined` (tool results are already in the history as separate messages).
 
-This is only needed for native tool calling. XML-mode tool results are already wrapped in `buildContinuationMessage()` which includes the task reminder. The explore executor uses the same pattern but without iteration budget info.
+**XML fallback path**: `batchResult.xmlResults` are joined and passed as `toolResults` (embedded in the continuation message since XML mode uses role: 'user' for everything).
 
-**Do NOT remove** these reminders. They are the primary defense against mid-task context drift for smaller models.
+**No-tools path**: Called with no tool results to nudge the model to continue.
+
+**Do NOT bypass `buildContinuationMessage()`** with hardcoded reminders — the whole point is that the user's `continuationStrategy` setting controls the verbosity.
 
 #### Post-Task Verification Gate
 
@@ -102,29 +103,31 @@ When the LLM emits `[TASK_COMPLETE]`, the executor does NOT immediately accept i
 4. Uses `agentSession._verificationDone` guard to prevent infinite verification loops (only runs once)
 5. If no errors, accepts the completion normally
 
-#### Thinking-in-History Fix (Thinking Model Loop Prevention)
+#### Thinking-in-History (Content Fallback + `thinking` Field)
 
-With thinking models (QwQ, DeepSeek-R1 derivatives, etc.), the model's reasoning lives in the `thinking` field while `response` (the `content` field) is often empty or minimal. Ollama includes a `thinking` field on assistant messages in conversation history, but **not all model architectures properly attend to previous turns' thinking content during generation**. This means the model enters the next iteration with no memory of what it planned — and re-derives the same plan from scratch, causing infinite loops.
+With thinking models (QwQ, DeepSeek-R1 derivatives, etc.), the model's reasoning lives in the `thinking` field while `response` (the `content` field) is often empty. Ollama supports a `thinking` field on assistant messages, **but whether templates render it is model-specific**.
 
-**The fix**: When the model produces thinking content but empty/minimal response text (`< 200 chars`), the thinking content (truncated to 800 chars, preferring the end which contains conclusions) is injected into the assistant message's `content` field for conversation history. This ensures the model always sees its own previous reasoning.
+**The problem**: Many Ollama model templates (chatml, llama3, phi-3, gemma, vicuna, alpaca, zephyr, etc.) render ONLY `{{ .Content }}` for assistant messages and silently drop `{{ .Thinking }}`. Custom Go renderers vary: Qwen3VL renders thinking, DeepSeek3 renders it only for the current turn, LFM2 actively strips it from past turns, OLMo3/Cogito ignore it entirely. When `content` is empty, the model sees blank assistant turns → loses its own reasoning → re-derives the same plan → infinite loops.
+
+**The fix**: Both executors use `response || thinkingContent` as the `content` value for the in-memory conversation history. This ensures the model's reasoning is in a field ALL templates render. The `thinking` field is also sent for templates that support it (belt and suspenders). DB persist is unaffected — uses original `response`.
 
 ```typescript
 // Both executors — tool path AND no-tool path:
-let historyContent = response;
-if (thinkingContent && response.trim().length < 200) {
-  const maxLen = 800;
-  historyContent = thinkingContent.length > maxLen
-    ? '...' + thinkingContent.substring(thinkingContent.length - maxLen)
-    : thinkingContent;
-}
-const assistantMsg: any = { role: 'assistant', content: historyContent };
+const assistantMsg: any = { role: 'assistant', content: response || thinkingContent || '' };
+if (thinkingContent) assistantMsg.thinking = thinkingContent;
+messages.push(assistantMsg); // In-memory only — NOT persisted to DB
 ```
 
-The same `historyContent` is persisted to the DB (not the raw `response`) so that multi-turn session continuations also have context.
+**Behavior by template type:**
+- Template renders only `{{ .Content }}` (most templates): Model sees thinking as content. Loop prevented.
+- Template renders `{{ .Thinking }}` + `{{ .Content }}`: Model sees thinking twice (redundant but harmless).
+- Template renders only `{{ .Thinking }}`: Model sees thinking. Content fallback is unused.
 
-**Safety nets**: Thinking/text repetition detection exists as a last-resort break (similarity > 0.6 for thinking, > 0.7 for text, hard-break at 4/5 consecutive hits respectively). These are NOT the primary fix — the root cause fix above should prevent most loops. The duplicate tool call detection (exact match at 50%+ overlap, nudge at 2, break at 3) is a separate reasonable guard.
+**TASK_COMPLETE detection**: Also checks `thinkingContent` — thinking models may signal completion only in their thinking field (not in response content).
 
-**Do NOT** lower the safety net thresholds or make them more aggressive — the primary fix handles the root cause. The safety nets are for pathological edge cases only.
+**CRITICAL**: The modified content is for the in-memory `messages` array only. DB persist uses original `response` (or empty string if text was already persisted via `iterationDelta`). Thinking content is separately persisted as a `thinkingBlock` UI event. `timelineBuilder.ts` has a backward-compat strip of the `[My previous reasoning: ...]` prefix for old sessions.
+
+**No repetition safety nets**: All similarity-based repetition detection has been removed. The content fallback addresses the root cause (model amnesia), not the symptom (repeated output).
 
 ### `AgentExploreExecutor` — Read-Only Modes
 
@@ -317,14 +320,21 @@ Used by both executors to emit `tokenUsage` messages after each iteration. The b
 
 ### `AgentPromptBuilder` — System Prompt Assembly
 
-Builds the system prompt from modular sections. Key behavioral sections (inspired by Claude Code v2.1.42 system prompt patterns):
+Builds the system prompt from modular sections. Key design principle: **for native tool calling models, tool-specific guidance lives in the tool descriptions (sent via `tools[]` API), NOT in the system prompt.** The system prompt focuses on behavioral rules only.
+
+**Native tool prompt sections** (`buildNativeToolPrompt()`):
+- `identity()`, `workspaceInfo()`, `projectContextBlock`, `toneAndStyle()`, `doingTasks()`, `toolUsagePolicy()`, `executingWithCare()`, `userProvidedContext()`, `scratchpadDirectory()`, `completionSignal()`
+- Does NOT include `codeNavigationStrategy()` or `searchTips()` — these duplicate what's already in tool descriptions
+
+**XML fallback prompt** (`buildXmlFallbackPrompt()`):
+- Includes ALL of the above PLUS `toolDefinitions()`, `toolCallFormat()`, `codeNavigationStrategy()`, `searchTips()` — because XML models don't receive `tools[]`
 
 | Section | Key Rules |
 |---------|-----------|
-| `toneAndStyle()` | PROFESSIONAL OBJECTIVITY subsection (technical accuracy over validation, investigate truth rather than confirming beliefs), no colons before tool calls, no time estimates or predictions |
-| `doingTasks()` | Match scope to request, trust internal code and framework guarantees (only validate at boundaries), backwards-compatibility hacks ban (no `_var` renames, no `// removed` comments), diagnostics verification after writes |
-| `toolUsagePolicy()` | Explicit parallel tool call policy ("make ALL independent tool calls in parallel. Maximize use of parallel tool calls"), specialized tools over terminal commands, delegate complex investigation to `run_subagent` |
-| `executingWithCare()` | Reversibility and blast radius assessment, investigate unexpected state before deleting, scope-matching: "Match the scope of your actions to what was actually requested" |
+| `toneAndStyle()` | PROFESSIONAL OBJECTIVITY (technical accuracy over validation, investigate truth rather than confirming), no sycophantic openers, no time estimates |
+| `doingTasks()` | Read before writing, match scope to request, keep it simple (no premature abstractions), verify with get_diagnostics, complete each step end-to-end |
+| `toolUsagePolicy()` | Parallel tool calls, specialized tools over terminal, sub-agent delegation for complex research, auto-diagnostics after writes |
+| `executingWithCare()` | Reversibility assessment, investigate before destroying, read error output before fixing |
 | `completionSignal()` | Verify work compiles/lints cleanly before `[TASK_COMPLETE]`, include brief summary |
 
 Mode-specific prompts:
@@ -332,10 +342,6 @@ Mode-specific prompts:
 - **Security review** — expanded confidence scale (10/9/8 definitions, Low Confidence appendix), CODE INTELLIGENCE FOR SECURITY REVIEW maps all 8 LSP tools to security analysis patterns
 - **Chat mode** — TOOL USAGE guidance, CODE INTELLIGENCE section with all 8 LSP tools, USER-PROVIDED CONTEXT section
 - **Deep-explore mode** — 4-phase methodology (MAP → TRACE DEPTH-FIRST → CROSS-CUTTING ANALYSIS → SYNTHESIZE), CRITICAL RULES (DEPTH OVER BREADTH, DON'T STOP EARLY, FOLLOW IMPORTS, USE PARALLEL CALLS)
-
-Agent mode prompts include:
-- **Debugging strategy** — 6-step systematic approach (REPRODUCE → TRACE → INSPECT → FIND PATTERNS → CHECK IMPLEMENTATIONS → VERIFY) in `codeNavigationStrategy()`
-- **Deep exploration auto-detection** — 4 phases (MAP → TRACE DEPTH-FIRST → CROSS-REFERENCE → SYNTHESIZE) triggered automatically when user requests deep analysis
 
 ### Shared Types Location
 
@@ -368,15 +374,49 @@ this.terminalHandler = new AgentTerminalHandler(..., persistFn, ...);
 | Making `AgentStreamProcessor` aware of tool execution | Violates streaming ↔ execution boundary | Stream processor returns `StreamResult`, executor decides what to do with it. Exception: the stream processor MAY emit `collapseThinking` and transient `showThinking` spinners on tool_call detection (UI-only, no persistence) |
 | Putting DB persistence logic in stream processor | Stream processor should only handle UI emission | Persistence belongs in executor or tool runner |
 
+## Agent Dispatcher — Intent Classification
+
+Before the agent loop starts, `AgentDispatcher` classifies the user's intent to determine executor routing and system prompt framing. This prevents intent misclassification (e.g., model refactoring code when the user asked for documentation).
+
+**File**: `src/services/agent/agentDispatcher.ts`
+
+**Classification flow**:
+1. **LLM classification** (no timeout — waits for model response, caller shows spinner via `showThinking`) — sends the user message to the model with a short classification prompt, expects JSON: `{"intent":"analyze|modify|create|mixed","needsWrite":true|false,"reasoning":"..."}`. Uses `keep_alive: '30m'` to keep the model loaded.
+2. **Fallback** — if LLM errors (network failure, malformed response), defaults to `mixed` intent with `needsWrite=true` (unrestricted agent). No keyword heuristics — the LLM is the sole classifier.
+
+**Routing table**:
+
+| Intent | `needsWrite` | Route | Prompt |
+|--------|-------------|-------|--------|
+| `analyze` | `false` | `agentExploreExecutor` (deep-explore mode) | Deep exploration, read-only tools |
+| `analyze` | `true` | `agentExploreExecutor` (deep-explore-write mode) | Deep exploration + write_file for docs output |
+| `modify` | any | `agentChatExecutor` | `doingTasks(modify)` — targeted changes only |
+| `create` | any | `agentChatExecutor` | `doingTasks(create)` — match existing patterns |
+| `mixed` | any | `agentChatExecutor` | `doingTasks(mixed)` — full default rules |
+
+**`DispatchResult`** (from `src/types/agent.ts`):
+- `intent: TaskIntent` — classified intent
+- `needsWrite: boolean` — whether the task requires file creation
+- `confidence: number` — 0-1 (LLM ≈ 0.85, 0 = classification failed)
+- `reasoning: string` — diagnostic explanation
+
+The `intent` is passed through to `AgentPromptBuilder.doingTasks(intent)` which adapts its existing TASK EXECUTION section — no separate framing text is generated.
+
+**Anti-pattern**: Do NOT bypass the dispatcher for agent mode messages. All messages in agent mode must go through `dispatcher.classify()` before reaching an executor.
+
 ## Agent Execution Flow
 
 When user sends a message in Agent mode:
 
 ```
 1. handleAgentMode()
+   ├─ AgentDispatcher.classify() — intent classification
+   │   ├─ analyze + no writes → route to explore executor (deep-explore)
+   │   ├─ analyze + needs writes → route to explore executor (deep-explore-write, adds write_file)
+   │   └─ all other intents → continue to agent executor
    ├─ Create agent session
    ├─ Create git branch (if enabled)
-   └─ agentChatExecutor.execute()   ← AgentChatExecutor.execute() method
+   └─ agentChatExecutor.execute(dispatch)   ← AgentChatExecutor.execute() method
        ├─ Detect tool calling mode:
        │   ├─ Native: model has 'tools' capability → uses Ollama tools API
        │   └─ XML fallback: no capability → parses <tool_call> from text
@@ -465,11 +505,12 @@ Native `tool_calls` metadata is persisted in the `messages` table so that multi-
 
 **Schema:** The `messages` table has a `tool_calls TEXT` column (nullable). Assistant messages with native tool calls store the serialized JSON array: `JSON.stringify(nativeToolCalls)`.
 
-**Persistence (both executors):** After pushing the assistant message to in-memory history, the executor also persists it to the DB. Note: `historyContent` (not raw `response`) is stored so that thinking model sessions have context on reload:
+**Persistence (both executors):** After pushing the assistant message to in-memory history, the executor also persists the tool_calls metadata to the DB with the **original response text** (not `historyContent` which has thinking injected). If `iterationDelta` was already persisted, the content is empty to avoid duplicate text:
 ```typescript
 if (useNativeTools && nativeToolCalls.length > 0 && sessionId) {
   const serializedToolCalls = JSON.stringify(nativeToolCalls);
-  await this.databaseService.addMessage(sessionId, 'assistant', historyContent || '', {
+  const persistContent = hasPersistedIterationText ? '' : (response.trim() || '');
+  await this.databaseService.addMessage(sessionId, 'assistant', persistContent, {
     model, toolCalls: serializedToolCalls
   });
 }

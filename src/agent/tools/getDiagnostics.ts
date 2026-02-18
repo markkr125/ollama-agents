@@ -10,7 +10,7 @@ import { resolveMultiRootPath } from './pathUtils';
  */
 export const getDiagnosticsTool: Tool = {
   name: 'get_diagnostics',
-  description: 'Get errors and warnings for a file (or all files if no path given)',
+  description: 'Get errors and warnings from the language server for a file, or for all files if no path is given. This is automatically called after write_file — check the auto-diagnostics output before moving on. Do NOT use run_terminal_command to invoke a compiler/linter CLI — use this tool instead.',
   schema: {
     type: 'object',
     properties: {

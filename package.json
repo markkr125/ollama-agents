@@ -377,6 +377,22 @@
           "default": "full",
           "markdownDescription": "Controls how the agent continues between iterations.\n- **full**: Session memory injection with rich context (best quality, higher token usage)\n- **standard**: Tool results only, simpler continuation (balanced)\n- **minimal**: Single-pass with auto-diagnostics retry (fastest, least context)"
         },
+        "ollamaCopilot.agent.keepAlive": {
+          "type": "string",
+          "default": "",
+          "markdownDescription": "How long Ollama keeps the model loaded in memory after a request. Examples: `5m`, `30m`, `1h`, `-1` (forever), `0` (unload immediately). Empty = use Ollama server default (typically 5m)."
+        },
+        "ollamaCopilot.agent.sessionTitleGeneration": {
+          "type": "string",
+          "enum": ["currentModel", "selectModel", "firstMessage"],
+          "default": "firstMessage",
+          "markdownDescription": "How to generate session titles.\n- **firstMessage**: Use the first chat message (truncated) — instant, no model call\n- **currentModel**: Use the current chat/agent model to generate a title — slower but higher quality\n- **selectModel**: Use a specific model (configured below) — useful for fast, small models"
+        },
+        "ollamaCopilot.agent.sessionTitleModel": {
+          "type": "string",
+          "default": "",
+          "markdownDescription": "Model to use for session title generation when `sessionTitleGeneration` is `selectModel`. Leave empty to fall back to `firstMessage` mode."
+        },
         "ollamaCopilot.agent.sensitiveFilePatterns": {
           "type": "object",
           "default": {
@@ -408,8 +424,8 @@
           "type": "number",
           "default": 16000,
           "minimum": 4000,
-          "maximum": 128000,
-          "description": "Context window size in characters (approximately tokens * 4)"
+          "maximum": 2048000,
+          "description": "Fallback context window size in tokens. Only used when auto-detection via /api/show fails. Set this to your model's actual context window (e.g. 128000 for 128K models)."
         },
         "ollamaCopilot.enableAutoComplete": {
           "type": "boolean",

@@ -5,15 +5,10 @@ export const showPage = (page: 'chat' | 'settings' | 'sessions') => {
 };
 
 export const newChat = () => {
-  // Prevent duplicate idle sessions: if current session is idle with no content, just navigate
-  if (currentSessionId.value) {
-    const currentSess = sessions.value.find(s => s.id === currentSessionId.value);
-    if (currentSess?.status === 'idle' && timeline.value.length <= 1) {
-      currentPage.value = 'chat';
-      return;
-    }
-  }
   currentPage.value = 'chat';
+  // Clear timeline immediately for instant visual feedback
+  timeline.value = [];
+  // Backend deduplicates: reuses an idle empty session if one exists, else creates new
   vscode.postMessage({ type: 'newChat' });
 };
 

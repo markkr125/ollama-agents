@@ -7,7 +7,7 @@ import { resolveMultiRootPath } from './pathUtils';
  */
 export const listFilesTool: Tool = {
   name: 'list_files',
-  description: 'List files in a directory',
+  description: 'List files and subdirectories in a directory. Shows file sizes. Do NOT use run_terminal_command with ls/find/tree — use this tool instead. For the workspace root, call with no arguments.',
   schema: {
     type: 'object',
     properties: {

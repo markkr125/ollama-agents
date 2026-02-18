@@ -59,3 +59,32 @@ export type PersistUiEventFn = (
   eventType: string,
   payload: Record<string, any>
 ) => Promise<void>;
+
+// ---------------------------------------------------------------------------
+// Agent Dispatcher — intent classification for routing + prompt framing
+// ---------------------------------------------------------------------------
+
+/**
+ * Classified intent of the user's task.
+ *   analyze — understand/explore/trace/document code (read is the goal)
+ *   modify  — edit/fix/refactor existing code (write existing files)
+ *   create  — build new features/files from scratch
+ *   mixed   — combination of the above
+ */
+export type TaskIntent = 'analyze' | 'modify' | 'create' | 'mixed';
+
+/**
+ * Result of intent classification. Determines executor routing and prompt adaptation.
+ * The intent is passed to AgentPromptBuilder which adapts its existing doingTasks()
+ * section accordingly — no separate framing text is generated.
+ */
+export interface DispatchResult {
+  /** Classified primary intent. */
+  intent: TaskIntent;
+  /** Whether the task requires writing files (docs, output, etc.). */
+  needsWrite: boolean;
+  /** Confidence score 0-1. 0 = LLM classification failed (defaulted to mixed). */
+  confidence: number;
+  /** Short reasoning for diagnostic logging. */
+  reasoning: string;
+}

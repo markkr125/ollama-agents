@@ -143,6 +143,27 @@ export class OllamaClient {
   }
 
   /**
+   * Non-streaming chat completion. Returns the full response object.
+   * Used for fast, short classification calls (e.g. intent dispatcher).
+   */
+  async chatNoStream(request: { model: string; messages: Array<{ role: string; content: string }>; options?: any; stream?: false }): Promise<any> {
+    const url = `${this.baseUrl}/api/chat`;
+    const body = { ...request, stream: false };
+
+    const response = await this.fetchWithRetry(url, {
+      method: 'POST',
+      headers: this.getHeaders(),
+      body: JSON.stringify(body),
+    });
+
+    if (!response.ok) {
+      throw new OllamaError(`Chat request failed: ${response.statusText}`, response.status);
+    }
+
+    return response.json();
+  }
+
+  /**
    * Stream generate completions
    */
   async *generate(request: GenerateRequest): AsyncGenerator<StreamChunk> {

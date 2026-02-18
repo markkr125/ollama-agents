@@ -69,7 +69,13 @@ class TimelineBuilder {
   }
 
   private handleAssistantMessage(m: any): void {
-    this.appendText(m.content || '', m.model);
+    let content = m.content || '';
+    // Backward compat: old sessions persisted `historyContent` which had
+    // thinking injected as `[My previous reasoning: ...]\n\n<response>`.
+    // The thinking is already displayed via a separate `thinkingBlock` UI
+    // event, so strip the prefix to avoid showing it twice.
+    content = content.replace(/^\[My previous reasoning: [\s\S]*?\]\n\n/, '');
+    this.appendText(content, m.model);
   }
 
   private handleToolMessage(m: any): void {

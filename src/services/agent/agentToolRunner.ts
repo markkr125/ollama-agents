@@ -38,8 +38,7 @@ export interface ToolBatchResult {
 export class AgentToolRunner {
   /** Cache of tool results keyed by `toolName:JSON(args)`. Prevents re-executing
    *  identical read-only tool calls across iterations. Write operations are never cached. */
-  private readonly toolResultCache = new Map<string, { output: string; iteration: number }>();
-  private currentIteration = 0;
+  private readonly toolResultCache = new Map<string, string>();
 
   /** Tools whose output is deterministic within a session (no side effects). */
   private static readonly CACHEABLE_TOOLS = new Set([
@@ -77,7 +76,6 @@ export class AgentToolRunner {
     token: vscode.CancellationToken,
     messages?: ChatMessage[]
   ): Promise<ToolBatchResult> {
-    this.currentIteration++;
     const nativeResults: ToolBatchResult['nativeResults'] = [];
     const xmlResults: string[] = [];
     let wroteFiles = false;
@@ -93,19 +91,16 @@ export class AgentToolRunner {
       // --- Tool result cache: return cached output for identical read-only calls ---
       const cacheKey = `${toolCall.name}:${JSON.stringify(toolCall.args)}`;
       if (AgentToolRunner.CACHEABLE_TOOLS.has(toolCall.name)) {
-        const cached = this.toolResultCache.get(cacheKey);
-        if (cached) {
-          const cacheNote = `[CACHED — You already called ${toolCall.name} with identical arguments in iteration ${cached.iteration}. The result has NOT changed. Do NOT call this again. Use different search terms, read specific files, or proceed with [TASK_COMPLETE].]`;
-          const cachedOutput = cached.output + '\n\n' + cacheNote;
-
+        if (this.toolResultCache.has(cacheKey)) {
+          const cached = this.toolResultCache.get(cacheKey)!;
           const cachePayload = { status: 'success' as const, icon: actionIcon, text: `${actionText} (cached)`, detail: 'Identical call — returning cached result' };
           this.emitter.postMessage({ type: 'showToolAction', ...cachePayload, sessionId });
           await this.persistUiEvent(sessionId, 'showToolAction', cachePayload);
 
           if (useNativeTools) {
-            nativeResults.push({ role: 'tool', content: cachedOutput, tool_name: toolCall.name });
+            nativeResults.push({ role: 'tool', content: cached, tool_name: toolCall.name });
           } else {
-            xmlResults.push(`Tool result for ${toolCall.name}:\n${cachedOutput}`);
+            xmlResults.push(`Tool result for ${toolCall.name}:\n${cached}`);
           }
           continue;
         }
@@ -308,7 +303,7 @@ export class AgentToolRunner {
 
         // Cache successful read-only tool results
         if (AgentToolRunner.CACHEABLE_TOOLS.has(toolCall.name)) {
-          this.toolResultCache.set(cacheKey, { output: result.output || '', iteration: this.currentIteration });
+          this.toolResultCache.set(cacheKey, result.output || '');
         }
 
         // Invalidate read_file cache entries when files are written

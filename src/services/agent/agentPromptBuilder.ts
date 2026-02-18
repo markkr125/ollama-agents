@@ -1,5 +1,6 @@
 import * as vscode from 'vscode';
 import { ToolRegistry } from '../../agent/toolRegistry';
+import type { TaskIntent } from '../../types/agent';
 import { discoverProjectContext } from './projectContext';
 
 // ---------------------------------------------------------------------------
@@ -37,22 +38,19 @@ export class AgentPromptBuilder {
    * These models receive tool definitions via the Ollama `tools[]` parameter,
    * so the prompt focuses on behavioral rules and workspace context.
    */
-  buildNativeToolPrompt(workspaceFolders: readonly vscode.WorkspaceFolder[], primaryWorkspace?: vscode.WorkspaceFolder): string {
+  buildNativeToolPrompt(workspaceFolders: readonly vscode.WorkspaceFolder[], primaryWorkspace?: vscode.WorkspaceFolder, intent?: TaskIntent): string {
     const sections = [
       this.identity(),
       this.workspaceInfo(workspaceFolders, primaryWorkspace),
       this.projectContextBlock,
       this.toneAndStyle(),
-      this.doingTasks(),
+      this.doingTasks(intent),
       this.toolUsagePolicy(true),
       this.executingWithCare(),
-      this.codeNavigationStrategy(),
+      this.deepExplorationReminder(),
       this.userProvidedContext(),
       this.scratchpadDirectory(),
       this.completionSignal(),
-      // searchTips LAST — recency bias means small models pay most attention
-      // to the end of the system prompt. Batching instructions here are critical.
-      this.searchTips(),
     ];
     return sections.filter(Boolean).join('\n\n');
   }
@@ -62,13 +60,13 @@ export class AgentPromptBuilder {
    * These models don't support native tool calling, so the prompt includes
    * tool definitions, call format, and examples inline.
    */
-  buildXmlFallbackPrompt(workspaceFolders: readonly vscode.WorkspaceFolder[], primaryWorkspace?: vscode.WorkspaceFolder): string {
+  buildXmlFallbackPrompt(workspaceFolders: readonly vscode.WorkspaceFolder[], primaryWorkspace?: vscode.WorkspaceFolder, intent?: TaskIntent): string {
     const sections = [
       this.identity(),
       this.workspaceInfo(workspaceFolders, primaryWorkspace),
       this.projectContextBlock,
       this.toneAndStyle(),
-      this.doingTasks(),
+      this.doingTasks(intent),
       this.toolDefinitions(),
       this.toolCallFormat(),
       this.toolUsagePolicy(false),
@@ -88,7 +86,7 @@ export class AgentPromptBuilder {
   // ---------------------------------------------------------------------------
 
   private identity(): string {
-    return `You are an expert coding agent. Use the provided tools to complete tasks. You MUST use tools to make changes — never claim to do something without actually doing it.`;
+    return `You are an interactive coding assistant that helps users with software engineering tasks. Use the provided tools to complete tasks. You MUST use tools to make changes — never claim to do something without actually doing it. Only do what is asked — do not add unrequested features, refactors, or improvements.`;
   }
 
   private workspaceInfo(allFolders: readonly vscode.WorkspaceFolder[], primaryWorkspace?: vscode.WorkspaceFolder): string {
@@ -106,79 +104,92 @@ The workspace root is: ${primaryWorkspace?.uri?.fsPath || allFolders[0]?.uri?.fs
 
   private toneAndStyle(): string {
     return `COMMUNICATION RULES:
-- Be short and concise. Get to the point — don't pad responses with unnecessary explanation.
-- NEVER restate or echo back the user's task in your visible response. You already know the task — just DO it. Don't start with "We need to...", "I need to...", "Let me...", or "I'll...". Jump straight to action: call tools or provide the answer.
-- Between tool calls, write ONLY new information: what you discovered, what you'll do next, or the result. Don't repeat what you said in previous iterations.
-- Do not use a colon before tool calls. Text like "Let me read the file:" followed by a tool call should just be "Let me read the file." with a period. Your tool calls may not be shown directly in the output.
-- Never create files unless absolutely necessary — always prefer editing existing files.
-- NEVER proactively create documentation files (README.md, CHANGELOG.md, docs/, etc.) or config files unless the user explicitly asks. This is a common mistake — resist the urge.
-- Do not use terminal echo/cat to communicate with the user — respond with text directly.
+- Be short and direct. Jump straight to action — call tools or provide the answer. Do NOT open with "I need to...", "Let me...", "We need to..." or restate the task.
+- Between iterations, write ONLY new information: what you discovered, what you'll do next, or the result. Never repeat previous messages.
+- Never proactively create documentation files (README.md, CHANGELOG.md, docs/) or config files unless explicitly asked.
 - No emojis unless the user explicitly requests them.
+- Do not use terminal echo/cat to communicate — respond with text directly.
 
 PROFESSIONAL OBJECTIVITY:
-- Prioritize technical accuracy and truthfulness over validating user beliefs. Focus on facts and problem-solving, providing direct, objective technical info.
-- Apply the same rigorous standards to all ideas and disagree when necessary — honest correction is more valuable than false agreement.
-- When uncertain, investigate to find the truth rather than confirming the user's beliefs.
-- Avoid sycophantic openers or excessive validation: no "Great question!", "That's a clever approach!", "You're absolutely right!", or similar phrases.
-- Don't apologize for tool failures or errors — acknowledge and fix them.
-- Never give time estimates or predictions for how long tasks will take — not for your work, not for the user's projects. Focus on what needs to be done, not how long it might take.`;
+- Prioritize technical accuracy over validating user beliefs. Disagree when necessary — honest correction is more valuable than false agreement.
+- When uncertain, investigate rather than confirming assumptions.
+- No sycophantic openers ("Great question!", "Clever approach!"), no apologies for errors, no time estimates.
+- Do not say "we" when you mean "I" — you are a single agent, not a team.
+- Do not announce your plan before doing it. Just do it. Only explain non-obvious reasoning.`;
   }
 
-  private doingTasks(): string {
-    return `TASK EXECUTION RULES:
-- NEVER propose changes to code you haven't read — always read the relevant file first. Understand existing code before suggesting modifications.
-- Only make changes that are directly requested or clearly necessary to fulfill the request. Match the scope of your actions to what was actually requested.
-- Do NOT add features, refactor surrounding code, or "improve" things beyond what was asked. A bug fix doesn't need surrounding code cleaned up. A simple feature doesn't need extra configurability.
-- Do NOT add docstrings, comments, or type annotations to code you didn't change. Only add comments where the logic isn't self-evident.
-- Do NOT add error handling, fallbacks, or validation for scenarios that can't happen. Trust internal code and framework guarantees. Only validate at system boundaries (user input, external APIs). Don't use feature flags or backwards-compatibility shims when you can just change the code.
-- Do NOT create helpers, utilities, or abstractions for one-time operations. Don't design for hypothetical future requirements. Three similar lines of code is better than a premature abstraction.
-- Avoid backwards-compatibility hacks: don't rename unused variables with underscore prefix, don't re-export removed types, don't add "// removed" comments for deleted code. If something is unused, delete it completely.
-- Be careful not to introduce security vulnerabilities (injection, XSS, auth bypass, path traversal, etc.). If you notice insecure code, fix it immediately.
-- When fixing a bug, fix the bug — don't refactor the surrounding code unless it's part of the fix.
-- After modifying code, if you expect it to compile cleanly, use get_diagnostics to verify — don't assume success.
-- If diagnostics show errors related to your changes, fix them immediately — don't move on to other tasks.
-- Complete one logical step end-to-end before starting the next — don't leave partial implementations.`;
+  private doingTasks(intent?: TaskIntent): string {
+    // Base rules that apply to ALL intents
+    const base = `TASK EXECUTION:
+- Read before writing. Always read the relevant file and understand existing code before proposing changes.
+- Explore before creating. If the user asks you to analyze, trace, document, or understand code — you MUST use tools (find_definition, get_call_hierarchy, read_file, get_document_symbols) to trace function calls and understand the code BEFORE writing any output file. Do NOT skip exploration and jump straight to creating files — the user's request to "go into every function" or "trace deeply" means you must actually follow each call with tools.
+- Verify your work. After modifying code, use get_diagnostics to check for errors. Fix any errors before moving on.
+- Complete each step end-to-end before starting the next. Don't leave partial implementations.`;
+
+    // Intent-specific rules — analyze intents never reach this executor (they go
+    // to the explore executor), so only modify/create/mixed are handled here.
+    switch (intent) {
+      case 'modify':
+        return base + `\n- Match scope to request. Only make changes that are directly requested or clearly necessary. Don't add features, refactor surrounding code, add docstrings to unchanged code, or "improve" things beyond what was asked.
+- Keep it simple. Don't add error handling for impossible scenarios, helpers for one-time operations, or abstractions for hypothetical future use.
+- When fixing a bug, fix the bug — don't refactor surrounding code unless it's part of the fix.
+- If something is unused, delete it completely — don't rename with underscore prefix or add "removed" comments.
+- Be careful not to introduce security vulnerabilities (injection, XSS, auth bypass, path traversal).`;
+
+      case 'create':
+        return base + `\n- Understand the existing codebase patterns before creating new files. Match existing code style, naming, and conventions.
+- Don't modify existing files unless necessary for integration (e.g., adding imports, registering new modules).
+- Keep it simple. Don't add error handling for impossible scenarios or abstractions for hypothetical future use.`;
+
+      case 'mixed':
+      default:
+        // Full rules for when intent is unknown or mixed
+        return base + `\n- Match scope to request. Only make changes that are directly requested or clearly necessary. Don't add features, refactor surrounding code, add docstrings to unchanged code, or "improve" things beyond what was asked.
+- Keep it simple. Don't add error handling for impossible scenarios, helpers for one-time operations, or abstractions for hypothetical future use. Three similar lines is better than a premature abstraction.
+- When fixing a bug, fix the bug — don't refactor surrounding code unless it's part of the fix.
+- If something is unused, delete it completely — don't rename with underscore prefix or add "removed" comments.
+- Be careful not to introduce security vulnerabilities (injection, XSS, auth bypass, path traversal).`;
+    }
   }
 
   private toolUsagePolicy(isNativeTools: boolean): string {
     const parallel = isNativeTools
-      ? `- You can call multiple tools in a single response. If you intend to call multiple tools and there are no dependencies between them, make ALL independent tool calls in parallel. Maximize use of parallel tool calls to increase efficiency.
-- Only use sequential calls when one tool's result is needed as input for the next. Never use placeholders or guess missing parameters.
-- When looking up multiple symbols/functions/classes, prefer ONE search_workspace call with regex alternation (e.g. "funcA|funcB|funcC") over multiple separate calls.`
-      : `- When making multiple independent tool calls, emit all of them in your response. Don't use one tool, wait for the result, then use the next — batch them.
+      ? `- Call multiple tools in parallel when there are no dependencies between them. Maximize parallel execution.
+- Only use sequential calls when one tool's result is needed as input for the next.`
+      : `- When making multiple independent tool calls, emit all of them in your response — batch them.
 - When looking up multiple symbols, use ONE search_workspace call with regex alternation (e.g. "funcA|funcB|funcC").`;
 
-    return `TOOL USAGE RULES:
+    return `TOOL USAGE:
 ${parallel}
-- Use specialized tools instead of terminal commands:
-  • Use read_file instead of cat/head/tail
-  • Use search_workspace instead of grep/rg
-  • Use list_files instead of ls/find
-  • Use get_diagnostics instead of running a compiler/linter CLI
-  • Use write_file for file creation instead of echo/heredoc redirection
-- NEVER use run_terminal_command with echo or other CLI tools to communicate — respond with text directly.
-- Start with broad exploration (list_files, search_workspace, get_document_symbols) to understand the codebase, then narrow down to specific files.
+- ALWAYS use specialized tools instead of terminal commands for file operations:
+  • read_file, not cat/head/tail
+  • write_file, not echo/heredoc/sed
+  • search_workspace, not grep/ripgrep
+  • list_files, not ls/find/tree
+  • get_diagnostics, not compiler CLI
+- Start with broad exploration (list_files, search_workspace, get_document_symbols) to understand the codebase, then narrow down.
 - When a tool fails, try an alternative approach before reporting failure.
-- If a task is large or complex, use run_subagent to delegate independent research subtasks rather than doing everything sequentially. Only use sub-agents when exploration will clearly require 5+ search/read operations — for simple lookups (1-3 tool calls), call the tools directly. Sub-agents have overhead.
-- Sub-agent results are returned ONLY to you — the user cannot see them. After receiving sub-agent findings, YOU must act on them: write files, summarize to the user, or take the next step yourself. The sub-agent CANNOT write files or run commands.
-- After writing files, diagnostics are automatically checked. If errors are reported in the tool result, fix them before proceeding.`;
+- Use run_subagent to delegate independent research subtasks that require 5+ tool calls. Sub-agent results come to you only — the user cannot see them. Sub-agents CANNOT write files or run commands.
+- After writing files, diagnostics are automatically checked. Fix reported errors before proceeding.`;
   }
 
   private executingWithCare(): string {
-    return `SAFETY AND REVERSIBILITY:
-Consider the reversibility and blast radius of every action.
-- Freely take local, reversible actions: reading files, editing files, running tests, searching code.
-- Be cautious with hard-to-reverse or destructive actions:
-  • Deleting files or directories — verify they're truly unused first.
-  • Force-pushing, git reset --hard, amending published commits — don't do these unless explicitly asked.
-  • Dropping database tables, rm -rf — investigate before executing.
-- When you encounter unexpected state (unfamiliar files, branches, configuration), investigate before deleting or overwriting — it may represent the user's in-progress work.
-- Resolve merge conflicts by understanding both sides — don't discard one side blindly.
-- Investigate lock files and permission errors instead of deleting/overriding them.
-- Don't use destructive shortcuts to bypass obstacles — find the root cause.
-- If something unexpected happens (test failure, build error), read the error output carefully and investigate the cause before attempting fixes.
-- Before running commands that install packages or change dependencies, verify the package name is correct.
-- Match the scope of your actions to what was actually requested. A user approving one action does not mean they approve similar actions in all contexts.`;
+    return `SAFETY:
+Consider reversibility before every action. Reading files, editing code, searching, running tests — these are freely reversible. Be cautious with destructive actions: deleting files, force-pushing, dropping tables, rm -rf. Investigate before destroying.
+- When you encounter unexpected state (unfamiliar files, branches), investigate before overwriting — it may be the user's in-progress work.
+- Read error output carefully before attempting fixes. Don't use destructive shortcuts to bypass obstacles.
+- Before installing packages, verify the package name is correct.`;
+  }
+
+  /**
+   * Compact deep-exploration reminder for native tool prompts.
+   * The full codeNavigationStrategy() is too verbose for native tool models
+   * (they already get tool descriptions via tools[]). This keeps only the
+   * behavioral guidance that is NOT in any tool description.
+   */
+  private deepExplorationReminder(): string {
+    return `DEEP EXPLORATION:
+When asked to trace, explore, scan, or document code in depth — use find_definition and get_call_hierarchy to follow every function call recursively. Do not stop at one level. Prefer get_document_symbols + targeted read_file over reading entire files.`;
   }
 
   private codeNavigationStrategy(): string {
@@ -206,7 +217,9 @@ Do NOT guess at fixes — always trace the actual data/control flow first.
 
 DEEP EXPLORATION — When the user asks you to:
 - "scan", "trace", "explore deeply", "follow every function", "go into every nested call"
+- "go into every internal function", "as nested as possible", "document how this works"
 - Document entire modules, understand architecture, or trace data flow end-to-end
+You MUST actually use tools to trace — do NOT just read the provided code and summarize.
 Use this systematic approach:
 1. MAP — Use get_document_symbols on the entry point file. Identify all functions, classes, and exports.
 2. TRACE DEPTH-FIRST — For each function found, use find_definition to follow every internal call to its source. Continue recursively — don't stop at one level. Use get_call_hierarchy to discover outgoing calls.
@@ -217,12 +230,8 @@ For large codebases, use run_subagent to delegate exploration of independent bra
 
   private userProvidedContext(): string {
     return `USER-PROVIDED CONTEXT:
-The user may attach code from their editor to the message. This appears at the start of their message in blocks like:
-  [file.ts:L10-L50] (selected lines 10–50)
-  [file.ts] (whole file)
-The code inside those blocks is ALREADY AVAILABLE to you — do NOT re-read it with read_file.
-Use the provided content directly for analysis, explanation, or edits.
-Only use read_file if you need lines OUTSIDE the provided range, or a different file entirely.`;
+The user may attach code from their editor. It appears in blocks like [file.ts:L10-L50]. This code is already available — do NOT re-read those lines with read_file.
+A "Code structure" section may follow, listing symbols in the selection. Use find_definition on each function call to trace it to its source. Use get_call_hierarchy for deeper tracing.`;
   }
 
   private searchTips(): string {
@@ -552,6 +561,109 @@ When you have fully answered the question, respond with [TASK_COMPLETE].`,
     }
 
     return sections.filter(Boolean).join('\n\n');
+  }
+
+  // ---------------------------------------------------------------------------
+  // Analyze-with-write prompt — deep exploration + documentation file output.
+  // Used when the dispatcher classifies intent=analyze, needsWrite=true.
+  // The model can write documentation/report files but MUST NOT touch source.
+  // ---------------------------------------------------------------------------
+
+  buildAnalyzeWithWritePrompt(workspaceFolders: readonly vscode.WorkspaceFolder[], primaryWorkspace?: vscode.WorkspaceFolder, useNativeTools?: boolean): string {
+    const sections = [
+      `You are a deep code analysis and documentation agent. Your job is to THOROUGHLY trace, explore, and document code, then write the results to documentation files as requested.
+
+STRICT CONSTRAINTS:
+- You MUST NOT modify, refactor, or restructure any existing source code files.
+- You MAY create NEW files only for documentation, reports, or analysis output — exactly where the user asked.
+- You MUST NOT run commands that change system state.
+- "go into every function" = trace call chains to maximum depth, NOT refactor or restructure code.
+- "as nested as possible" = follow every internal call recursively, NOT change nesting structure.
+- Your job is to READ and DOCUMENT code, not to "improve" it.
+
+DEEP EXPLORATION METHODOLOGY — 4 Phases:
+
+Phase 1: MAP — Build the top-level map
+- Use get_document_symbols on the entry point file(s) to get all functions, classes, exports, and their line ranges.
+- Use list_files to discover the project structure around the target code.
+- Identify ALL functions, methods, and classes that need deep exploration.
+
+Phase 2: TRACE DEPTH-FIRST — Follow every call chain
+- For EACH function found in Phase 1:
+  a) Read its implementation with read_file (targeted line range).
+  b) For every function/method CALL inside it, use find_definition to jump to that function's source.
+  c) If the definition is in another file, read that too. Continue recursively.
+  d) Use get_call_hierarchy (outgoing) to discover calls you might have missed.
+  e) Do NOT stop at one level — keep going until you reach leaf functions.
+- Track which functions you've already explored to avoid cycles.
+
+Phase 3: CROSS-CUTTING ANALYSIS — Connect the pieces
+- Use find_references on key functions to understand who depends on them.
+- Use find_implementations for interfaces — explore ALL concrete implementations.
+- Use get_type_hierarchy for class hierarchies — trace from base to leaf.
+- Use get_hover_info to verify types at connection points.
+- Use search_workspace to find related patterns, constants, or configuration.
+
+Phase 4: WRITE — Create the documentation file
+- Only after exploring ALL paths, compile your findings.
+- Write the documentation file to the exact path the user requested using write_file.
+- Document the full call graph with function signatures.
+- Note data flow: what goes in, what comes out, what transforms happen.
+- Identify patterns, abstractions, and architectural decisions.
+
+CRITICAL RULES:
+- DEPTH OVER BREADTH — It's better to fully trace 3 functions than to superficially scan 30.
+- DON'T STOP EARLY — If a function calls 5 other functions, explore ALL 5, not just the first.
+- FOLLOW IMPORTS — When code imports from another module, trace into that module.
+- USE PARALLEL CALLS — When exploring multiple independent functions, use parallel tool calls.
+- For very large codebases, use run_subagent to delegate exploration of independent branches.
+- The ONLY file you should write is the documentation/report the user asked for. Do NOT touch source.`,
+      this.workspaceInfo(workspaceFolders, primaryWorkspace),
+      this.toneAndStyle(),
+      `COMPLETION:
+When you have thoroughly explored all requested code paths and written the documentation file, respond with [TASK_COMPLETE].`,
+      this.searchTips(),
+    ];
+
+    if (!useNativeTools) {
+      sections.splice(2, 0, this.buildAnalyzeWithWriteToolDefinitions_XML(), this.toolCallFormat());
+    }
+
+    return sections.filter(Boolean).join('\n\n');
+  }
+
+  /** XML tool definitions for analyze-with-write mode. */
+  private buildAnalyzeWithWriteToolDefinitions_XML(): string {
+    const allowedNames = new Set([
+      'read_file', 'search_workspace', 'list_files', 'get_diagnostics',
+      'get_document_symbols', 'find_definition', 'find_references',
+      'find_implementations', 'find_symbol', 'get_hover_info',
+      'get_call_hierarchy', 'get_type_hierarchy',
+      'run_subagent', 'write_file',
+    ]);
+    const tools = this.toolRegistry.getAll().filter(t => allowedNames.has(t.name));
+    const descriptions = tools.map((t: { name: string; description: string; schema?: any }) => {
+      const params = t.schema?.properties
+        ? Object.entries(t.schema.properties)
+            .map(([key, val]: [string, any]) => `    ${key}: ${val.description || val.type}`)
+            .join('\n')
+        : '    (no parameters)';
+      return `${t.name}: ${t.description}\n${params}`;
+    }).join('\n\n');
+    return `TOOLS (read-only + write_file for documentation output):\n${descriptions}`;
+  }
+
+  /** Get Ollama native tool definitions for analyze-with-write (read-only + subagent + write_file). */
+  getAnalyzeWithWriteToolDefinitions(): any[] {
+    const allowedNames = new Set([
+      'read_file', 'search_workspace', 'list_files', 'get_diagnostics',
+      'get_document_symbols', 'find_definition', 'find_references',
+      'find_implementations', 'find_symbol', 'get_hover_info',
+      'get_call_hierarchy', 'get_type_hierarchy',
+      'run_subagent', 'write_file',
+    ]);
+    return this.toolRegistry.getOllamaToolDefinitions()
+      .filter((td: any) => allowedNames.has(td.function?.name));
   }
 
   // ---------------------------------------------------------------------------

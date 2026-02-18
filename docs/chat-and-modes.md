@@ -33,11 +33,13 @@ The autonomous coding agent. It can read/write files, search your workspace, and
 
 **How it works:**
 1. You describe a task ("Add error handling to the login function")
-2. The agent analyzes the request and plans its approach
-3. It executes tools (read files, write files, run commands) in a loop
-4. Each tool action is shown in collapsible progress groups
-5. Terminal commands and sensitive file edits require your approval
-6. The agent completes when it signals `[TASK_COMPLETE]`
+2. The **agent dispatcher** classifies your intent (analysis, modification, creation, or mixed) — this happens automatically via a fast LLM call before the agent starts working
+3. Pure analysis tasks (explain, trace, document) are routed to a read-only executor; tasks that require code changes use the full agent executor
+4. The system prompt is framed based on your intent — e.g., analysis tasks get explicit "do NOT modify source code" guidance
+5. The agent executes tools (read files, write files, run commands) in a loop
+6. Each tool action is shown in collapsible progress groups
+7. Terminal commands and sensitive file edits require your approval
+8. The agent completes when it signals `[TASK_COMPLETE]`
 
 **Tool calling modes:**
 - **Native** — If the model supports function calling (shown in the Tools column of Model Capabilities), the extension uses Ollama's native `tools` API with structured `tool_calls` responses. This is the most reliable path. The conversation history uses `{role: 'tool', content, tool_name}` so the model can match results to the originating call.

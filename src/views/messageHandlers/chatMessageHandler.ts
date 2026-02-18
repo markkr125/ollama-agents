@@ -4,6 +4,7 @@ import { GitOperations } from '../../agent/gitOperations';
 import { SessionManager } from '../../agent/sessionManager';
 import { getConfig, getModeConfig } from '../../config/settings';
 import { AgentChatExecutor } from '../../services/agent/agentChatExecutor';
+import { AgentDispatcher } from '../../services/agent/agentDispatcher';
 import { AgentExploreExecutor, ExploreMode } from '../../services/agent/agentExploreExecutor';
 import { generateSessionTitle } from '../../services/agent/titleGenerator';
 import { DatabaseService } from '../../services/database/databaseService';
@@ -11,7 +12,7 @@ import { getModelCapabilities, ModelCapabilities } from '../../services/model/mo
 import { OllamaClient } from '../../services/model/ollamaClient';
 import { PendingEditReviewService } from '../../services/review/pendingEditReviewService';
 import { TokenManager } from '../../services/tokenManager';
-import { ExecutorConfig } from '../../types/agent';
+import { DispatchResult, ExecutorConfig } from '../../types/agent';
 import { Model } from '../../types/ollama';
 import { ChatSessionStatus, MessageRecord } from '../../types/session';
 import { ChatSessionController } from '../chatSessionController';
@@ -30,6 +31,7 @@ export class ChatMessageHandler implements IMessageHandler {
   ] as const;
 
   private cancellationTokenSource?: vscode.CancellationTokenSource;
+  private readonly dispatcher: AgentDispatcher;
 
   constructor(
     private readonly state: ViewState,
@@ -45,7 +47,12 @@ export class ChatMessageHandler implements IMessageHandler {
     private readonly gitOps: GitOperations,
     private readonly modelHandler: ModelMessageHandler,
     private readonly reviewService?: PendingEditReviewService,
-  ) {}
+  ) {
+    this.dispatcher = new AgentDispatcher(
+      client,
+      vscode.window.createOutputChannel('Ollama Copilot Dispatcher', { log: true })
+    );
+  }
 
   async handle(data: any): Promise<void> {
     switch (data.type) {
@@ -357,6 +364,66 @@ export class ChatMessageHandler implements IMessageHandler {
           : `Contents of ${c.fileName} (already provided — do not re-read):`;
         return `${label}\n\`\`\`\n${c.content}\n\`\`\``;
       }).join('\n\n');
+
+      // LSP pre-analysis: analyze provided code to give the model a head start.
+      // Extract document symbols in the selection range so the model knows what
+      // functions/methods exist and can jump straight to tracing with find_definition
+      // instead of re-reading the file.
+      const analysisBlocks = await Promise.all(resolved.map(async (c) => {
+        try {
+          // Extract base file path (strip :L10-L50 suffix)
+          const filePathMatch = c.fileName.match(/^(.+?)(?::L\d+)?$/);
+          if (!filePathMatch) return '';
+          const relPath = filePathMatch[1];
+
+          // Resolve to URI
+          const searchPattern = relPath.includes('/') ? relPath : `**/${relPath}`;
+          const uris = await vscode.workspace.findFiles(searchPattern, undefined, 1);
+          if (uris.length === 0) return '';
+          const uri = uris[0];
+
+          // Get document symbols from the language server
+          const symbols = await vscode.commands.executeCommand<vscode.DocumentSymbol[]>(
+            'vscode.executeDocumentSymbolProvider', uri
+          );
+          if (!symbols || symbols.length === 0) return '';
+
+          // Determine line range of the selection (if any)
+          const rangeMatch = c.fileName.match(/:L(\d+)-L(\d+)/);
+          const startLine = rangeMatch ? parseInt(rangeMatch[1], 10) - 1 : 0;
+          const endLine = rangeMatch ? parseInt(rangeMatch[2], 10) - 1 : Infinity;
+
+          // Collect symbols within the selection range (recursively)
+          const relevant: string[] = [];
+          const collectSymbols = (syms: vscode.DocumentSymbol[], depth: number) => {
+            for (const sym of syms) {
+              const symStart = sym.range.start.line;
+              const symEnd = sym.range.end.line;
+              // Symbol overlaps with selection
+              if (symEnd >= startLine && symStart <= endLine) {
+                const kindName = vscode.SymbolKind[sym.kind] || 'Unknown';
+                const indent = '  '.repeat(depth);
+                relevant.push(`${indent}${kindName}: ${sym.name} (lines ${symStart + 1}-${symEnd + 1})`);
+                if (sym.children && sym.children.length > 0) {
+                  collectSymbols(sym.children, depth + 1);
+                }
+              }
+            }
+          };
+          collectSymbols(symbols, 0);
+
+          if (relevant.length === 0) return '';
+
+          return `\nCode structure in ${c.fileName}:\n${relevant.join('\n')}\nUse find_definition and get_call_hierarchy to trace each function call to its source before writing any output.`;
+        } catch {
+          return ''; // LSP not available — skip silently
+        }
+      }));
+
+      const analysisStr = analysisBlocks.filter(Boolean).join('\n');
+      if (analysisStr) {
+        contextStr += '\n' + analysisStr;
+      }
     }
 
     const fullPrompt = contextStr ? `${contextStr}\n\n${text}` : text;
@@ -485,9 +552,29 @@ export class ChatMessageHandler implements IMessageHandler {
       return;
     }
 
-    const agentSession = this.sessionManager.createSession(prompt, this.state.currentModel, workspace);
-
+    // --- Intent classification ---
+    // Show spinner while the LLM classifies the request (no timeout — waits for response).
     this.emitter.postMessage({ type: 'showThinking', message: 'Analyzing request...', sessionId });
+
+    let dispatch: DispatchResult;
+    try {
+      dispatch = await this.dispatcher.classify(prompt, this.state.currentModel);
+    } catch {
+      // If classification fails entirely, default to mixed (full agent, standard prompt)
+      dispatch = { intent: 'mixed', needsWrite: true, confidence: 0, reasoning: 'Classification failed — defaulting to mixed' };
+    }
+
+    // Pure analysis with no file output → explore executor (read-only, deep-explore mode)
+    // Analysis WITH file output → explore executor with write_file (deep-explore-write mode)
+    // Both use the analysis-first prompt, NOT the agent executor's "expert coding agent" prompt.
+    if (dispatch.intent === 'analyze') {
+      const exploreMode = dispatch.needsWrite ? 'deep-explore-write' : 'deep-explore';
+      const thinkingMsg = dispatch.needsWrite ? 'Analyzing code...' : 'Analyzing code (read-only)...';
+      this.emitter.postMessage({ type: 'showThinking', message: thinkingMsg, sessionId });
+      return this.handleExploreMode(prompt, token, sessionId, exploreMode, sessionMessages);
+    }
+
+    const agentSession = this.sessionManager.createSession(prompt, this.state.currentModel, workspace);
 
     const config: ExecutorConfig = { maxIterations: getConfig().agent.maxIterations, toolTimeout: getConfig().agent.toolTimeout, temperature: 0.7 };
 
@@ -518,7 +605,7 @@ export class ChatMessageHandler implements IMessageHandler {
       };
     }
 
-    const result = await this.agentExecutor.execute(agentSession, config, token, sessionId, this.state.currentModel, capabilities, sessionMessages);
+    const result = await this.agentExecutor.execute(agentSession, config, token, sessionId, this.state.currentModel, capabilities, sessionMessages, dispatch);
 
     // Clear the per-write callback
     this.agentExecutor.onFileWritten = undefined;

@@ -60,7 +60,7 @@ export async function readFileChunk(absPath: string, startLine: number, endLine:
  */
 export const readFileTool: Tool = {
   name: 'read_file',
-  description: 'Read the contents of a file relative to the workspace.',
+  description: 'Read the contents of a file. Output is capped per-chunk and large files generate a summary with line ranges for follow-up reads. When you need multiple files, call read_file for each in parallel — do NOT read them sequentially. Do NOT use run_terminal_command with cat/head/tail to read files — always use this tool instead. All file paths are relative to the workspace root.',
   schema: {
     type: 'object',
     properties: {

@@ -4,7 +4,7 @@ import { SessionManager } from '../../agent/sessionManager';
 import { ToolRegistry } from '../../agent/toolRegistry';
 import { resolveMultiRootPath } from '../../agent/tools/pathUtils';
 import { getConfig } from '../../config/settings';
-import { ExecutorConfig } from '../../types/agent';
+import { DispatchResult, ExecutorConfig } from '../../types/agent';
 import { ContinuationStrategy } from '../../types/config';
 import { ChatRequest, OllamaError } from '../../types/ollama';
 import { MessageRecord } from '../../types/session';
@@ -35,33 +35,6 @@ import { CheckpointManager } from './checkpointManager';
 // Used to detect when the model restates the same plan across iterations.
 // Returns 0.0 (completely different) to 1.0 (identical).
 // ---------------------------------------------------------------------------
-
-function textSimilarity(a: string, b: string): number {
-  if (!a || !b) return 0;
-  const normalize = (s: string) => s.toLowerCase().replace(/\s+/g, ' ').trim();
-  const na = normalize(a);
-  const nb = normalize(b);
-  if (na === nb) return 1;
-  if (na.length < 10 || nb.length < 10) return 0;
-
-  // Trigram Jaccard similarity
-  const trigrams = (s: string): Set<string> => {
-    const set = new Set<string>();
-    for (let i = 0; i <= s.length - 3; i++) {
-      set.add(s.substring(i, i + 3));
-    }
-    return set;
-  };
-
-  const ta = trigrams(na);
-  const tb = trigrams(nb);
-  let intersection = 0;
-  for (const t of ta) {
-    if (tb.has(t)) intersection++;
-  }
-  const union = ta.size + tb.size - intersection;
-  return union > 0 ? intersection / union : 0;
-}
 
 // ---------------------------------------------------------------------------
 // AgentChatExecutor — orchestrates the agent loop. Delegates streaming,
@@ -256,7 +229,8 @@ export class AgentChatExecutor {
     sessionId: string,
     model: string,
     capabilities?: ModelCapabilities,
-    conversationHistory?: MessageRecord[]
+    conversationHistory?: MessageRecord[],
+    dispatch?: DispatchResult
   ): Promise<{ summary: string; assistantMessage: MessageRecord; checkpointId?: string }> {
     const context = {
       workspace: agentSession.workspace,
@@ -296,32 +270,50 @@ export class AgentChatExecutor {
     // Load project context (reads package.json, CLAUDE.md, etc.) before prompt assembly
     await this.promptBuilder.loadProjectContext(agentSession.workspace);
 
+    if (dispatch) {
+      this.outputChannel.appendLine(`[AgentChatExecutor] Dispatch: intent=${dispatch.intent}, needsWrite=${dispatch.needsWrite}, confidence=${dispatch.confidence} — ${dispatch.reasoning}`);
+    }
+
     const systemContent = useNativeTools
-      ? this.promptBuilder.buildNativeToolPrompt(allFolders, agentSession.workspace)
-      : this.promptBuilder.buildXmlFallbackPrompt(allFolders, agentSession.workspace);
+      ? this.promptBuilder.buildNativeToolPrompt(allFolders, agentSession.workspace, dispatch?.intent)
+      : this.promptBuilder.buildXmlFallbackPrompt(allFolders, agentSession.workspace, dispatch?.intent);
 
     // Build messages array with conversation history for multi-turn context.
-    // CRITICAL: Include role:'tool' messages so the model sees its own prior
-    // tool calls and results. Without these, the model has no memory of what
-    // it already did and will restate its plan and re-do searches each turn.
-    // See Anthropic docs: "you must include the complete unmodified block
-    // back to the API" — same principle applies to Ollama tool history.
+    // ALL information must live in .content — most Ollama chat templates
+    // only render {{ .Content }} and silently drop .ToolCalls, .ToolName,
+    // and .Thinking fields. So:
+    //   - role:'tool' from DB → role:'user' with tool name in .content
+    //   - role:'assistant' with tool_calls → tool call descriptions in .content
     const historyMessages = (conversationHistory || [])
       .filter(m => {
-        if (m.tool_name === '__ui__') return false;           // skip internal UI events
-        if (m.role === 'tool') return !!m.content.trim();     // keep tool results with content
+        if (m.tool_name === '__ui__') return false;
+        if (m.role === 'tool') return !!m.content.trim();
         if (m.role === 'user' || m.role === 'assistant') return !!m.content.trim() || !!m.tool_calls;
         return false;
       })
       .map(m => {
+        // Convert role:'tool' → role:'user' with tool name in .content
         if (m.role === 'tool') {
-          return { role: 'tool' as const, content: m.content, tool_name: m.tool_name || 'unknown' };
+          const toolName = m.tool_name || 'unknown';
+          return { role: 'user' as const, content: `[${toolName} result]\n${m.content}` };
         }
-        // Reconstruct tool_calls on assistant messages from DB
         const msg: any = { role: m.role as 'user' | 'assistant', content: m.content };
+        // Augment assistant messages: if it had tool_calls, describe them in .content
         if (m.role === 'assistant' && m.tool_calls) {
           try {
-            msg.tool_calls = JSON.parse(m.tool_calls);
+            const calls = JSON.parse(m.tool_calls) as Array<{ function?: { name?: string; arguments?: any } }>;
+            const descs = calls.map(tc => {
+              const name = tc.function?.name || 'unknown';
+              const args = tc.function?.arguments || {};
+              const argParts = Object.entries(args)
+                .filter(([k]) => k !== 'content')
+                .map(([k, v]) => `${k}=${typeof v === 'string' ? `"${v.substring(0, 100)}"` : JSON.stringify(v)}`)
+                .join(', ');
+              return `${name}(${argParts})`;
+            }).join(', ');
+            msg.content = msg.content
+              ? `${msg.content}\n\n[Called: ${descs}]`
+              : `[Called: ${descs}]`;
           } catch { /* ignore malformed JSON */ }
         }
         return msg;
@@ -348,9 +340,6 @@ export class AgentChatExecutor {
     let consecutiveNoToolIterations = 0;
     let lastThinkingContent = '';  // Track across iterations for summary context
 
-    // Track all tool calls for anti-repetition "already called" summary
-    const toolCallHistory: Array<{ name: string; query: string; resultSummary: string }> = [];
-
     let currentCheckpointId: string | undefined;
     try {
       currentCheckpointId = await this.databaseService.createCheckpoint(sessionId);
@@ -368,22 +357,6 @@ export class AgentChatExecutor {
     const continuationStrategy: ContinuationStrategy = getConfig().agent.continuationStrategy || 'full';
     let lastPromptTokens: number | undefined;
 
-    // Loop detection: track previous iteration's tool call signatures
-    let prevToolSignatures: string[] = [];
-    let consecutiveDuplicateIterations = 0;
-
-    // Text repetition detection: track previous iteration's text content
-    let previousIterationText = '';
-    let repetitionCorrectionNeeded = false;
-
-    // Thinking/text repetition detection (SAFETY NET — not the primary fix).
-    // The primary fix for thinking-model loops is injecting thinking content
-    // into the assistant message's `content` field (see the push below).
-    // These counters are a last-resort break if the model still loops.
-    let previousThinkingContent = '';
-    let consecutiveThinkingRepetitions = 0;
-    let consecutiveTextRepetitions = 0;
-
     // Token usage reminder thresholds already sent (prevent duplicate injections)
     const tokenReminderSent = new Set<number>();
 
@@ -400,7 +373,6 @@ export class AgentChatExecutor {
 
     while (iteration < config.maxIterations && !token.isCancellationRequested) {
       iteration++;
-      repetitionCorrectionNeeded = false;
 
       // Diagnostic: log conversation state at each iteration start
       const totalContentChars = messages.reduce((sum, m) => sum + (m.content?.length || 0), 0);
@@ -409,7 +381,7 @@ export class AgentChatExecutor {
         return acc;
       }, {});
       const roleBreakdown = Object.entries(roleCounts).map(([r, c]) => `${r}:${c}`).join(', ');
-      this.outputChannel.appendLine(`[Iteration ${iteration}] Messages: ${messages.length} (${roleBreakdown}) — ~${Math.round(totalContentChars / 4)} est. tokens — toolCallHistory: ${toolCallHistory.length} calls`);
+      this.outputChannel.appendLine(`[Iteration ${iteration}] Messages: ${messages.length} (${roleBreakdown}) — ~${Math.round(totalContentChars / 4)} est. tokens`);
 
       let phase = 'preparing request';
 
@@ -624,7 +596,17 @@ export class AgentChatExecutor {
         // Push a continuation message so it can resume from where it was cut off.
         if (truncated && response) {
           this.outputChannel.appendLine(`[Iteration ${iteration}] Output truncated by context limit — requesting continuation`);
-          messages.push({ role: 'assistant', content: response });
+          // THINKING CONTENT FALLBACK: Many Ollama model templates (chatml, llama3, phi-3,
+          // gemma, etc.) render ONLY {{ .Content }} for assistant messages and silently
+          // drop {{ .Thinking }}. When the model produces empty content + thinking (common
+          // for thinking models), the model sees blank assistant turns → amnesia → loops.
+          // Using thinking as content fallback ensures the model's reasoning survives in
+          // all templates. The thinking field is still sent for templates that support it.
+          // DB persist is unaffected (uses original `response`). See Ollama source:
+          // template/*.gotmpl and model/renderers/*.go for per-model rendering behavior.
+          const truncMsg: any = { role: 'assistant', content: response || thinkingContent || '' };
+          if (thinkingContent) truncMsg.thinking = thinkingContent;
+          messages.push(truncMsg);
           messages.push({
             role: 'user',
             content: 'Your response was truncated due to the output length limit. Break your work into smaller pieces. Continue EXACTLY where you left off — do not repeat what you already said. If you were in the middle of a tool call, re-emit the complete tool call.'
@@ -661,31 +643,6 @@ export class AgentChatExecutor {
             this.emitter.postMessage({ type: 'collapseThinking', sessionId, durationSeconds });
           }
 
-          // --- Thinking repetition detection (SAFETY NET) ---
-          // The primary fix for thinking-model loops is in the assistant
-          // message push below (thinking content injected into `content`).
-          // This detection is a last-resort safety net for pathological cases.
-          if (previousThinkingContent) {
-            const thinkSimilarity = textSimilarity(displayThinking, previousThinkingContent);
-            if (thinkSimilarity > 0.6) {
-              consecutiveThinkingRepetitions++;
-              this.outputChannel.appendLine(`[Iteration ${iteration}] Thinking repetition detected (${Math.round(thinkSimilarity * 100)}% similar, streak: ${consecutiveThinkingRepetitions})`);
-              repetitionCorrectionNeeded = true;
-
-              if (consecutiveThinkingRepetitions >= 4) {
-                this.outputChannel.appendLine(`[Iteration ${iteration}] HARD BREAK — ${consecutiveThinkingRepetitions} consecutive thinking repetitions. Model is stuck in a loop.`);
-                messages.push({ role: 'assistant', content: response || displayThinking.substring(0, 200) });
-                messages.push({
-                  role: 'user',
-                  content: 'STOP — you have repeated the same thinking/plan multiple times. You are stuck in a loop. Synthesize what you have so far and respond with [TASK_COMPLETE].'
-                });
-                break;
-              }
-            } else {
-              consecutiveThinkingRepetitions = 0;
-            }
-          }
-          previousThinkingContent = displayThinking;
         }
 
         // --- 4. Process per-iteration delta text ---
@@ -693,51 +650,32 @@ export class AgentChatExecutor {
         const iterationDelta = cleanedText.replace(/\[TASK_COMPLETE\]/gi, '').trim();
 
         if (iterationDelta) {
-          // Repetition detection: when the model restates the same plan across
-          // iterations, course-correct by injecting a corrective message into
-          // history. IMPORTANT: Do NOT use `continue` here — the model may
-          // have generated tool calls alongside the repetitive text. Skipping
-          // tool execution would prevent any progress and cause more repetition.
-          const similarity = previousIterationText.length > 0
-            ? textSimilarity(iterationDelta, previousIterationText) : 0;
-          const isRepetitiveText = similarity > 0.7;
+          if (accumulatedExplanation) {
+            accumulatedExplanation += '\n\n';
+          }
+          accumulatedExplanation += iterationDelta;
 
-          previousIterationText = iterationDelta;
+          this.emitter.postMessage({
+            type: 'streamChunk',
+            content: iterationDelta,
+            model,
+            sessionId
+          });
 
-          if (isRepetitiveText) {
-            this.outputChannel.appendLine(`[Iteration ${iteration}] Repetitive text detected (${Math.round(similarity * 100)}% similar) — injecting correction, suppressing UI`);
-            // Don't stream to UI or persist — but DO continue to tool execution below
-            repetitionCorrectionNeeded = true;
-            consecutiveTextRepetitions++;
-            if (consecutiveTextRepetitions >= 5) {
-              this.outputChannel.appendLine(`[Iteration ${iteration}] HARD BREAK — ${consecutiveTextRepetitions} consecutive text repetitions`);
-              break;
-            }
-          } else {
-            consecutiveTextRepetitions = 0;
-            if (accumulatedExplanation) {
-              accumulatedExplanation += '\n\n';
-            }
-            accumulatedExplanation += iterationDelta;
-
-            this.emitter.postMessage({
-              type: 'streamChunk',
-              content: iterationDelta,
-              model,
-              sessionId
-            });
-
-            if (sessionId) {
-              await this.databaseService.addMessage(sessionId, 'assistant', iterationDelta, { model });
-              hasPersistedIterationText = true;
-            }
+          if (sessionId) {
+            await this.databaseService.addMessage(sessionId, 'assistant', iterationDelta, { model });
+            hasPersistedIterationText = true;
           }
         }
 
         // --- 5. Check for [TASK_COMPLETE] ---
-        if (response.includes('[TASK_COMPLETE]') || response.toLowerCase().includes('task is complete')) {
+        // Thinking models may signal completion only in thinking content (empty response).
+        const completionSignal = response + ' ' + thinkingContent;
+        if (completionSignal.includes('[TASK_COMPLETE]') || completionSignal.toLowerCase().includes('task is complete')) {
           if (taskRequiresWrite && !hasWrittenFiles) {
-            messages.push({ role: 'assistant', content: response });
+            const writeCheckMsg: any = { role: 'assistant', content: response || thinkingContent || '' };
+            if (thinkingContent) writeCheckMsg.thinking = thinkingContent;
+            messages.push(writeCheckMsg);
             messages.push({
               role: 'user',
               content: 'You indicated the task is complete, but NO files have been modified. Reading a file does NOT change it. You MUST call write_file with the modified content to actually make changes. If no changes are truly needed, explain why explicitly.'
@@ -749,7 +687,9 @@ export class AgentChatExecutor {
             // Only nudge once — don't block completion if the model insists
             if (!agentSession._terminalNudgeSent) {
               agentSession._terminalNudgeSent = true;
-              messages.push({ role: 'assistant', content: response });
+              const termCheckMsg: any = { role: 'assistant', content: response || thinkingContent || '' };
+              if (thinkingContent) termCheckMsg.thinking = thinkingContent;
+              messages.push(termCheckMsg);
               messages.push({
                 role: 'user',
                 content: 'You indicated the task is complete, but no terminal command was executed. If the task requires running a command (test, build, install, etc.), use run_terminal_command. If no command is needed, explain why and respond with [TASK_COMPLETE].'
@@ -774,7 +714,9 @@ export class AgentChatExecutor {
                 }
               }
               if (allErrors.length > 0) {
-                messages.push({ role: 'assistant', content: response });
+                const diagCheckMsg: any = { role: 'assistant', content: response || thinkingContent || '' };
+                if (thinkingContent) diagCheckMsg.thinking = thinkingContent;
+                messages.push(diagCheckMsg);
                 messages.push({
                   role: 'user',
                   content: `You declared [TASK_COMPLETE] but errors remain in modified files:\n\n${allErrors.join('\n\n')}\n\nFix these errors before completing the task.`
@@ -812,15 +754,8 @@ export class AgentChatExecutor {
 
         if (toolCalls.length === 0) {
           consecutiveNoToolIterations++;
-          // Same thinking-in-history fix for no-tool path
-          let noToolContent = response;
-          if (thinkingContent && response.trim().length < 200) {
-            const maxLen = 800;
-            noToolContent = thinkingContent.length > maxLen
-              ? '...' + thinkingContent.substring(thinkingContent.length - maxLen)
-              : thinkingContent;
-          }
-          const noToolMsg: any = { role: 'assistant', content: noToolContent };
+          // Thinking content fallback — see comment at truncation handler.
+          const noToolMsg: any = { role: 'assistant', content: response || thinkingContent || '' };
           if (thinkingContent) noToolMsg.thinking = thinkingContent;
           messages.push(noToolMsg);
 
@@ -839,7 +774,7 @@ export class AgentChatExecutor {
               content: this.buildContinuationMessage(
                 iteration, config.maxIterations, sessionMemory,
                 continuationStrategy, agentSession.filesChanged || [],
-                undefined, agentSession.task, toolCallHistory
+                undefined, agentSession.task
               )
             });
           }
@@ -848,31 +783,6 @@ export class AgentChatExecutor {
 
         // Tools found — reset the no-tool counter
         consecutiveNoToolIterations = 0;
-
-        // --- Loop detection: check for repeated tool call patterns ---
-        const currentSignatures = toolCalls.map(tc => `${tc.name}:${JSON.stringify(tc.args)}`);
-        const duplicateCount = currentSignatures.filter(sig => prevToolSignatures.includes(sig)).length;
-        const isDuplicate = prevToolSignatures.length > 0 && duplicateCount >= Math.ceil(currentSignatures.length * 0.5);
-
-        if (isDuplicate) {
-          consecutiveDuplicateIterations++;
-          this.outputChannel.appendLine(`[Iteration ${iteration}] Duplicate tool calls detected (${duplicateCount}/${currentSignatures.length} repeated, streak: ${consecutiveDuplicateIterations})`);
-          if (consecutiveDuplicateIterations >= 2) {
-            this.outputChannel.appendLine(`[Iteration ${iteration}] Breaking: ${consecutiveDuplicateIterations} consecutive duplicate iterations — model is looping`);
-            messages.push({ role: 'assistant', content: response });
-            messages.push({
-              role: 'user',
-              content: 'STOP. You are repeating the same tool calls you already made in previous iterations. The results have not changed. Either take a DIFFERENT approach to solve the task, or respond with [TASK_COMPLETE] explaining what you found.'
-            });
-            // Give the model one more chance with the nudge before breaking
-            if (consecutiveDuplicateIterations >= 3) break;
-            prevToolSignatures = currentSignatures;
-            continue;
-          }
-        } else {
-          consecutiveDuplicateIterations = 0;
-        }
-        prevToolSignatures = currentSignatures;
 
         // --- 7. Execute tool batch ---
         const groupTitle = getProgressGroupTitle(toolCalls);
@@ -884,35 +794,42 @@ export class AgentChatExecutor {
           await this.persistUiEvent(sessionId, 'startProgressGroup', { title: groupTitle });
         }
 
-        // Push assistant message to conversation history.
-        // CRITICAL: With thinking models, the real plan/reasoning lives in
-        // `thinking` but that field may not replay properly in all Ollama model
-        // architectures. When the response is empty/minimal, the model enters
-        // the next iteration with NO memory of what it planned — and re-derives
-        // the same plan from scratch, causing infinite loops.
-        // Fix: inject thinking content into `content` so the model always sees
-        // its own previous reasoning in the conversation history.
-        let historyContent = response;
-        if (thinkingContent && response.trim().length < 200) {
-          // Truncate to manage context growth. Prefer the END of thinking
-          // (conclusions/decisions) over the beginning (deliberation).
-          const maxLen = 800;
-          historyContent = thinkingContent.length > maxLen
-            ? '...' + thinkingContent.substring(thinkingContent.length - maxLen)
-            : thinkingContent;
+        // Build assistant message with tool call descriptions in .content
+        // so the model sees what it decided, regardless of template support.
+        let assistantContent = response || thinkingContent || '';
+        if (useNativeTools && toolCalls.length > 0) {
+          const callDescs = toolCalls.map(tc => {
+            const argParts = Object.entries(tc.args || {})
+              .filter(([k]) => k !== 'content')  // skip large file content args
+              .map(([k, v]) => `${k}=${typeof v === 'string' ? `"${v.substring(0, 100)}"` : JSON.stringify(v)}`)
+              .join(', ');
+            return `${tc.name}(${argParts})`;
+          }).join(', ');
+          assistantContent = assistantContent
+            ? `${assistantContent}\n\n[Called: ${callDescs}]`
+            : `[Called: ${callDescs}]`;
         }
-        const assistantMsg: any = { role: 'assistant', content: historyContent };
+        const assistantMsg: any = { role: 'assistant', content: assistantContent };
         if (thinkingContent) assistantMsg.thinking = thinkingContent;
         if (useNativeTools) assistantMsg.tool_calls = nativeToolCalls;
         messages.push(assistantMsg);
 
         // Persist the assistant message with tool_calls metadata so that
         // multi-turn sessions can reconstruct the full tool call→result
-        // pairing. We persist historyContent (which includes thinking when
-        // response was empty) so that loaded sessions also have context.
+        // pairing. IMPORTANT: Persist the original `response`, NOT `historyContent`
+        // which has thinking injected. Thinking is already persisted as a separate
+        // `thinkingBlock` UI event, and `iterationDelta` (the clean text) is
+        // already persisted above. Persisting historyContent would triple the data
+        // on session restore: thinking box + clean text + thinking-in-text.
+        // Only persist here if there are tool_calls AND we didn't already persist
+        // the text in section 4 (to avoid duplicate assistant messages).
         if (useNativeTools && nativeToolCalls.length > 0 && sessionId) {
           const serializedToolCalls = JSON.stringify(nativeToolCalls);
-          await this.databaseService.addMessage(sessionId, 'assistant', historyContent || '', {
+          // If iterationDelta was already persisted, persist an empty-content
+          // assistant message with just the tool_calls metadata attached.
+          // If no text was persisted yet, persist the clean response.
+          const persistContent = hasPersistedIterationText ? '' : (response.trim() || '');
+          await this.databaseService.addMessage(sessionId, 'assistant', persistContent, {
             model, toolCalls: serializedToolCalls
           });
         }
@@ -953,55 +870,26 @@ export class AgentChatExecutor {
         );
         sessionMemory.addIterationSummary(iterSummary);
 
-        // Build tool call history for anti-repetition summary in continuation
-        for (let idx = 0; idx < toolCalls.length; idx++) {
-          const tc = toolCalls[idx];
-          const output = useNativeTools
-            ? (batchResult.nativeResults[idx]?.content ?? '')
-            : (batchResult.xmlResults[idx] ?? '');
-          const argsStr = Object.entries(tc.args || {}).map(([k, v]) => `${k}=${JSON.stringify(v)}`).join(', ');
-          const firstLine = output.split('\n')[0]?.substring(0, 100) || '(empty)';
-          toolCallHistory.push({ name: tc.name, query: argsStr, resultSummary: firstLine });
-        }
-
         if (!isTerminalOnly) {
           this.emitter.postMessage({ type: 'finishProgressGroup', sessionId });
           await this.persistUiEvent(sessionId, 'finishProgressGroup', {});
         }
 
-        // Feed tool results back into conversation history
+        // Feed tool results back into conversation history.
+        // Convert native role:'tool' results to role:'user' with tool name
+        // in .content — this is the ONLY field all Ollama templates render.
         if (useNativeTools) {
-          messages.push(...batchResult.nativeResults);
-
-          // CRITICAL: After native tool results, inject a short task-anchoring
-          // reminder. Without this, large tool outputs (e.g. a 500-line file
-          // read) dominate the model's attention and it forgets the original
-          // task — especially smaller models (≤20B params).
-          const remaining = config.maxIterations - iteration - 1;
-          const taskPreview = agentSession.task.length > 200
-            ? agentSession.task.substring(0, 200) + '…'
-            : agentSession.task;
-          const reminderParts = [
-            `[Iteration ${iteration + 1}/${config.maxIterations} — ${remaining} remaining]`,
-            `Reminder — your task: ${taskPreview}`,
-            `Proceed directly with tool calls or [TASK_COMPLETE]. Do NOT restate your plan or summarize what you just did.`
-          ];
-          // Files modified context helps the model avoid re-editing the same files
-          if (agentSession.filesChanged?.length > 0) {
-            const uniqueFiles = [...new Set(agentSession.filesChanged as string[])];
-            const fileList = uniqueFiles.length <= 5
-              ? uniqueFiles.join(', ')
-              : `${uniqueFiles.slice(0, 5).join(', ')} (+${uniqueFiles.length - 5} more)`;
-            reminderParts.push(`Files modified so far: ${fileList}`);
-          }
-          // Anti-repetition: tell the model what tools it already called
-          if (toolCallHistory.length > 0) {
-            const historyLines = toolCallHistory.map(h => `  - ${h.name}(${h.query}) → ${h.resultSummary}`);
-            reminderParts.push(`Tools already called this session (do NOT repeat these):\n${historyLines.join('\n')}`);
-          }
+          const toolResultParts = batchResult.nativeResults.map(r =>
+            `[${r.tool_name} result]\n${r.content}`
+          );
+          const toolResultText = toolResultParts.join('\n\n');
           messages.push({
             role: 'user',
-            content: reminderParts.join('\n')
+            content: this.buildContinuationMessage(
+              iteration, config.maxIterations, sessionMemory,
+              continuationStrategy, agentSession.filesChanged || [],
+              toolResultText, agentSession.task
+            )
           });
         } else if (batchResult.xmlResults.length > 0) {
           const toolResultText = batchResult.xmlResults.join('\n\n');
@@ -1010,20 +898,11 @@ export class AgentChatExecutor {
             content: this.buildContinuationMessage(
               iteration, config.maxIterations, sessionMemory,
               continuationStrategy, agentSession.filesChanged || [],
-              toolResultText, agentSession.task, toolCallHistory
+              toolResultText, agentSession.task
             )
           });
         }
 
-        // Course-correct if repetitive text was detected this iteration.
-        // The corrective message goes AFTER tool results so the model sees
-        // fresh data AND the instruction to stop restating its plan.
-        if (repetitionCorrectionNeeded) {
-          messages.push({
-            role: 'user',
-            content: 'STOP. You are repeating yourself — your last response was nearly identical to the previous one. Do NOT restate your plan or analysis. Proceed DIRECTLY with the next tool call, or output [TASK_COMPLETE] if done.'
-          });
-        }
       } catch (error: any) {
         const msgCount = messages.length;
         const errMsg = error.message || String(error);
@@ -1071,8 +950,7 @@ export class AgentChatExecutor {
     strategy: ContinuationStrategy,
     filesChanged: string[],
     toolResults?: string,
-    originalTask?: string,
-    toolCallHistory?: Array<{ name: string; query: string; resultSummary: string }>
+    originalTask?: string
   ): string {
     const remaining = maxIterations - iteration - 1;
 
@@ -1110,12 +988,6 @@ export class AgentChatExecutor {
         parts.push(`Files modified: ${fileList}`);
       }
 
-      // Anti-repetition: tell the model what tools it already called
-      if (toolCallHistory && toolCallHistory.length > 0) {
-        const historyLines = toolCallHistory.map(h => `  - ${h.name}(${h.query}) → ${h.resultSummary}`);
-        parts.push(`Tools already called this session (do NOT repeat these):\n${historyLines.join('\n')}`);
-      }
-
       // Session memory summary
       const memorySummary = sessionMemory.getCompactSummary();
       if (memorySummary) {
@@ -1127,11 +999,6 @@ export class AgentChatExecutor {
         ? originalTask.substring(0, 100) + '…'
         : originalTask;
       parts.push(`Task: ${taskPreview}`);
-      // Even in standard mode, include tool history to prevent repetition
-      if (toolCallHistory && toolCallHistory.length > 0) {
-        const historyLines = toolCallHistory.map(h => `  - ${h.name}(${h.query}) → ${h.resultSummary}`);
-        parts.push(`Tools already called (do NOT repeat):\n${historyLines.join('\n')}`);
-      }
     }
 
     parts.push('Continue with the task. Do NOT restate your plan — proceed directly with tool calls or respond with [TASK_COMPLETE] if finished.');

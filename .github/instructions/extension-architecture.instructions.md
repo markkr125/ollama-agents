@@ -53,6 +53,15 @@ In `extension.ts → activate()`, a `ServiceContainer` groups all extension-wide
 
 **Key rule**: SQLite is ready after `initialize()` returns. LanceDB may still be initializing. Any code that needs LanceDB must call `await lanceSearchService.ensureReady()` which awaits the background promise.
 
+## Agent Dispatcher
+
+`AgentDispatcher` (`src/services/agent/agentDispatcher.ts`) classifies user intent before the agent loop starts. Created in `ChatMessageHandler`'s constructor, it runs an LLM call (no timeout — waits for model, caller shows "Analyzing request..." spinner) and defaults to `mixed` intent on failure. The `DispatchResult` determines:
+
+1. **Executor routing** — ALL analysis tasks (`analyze`) route to `AgentExploreExecutor`: `needsWrite=false` uses `deep-explore` mode (read-only), `needsWrite=true` uses `deep-explore-write` mode (read-only + write_file for docs output). All other intents go to `AgentChatExecutor`
+2. **Prompt adaptation** — `intent` is passed to `AgentPromptBuilder.buildNativeToolPrompt(folders, workspace, intent)`, which feeds it to `doingTasks(intent)` to adapt the TASK EXECUTION section
+
+See `agent-tools.instructions.md` → "Agent Dispatcher — Intent Classification" for full routing table and anti-patterns.
+
 ## DatabaseService Singleton Pattern
 
 ```typescript

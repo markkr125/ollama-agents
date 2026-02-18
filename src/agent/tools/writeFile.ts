@@ -18,7 +18,9 @@ import { resolveMultiRootPath } from './pathUtils';
  */
 export const writeFileTool: Tool = {
   name: 'write_file',
-  description: 'Write or create a file. Provide the file path and a brief description of what to write — the system will generate the content. Do NOT include the full file content, only describe the changes.',
+  description: `Write or create a file. Provide the file path and a brief description of what to write — the system will generate the content. Do NOT include the full file content, only describe the changes.
+ALWAYS prefer editing existing files over creating new ones. NEVER proactively create documentation files (README.md, CHANGELOG.md, docs/, etc.) or config files unless the user explicitly asks for them.
+Do NOT use run_terminal_command with echo/heredoc/sed to write files — always use this tool instead.`,
   schema: {
     type: 'object',
     properties: {

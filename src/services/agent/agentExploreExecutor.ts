@@ -15,39 +15,6 @@ import { AgentPromptBuilder } from './agentPromptBuilder';
 import { AgentStreamProcessor } from './agentStreamProcessor';
 
 // ---------------------------------------------------------------------------
-// Text similarity helper — trigram-based Jaccard similarity.
-// Detects when the model restates the same plan across iterations.
-// Returns 0.0 (completely different) to 1.0 (identical).
-// ---------------------------------------------------------------------------
-
-function textSimilarity(a: string, b: string): number {
-  if (!a || !b) return 0;
-  const normalize = (s: string) => s.toLowerCase().replace(/\s+/g, ' ').trim();
-  const na = normalize(a);
-  const nb = normalize(b);
-  if (na === nb) return 1;
-  if (na.length < 10 || nb.length < 10) return 0;
-
-  // Trigram Jaccard similarity
-  const trigrams = (s: string): Set<string> => {
-    const set = new Set<string>();
-    for (let i = 0; i <= s.length - 3; i++) {
-      set.add(s.substring(i, i + 3));
-    }
-    return set;
-  };
-
-  const ta = trigrams(na);
-  const tb = trigrams(nb);
-  let intersection = 0;
-  for (const t of ta) {
-    if (tb.has(t)) intersection++;
-  }
-  const union = ta.size + tb.size - intersection;
-  return union > 0 ? intersection / union : 0;
-}
-
-// ---------------------------------------------------------------------------
 // Read-only tool names — only these tools are allowed in explore/plan modes.
 // ---------------------------------------------------------------------------
 
@@ -61,13 +28,16 @@ const READ_ONLY_TOOLS = new Set([
 // Deep explore adds run_subagent for delegating independent exploration branches
 const DEEP_EXPLORE_TOOLS = new Set([...READ_ONLY_TOOLS, 'run_subagent']);
 
+// Analyze-with-write: deep exploration + write_file for documentation/report output
+const ANALYZE_WRITE_TOOLS = new Set([...DEEP_EXPLORE_TOOLS, 'write_file']);
+
 // ---------------------------------------------------------------------------
 // AgentExploreExecutor — read-only exploration agent. Same streaming loop
 // as AgentChatExecutor but restricted to read-only tools. No checkpoints,
 // no approval flow, no file writes.
 // ---------------------------------------------------------------------------
 
-export type ExploreMode = 'explore' | 'plan' | 'review' | 'deep-explore' | 'chat';
+export type ExploreMode = 'explore' | 'plan' | 'review' | 'deep-explore' | 'deep-explore-write' | 'chat';
 
 export interface ExploreResult {
   summary: string;
@@ -190,7 +160,7 @@ export class AgentExploreExecutor {
     }
 
     // Per-mode iteration caps (lower than agent mode)
-    const modeCaps: Record<string, number> = { review: 15, 'deep-explore': 20, plan: 10, chat: 10, explore: 10 };
+    const modeCaps: Record<string, number> = { review: 15, 'deep-explore': 20, 'deep-explore-write': 20, plan: 10, chat: 10, explore: 10 };
     const maxIterations = Math.min(config.maxIterations, modeCaps[mode] || 10);
     let iteration = 0;
     let accumulatedExplanation = '';
@@ -198,37 +168,8 @@ export class AgentExploreExecutor {
     let consecutiveNoToolIterations = 0;
     let lastPromptTokens: number | undefined;
 
-    // Loop detection: track previous iteration's tool call signatures
-    let prevToolSignatures: string[] = [];
-    let consecutiveDuplicateIterations = 0;
-
-    // Text repetition detection
-    let previousIterationText = '';
-    let repetitionCorrectionNeeded = false;
-
-    // Thinking/text repetition detection (SAFETY NET — not the primary fix).
-    // The primary fix for thinking-model loops is injecting thinking content
-    // into the assistant message's `content` field (see the push below).
-    // These counters are a last-resort break if the model still loops.
-    let previousThinkingContent = '';
-    let consecutiveThinkingRepetitions = 0;
-    let consecutiveTextRepetitions = 0;
-
-    // Tool result cache: prevent re-executing identical read-only tool calls.
-    // Key: `toolName:JSON(args)` → { output, iteration }
-    const toolResultCache = new Map<string, { output: string; iteration: number }>();
-    const CACHEABLE_TOOLS = new Set([
-      'search_workspace', 'list_files', 'find_definition', 'find_references',
-      'find_symbol', 'get_document_symbols', 'get_hover_info', 'get_call_hierarchy',
-      'find_implementations', 'get_type_hierarchy', 'read_file',
-    ]);
-
-    // Track all tool calls made this session for the continuation summary
-    const toolCallHistory: Array<{ name: string; query: string; resultSummary: string }> = [];
-
     while (iteration < maxIterations && !token.isCancellationRequested) {
       iteration++;
-      repetitionCorrectionNeeded = false;
 
       // Diagnostic: log conversation state at each iteration start
       const totalContentChars = messages.reduce((sum: number, m: any) => sum + (m.content?.length || 0), 0);
@@ -237,7 +178,7 @@ export class AgentExploreExecutor {
         return acc;
       }, {});
       const roleBreakdown = Object.entries(roleCounts).map(([r, c]) => `${r}:${c}`).join(', ');
-      this.outputChannel.appendLine(`[Explore Iteration ${iteration}] Messages: ${messages.length} (${roleBreakdown}) — ~${Math.round(totalContentChars / 4)} est. tokens — toolCallHistory: ${toolCallHistory.length} calls`);
+      this.outputChannel.appendLine(`[Explore Iteration ${iteration}] Messages: ${messages.length} (${roleBreakdown}) — ~${Math.round(totalContentChars / 4)} est. tokens`);
 
       let phase = 'preparing request';
 
@@ -391,31 +332,6 @@ export class AgentExploreExecutor {
               emit({ type: 'collapseThinking', sessionId, durationSeconds });
             }
 
-            // --- Thinking repetition detection (SAFETY NET) ---
-            // The primary fix for thinking-model loops is in the assistant
-            // message push below (thinking content injected into `content`).
-            // This detection is a last-resort safety net for pathological cases.
-            if (previousThinkingContent) {
-              const thinkSimilarity = textSimilarity(displayThinking, previousThinkingContent);
-              if (thinkSimilarity > 0.6) {
-                consecutiveThinkingRepetitions++;
-                this.outputChannel.appendLine(`[${mode}][Iteration ${iteration}] Thinking repetition detected (${Math.round(thinkSimilarity * 100)}% similar, streak: ${consecutiveThinkingRepetitions})`);
-                repetitionCorrectionNeeded = true;
-
-                if (consecutiveThinkingRepetitions >= 4) {
-                  this.outputChannel.appendLine(`[${mode}][Iteration ${iteration}] HARD BREAK — ${consecutiveThinkingRepetitions} consecutive thinking repetitions`);
-                  messages.push({ role: 'assistant', content: response || displayThinking.substring(0, 200) });
-                  messages.push({
-                    role: 'user',
-                    content: 'STOP — you have repeated the same thinking/plan multiple times. You are stuck in a loop. Synthesize what you have so far and respond with [TASK_COMPLETE].'
-                  });
-                  break;
-                }
-              } else {
-                consecutiveThinkingRepetitions = 0;
-              }
-            }
-            previousThinkingContent = displayThinking;
           }
         }
 
@@ -424,40 +340,21 @@ export class AgentExploreExecutor {
         const iterationDelta = cleanedText.replace(/\[TASK_COMPLETE\]/gi, '').trim();
 
         if (iterationDelta) {
-          // Repetition detection: inject corrective message but do NOT skip
-          // tool execution — the model may have generated tool calls alongside
-          // repetitive text. Using `continue` here would prevent progress.
-          const similarity = previousIterationText.length > 0
-            ? textSimilarity(iterationDelta, previousIterationText) : 0;
-          const isRepetitiveText = similarity > 0.7;
+          if (accumulatedExplanation) accumulatedExplanation += '\n\n';
+          accumulatedExplanation += iterationDelta;
 
-          previousIterationText = iterationDelta;
-
-          if (isRepetitiveText) {
-            this.outputChannel.appendLine(`[${mode}][Iteration ${iteration}] Repetitive text detected (${Math.round(similarity * 100)}% similar) — injecting correction, suppressing UI`);
-            repetitionCorrectionNeeded = true;
-            consecutiveTextRepetitions++;
-            if (consecutiveTextRepetitions >= 5) {
-              this.outputChannel.appendLine(`[${mode}][Iteration ${iteration}] HARD BREAK — ${consecutiveTextRepetitions} consecutive text repetitions`);
-              break;
-            }
-          } else {
-            consecutiveTextRepetitions = 0;
-            if (accumulatedExplanation) accumulatedExplanation += '\n\n';
-            accumulatedExplanation += iterationDelta;
-
-            if (!isSubagent) {
-              emit({ type: 'streamChunk', content: iterationDelta, model, sessionId });
-              if (sessionId) {
-                await this.databaseService.addMessage(sessionId, 'assistant', iterationDelta, { model });
-                hasPersistedIterationText = true;
-              }
+          if (!isSubagent) {
+            emit({ type: 'streamChunk', content: iterationDelta, model, sessionId });
+            if (sessionId) {
+              await this.databaseService.addMessage(sessionId, 'assistant', iterationDelta, { model });
+              hasPersistedIterationText = true;
             }
           }
         }
 
-        // Check for completion
-        if (response.includes('[TASK_COMPLETE]') || response.toLowerCase().includes('task is complete')) {
+        // Check for completion — also check thinkingContent for thinking models
+        const completionSignal = response + ' ' + thinkingContent;
+        if (completionSignal.includes('[TASK_COMPLETE]') || completionSignal.toLowerCase().includes('task is complete')) {
           break;
         }
 
@@ -473,6 +370,7 @@ export class AgentExploreExecutor {
 
         // Filter out any non-read-only tools that the model might try to call
         const allowedSet = mode === 'review' ? this.getSecurityReviewToolNames()
+          : mode === 'deep-explore-write' ? ANALYZE_WRITE_TOOLS
           : mode === 'deep-explore' ? DEEP_EXPLORE_TOOLS
           : READ_ONLY_TOOLS;
         const filteredToolCalls = toolCalls.filter(tc => allowedSet.has(tc.name));
@@ -484,15 +382,12 @@ export class AgentExploreExecutor {
 
         if (filteredToolCalls.length === 0) {
           consecutiveNoToolIterations++;
-          // Same thinking-in-history fix for no-tool path
-          let noToolContent = response;
-          if (thinkingContent && response.trim().length < 200) {
-            const maxLen = 800;
-            noToolContent = thinkingContent.length > maxLen
-              ? '...' + thinkingContent.substring(thinkingContent.length - maxLen)
-              : thinkingContent;
-          }
-          const noToolMsg: any = { role: 'assistant', content: noToolContent };
+          // THINKING CONTENT FALLBACK: Many Ollama model templates render ONLY
+          // {{ .Content }} and silently drop {{ .Thinking }}. When a thinking model
+          // produces empty content, using thinking as content fallback prevents the
+          // model from losing its own reasoning → avoids re-derivation loops.
+          // DB persist is unaffected (uses original `response`).
+          const noToolMsg: any = { role: 'assistant', content: response || thinkingContent || '' };
           if (thinkingContent) noToolMsg.thinking = thinkingContent;
           messages.push(noToolMsg);
 
@@ -510,30 +405,6 @@ export class AgentExploreExecutor {
 
         consecutiveNoToolIterations = 0;
 
-        // --- Loop detection: check for repeated tool call patterns ---
-        const currentSignatures = filteredToolCalls.map(tc => `${tc.name}:${JSON.stringify(tc.args)}`);
-        const duplicateCount = currentSignatures.filter(sig => prevToolSignatures.includes(sig)).length;
-        const isDuplicate = prevToolSignatures.length > 0 && duplicateCount >= Math.ceil(currentSignatures.length * 0.5);
-
-        if (isDuplicate) {
-          consecutiveDuplicateIterations++;
-          this.outputChannel.appendLine(`[${mode}][Iteration ${iteration}] Duplicate tool calls detected (${duplicateCount}/${currentSignatures.length} repeated, streak: ${consecutiveDuplicateIterations})`);
-          if (consecutiveDuplicateIterations >= 2) {
-            this.outputChannel.appendLine(`[${mode}][Iteration ${iteration}] Breaking: model is looping`);
-            messages.push({ role: 'assistant', content: response });
-            messages.push({
-              role: 'user',
-              content: 'STOP. You are repeating the same tool calls from previous iterations. The results will not change. Synthesize what you have learned so far and respond with [TASK_COMPLETE].'
-            });
-            if (consecutiveDuplicateIterations >= 3) break;
-            prevToolSignatures = currentSignatures;
-            continue;
-          }
-        } else {
-          consecutiveDuplicateIterations = 0;
-        }
-        prevToolSignatures = currentSignatures;
-
         // Execute read-only tools
         const toolNames = filteredToolCalls.map(tc => tc.name).join(', ');
         phase = `executing tools: ${toolNames}`;
@@ -541,26 +412,20 @@ export class AgentExploreExecutor {
         emit({ type: 'startProgressGroup', title: groupTitle, sessionId });
         await this.persistUiEvent(sessionId, 'startProgressGroup', { title: groupTitle });
 
-        // CRITICAL: With thinking models, the real reasoning lives in `thinking`
-        // but it may not replay properly. When response is empty/minimal,
-        // inject thinking into `content` so the model sees its own reasoning.
-        let historyContent = response;
-        if (thinkingContent && response.trim().length < 200) {
-          const maxLen = 800;
-          historyContent = thinkingContent.length > maxLen
-            ? '...' + thinkingContent.substring(thinkingContent.length - maxLen)
-            : thinkingContent;
-        }
-        const assistantMsg: any = { role: 'assistant', content: historyContent };
+        // Thinking content fallback — see comment at no-tool path above.
+        const assistantMsg: any = { role: 'assistant', content: response || thinkingContent || '' };
         if (thinkingContent) assistantMsg.thinking = thinkingContent;
         if (useNativeTools) assistantMsg.tool_calls = nativeToolCalls;
         messages.push(assistantMsg);
 
         // Persist assistant message with tool_calls metadata for multi-turn history.
-        // Use historyContent (which includes thinking when response was empty).
+        // IMPORTANT: Persist original `response`, NOT `historyContent`.
+        // Thinking is already persisted as a separate `thinkingBlock` UI event.
+        // iterationDelta (clean text) is already persisted above.
         if (useNativeTools && nativeToolCalls.length > 0 && sessionId) {
           const serializedToolCalls = JSON.stringify(nativeToolCalls);
-          await this.databaseService.addMessage(sessionId, 'assistant', historyContent || '', {
+          const persistContent = hasPersistedIterationText ? '' : (response.trim() || '');
+          await this.databaseService.addMessage(sessionId, 'assistant', persistContent, {
             model, toolCalls: serializedToolCalls
           });
         }
@@ -600,28 +465,9 @@ export class AgentExploreExecutor {
         const executeSingle = async (toolCall: typeof filteredToolCalls[0], idx: number) => {
           const { actionText, actionIcon } = toolMeta[idx];
 
-          // --- Tool result cache: return cached output for identical calls ---
-          const cacheKey = `${toolCall.name}:${JSON.stringify(toolCall.args)}`;
-          if (CACHEABLE_TOOLS.has(toolCall.name)) {
-            const cached = toolResultCache.get(cacheKey);
-            if (cached) {
-              const cacheNote = `[CACHED — You already called ${toolCall.name} with identical arguments in iteration ${cached.iteration}. The result has NOT changed. Do NOT call this again. Use different search terms, read specific files, or proceed with [TASK_COMPLETE].]`;
-              const cachedOutput = cached.output + '\n\n' + cacheNote;
-              const cachePayload = { status: 'success' as const, icon: actionIcon, text: `${actionText} (cached)`, detail: 'Identical call — returning cached result' };
-              emit({ type: 'showToolAction', ...cachePayload, sessionId });
-              await this.persistUiEvent(sessionId, 'showToolAction', cachePayload);
-              return { toolCall, idx, output: cachedOutput, error: undefined as string | undefined };
-            }
-          }
-
           try {
             const result = await this.toolRegistry.execute(toolCall.name, toolCall.args, context);
             const output = result.output || '';
-
-            // Cache the result for future identical calls
-            if (CACHEABLE_TOOLS.has(toolCall.name)) {
-              toolResultCache.set(cacheKey, { output, iteration });
-            }
 
             const { actionText: successText, actionDetail: successDetail, filePath: successFilePath, startLine: successStartLine } =
               getToolSuccessInfo(toolCall.name, toolCall.args, output);
@@ -658,13 +504,6 @@ export class AgentExploreExecutor {
         // Merge results in original tool call order for conversation history
         const allResults = [...localResults, ...seqResults].sort((a, b) => a.idx - b.idx);
         for (const { toolCall, output, error: errMsg } of allResults) {
-          // Track for "tools already called" summary in continuation messages
-          const argSummary = toolCall.name === 'search_workspace'
-            ? `"${toolCall.args.query || ''}"` : toolCall.name === 'read_file'
-            ? `${toolCall.args.path || toolCall.args.file || ''}` : JSON.stringify(toolCall.args).substring(0, 60);
-          const resultLine = errMsg ? 'ERROR' : output.split('\n')[0].substring(0, 80);
-          toolCallHistory.push({ name: toolCall.name, query: argSummary, resultSummary: resultLine });
-
           if (errMsg) {
             if (useNativeTools) {
               toolResults.push({ role: 'tool', content: `Error: ${errMsg}`, tool_name: toolCall.name });
@@ -695,36 +534,15 @@ export class AgentExploreExecutor {
         if (useNativeTools) {
           messages.push(...toolResults);
 
-          // Build "tools already called" summary so the model knows what it did
-          const historyLines = toolCallHistory.map(h => `  - ${h.name}(${h.query}) → ${h.resultSummary}`);
-          const historyBlock = historyLines.length > 0
-            ? `\nTools already called this session (do NOT repeat these):\n${historyLines.join('\n')}`
-            : '';
-
           const taskPreview = task.length > 200 ? task.substring(0, 200) + '…' : task;
           messages.push({
             role: 'user',
-            content: `Reminder — your task: ${taskPreview}\nDo NOT repeat your plan. Proceed directly with tool calls or [TASK_COMPLETE].\nWhen searching for multiple symbols, use ONE search_workspace call with regex: query="symbolA|symbolB|symbolC" isRegex=true${historyBlock}`
+            content: `Reminder — your task: ${taskPreview}\nDo NOT repeat your plan. Proceed directly with tool calls or [TASK_COMPLETE].\nWhen searching for multiple symbols, use ONE search_workspace call with regex: query="symbolA|symbolB|symbolC" isRegex=true`
           });
         } else if (xmlResults.length > 0) {
-          const historyLines = toolCallHistory.map(h => `  - ${h.name}(${h.query}) → ${h.resultSummary}`);
-          const historyBlock = historyLines.length > 0
-            ? `\nTools already called this session (do NOT repeat these):\n${historyLines.join('\n')}`
-            : '';
-
           messages.push({
             role: 'user',
-            content: xmlResults.join('\n\n') + `\n\nDo NOT repeat your plan. Proceed directly with tool calls or [TASK_COMPLETE].\nWhen searching for multiple symbols, use ONE search_workspace call with regex: query="symbolA|symbolB|symbolC" isRegex=true${historyBlock}`
-          });
-        }
-
-        // Course-correct if repetitive text was detected this iteration.
-        // The corrective message goes AFTER tool results so the model sees
-        // fresh data AND the instruction to stop restating its plan.
-        if (repetitionCorrectionNeeded) {
-          messages.push({
-            role: 'user',
-            content: 'STOP. You are repeating yourself — your last response was nearly identical to the previous one. Do NOT restate your plan or analysis. Proceed DIRECTLY with the next tool call, or output [TASK_COMPLETE] if done.'
+            content: xmlResults.join('\n\n') + `\n\nDo NOT repeat your plan. Proceed directly with tool calls or [TASK_COMPLETE].\nWhen searching for multiple symbols, use ONE search_workspace call with regex: query="symbolA|symbolB|symbolC" isRegex=true`
           });
         }
       } catch (error: any) {
@@ -820,6 +638,8 @@ export class AgentExploreExecutor {
         return this.promptBuilder.buildPlanPrompt(folders, primary, useNativeTools);
       case 'review':
         return this.promptBuilder.buildSecurityReviewPrompt(folders, primary, useNativeTools);
+      case 'deep-explore-write':
+        return this.promptBuilder.buildAnalyzeWithWritePrompt(folders, primary, useNativeTools);
       case 'deep-explore':
         return this.promptBuilder.buildDeepExplorePrompt(folders, primary, useNativeTools);
       case 'chat':
@@ -832,6 +652,9 @@ export class AgentExploreExecutor {
   private getToolDefinitions(mode: ExploreMode): any[] {
     if (mode === 'review') {
       return this.promptBuilder.getSecurityReviewToolDefinitions();
+    }
+    if (mode === 'deep-explore-write') {
+      return this.promptBuilder.getAnalyzeWithWriteToolDefinitions();
     }
     if (mode === 'deep-explore') {
       return this.promptBuilder.getDeepExploreToolDefinitions();

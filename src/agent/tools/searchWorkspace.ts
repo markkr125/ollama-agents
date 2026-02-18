@@ -250,7 +250,7 @@ export const searchWorkspaceTool: Tool = {
     required: ['query']
   },
   execute: async (params, context) => {
-    const query = params.query;
+    const query = params.query || params.pattern || params.search;
     if (!query || typeof query !== 'string') {
       throw new Error('Missing required argument: query');
     }

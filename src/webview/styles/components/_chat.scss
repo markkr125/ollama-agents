@@ -256,13 +256,14 @@
   }
 
   &-user {
-    background: var(--vscode-chat-requestBubbleBackground);
-    border: 1px solid var(--surface-border);
+    background: var(--vscode-chat-requestBubbleBackground, color-mix(in srgb, var(--fg) 8%, transparent));
+    border: 1px solid var(--vscode-chat-requestBorder, var(--surface-border));
     padding: 8px 12px;
     border-radius: 10px;
     align-self: flex-end;
-    max-width: min(80%, 720px);
+    max-width: min(85%, 720px);
     white-space: pre-wrap;
+    overflow-wrap: anywhere;
     color: var(--fg);
   }
 
@@ -453,6 +454,7 @@
 
 .message-text {
   white-space: pre-wrap;
+  overflow-wrap: anywhere;
 }
 
 @keyframes highlightFlash {
