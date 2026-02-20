@@ -330,14 +330,19 @@ export class AgentExploreExecutor {
         if (!isSubagent) {
           const toolDefCount = useNativeTools ? this.getToolDefinitions(mode).length : 0;
           const categories = estimateTokensByCategory(messages, toolDefCount, lastPromptTokens);
-          emit({
-            type: 'tokenUsage',
-            sessionId,
+          const tokenPayload = {
             promptTokens: lastPromptTokens ?? categories.total,
             completionTokens: streamResult.completionTokens,
             contextWindow,
             categories
+          };
+          emit({
+            type: 'tokenUsage',
+            sessionId,
+            ...tokenPayload
           });
+          // Persist to DB so session history shows the last token usage state
+          await this.persistUiEvent(sessionId, 'tokenUsage', tokenPayload);
         }
 
         if (token.isCancellationRequested) {
@@ -648,9 +653,20 @@ export class AgentExploreExecutor {
           } as MessageRecord
         : await this.databaseService.addMessage(sessionId, 'assistant', summary, { model });
 
-      const finalContent = summary.replace(/\[TASK_COMPLETE\]/gi, '').trim();
-      if (finalContent) {
-        emit({ type: 'finalMessage', content: finalContent, model, sessionId });
+      // Only send finalMessage with content that wasn't already streamed.
+      // When hasPersistedIterationText is true, the explanation was already
+      // shown in the webview via streamChunk — sending it again in
+      // finalMessage would duplicate the text (handleFinalMessage appends).
+      if (!hasPersistedIterationText) {
+        const finalContent = summary.replace(/\[TASK_COMPLETE\]/gi, '').trim();
+        if (finalContent) {
+          emit({ type: 'finalMessage', content: finalContent, model, sessionId });
+        }
+      } else {
+        // Text already streamed — just signal generation end via empty finalMessage.
+        // This resets currentStreamIndex in the webview so the next user
+        // message starts a fresh assistant thread (Critical Rule #3).
+        emit({ type: 'finalMessage', content: '', model, sessionId });
       }
       emit({ type: 'hideThinking', sessionId });
     }

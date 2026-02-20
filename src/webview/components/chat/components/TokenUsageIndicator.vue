@@ -29,7 +29,7 @@
 
     <!-- Expanded popup -->
     <Teleport to="body">
-      <div v-if="expanded" class="token-usage-popup" ref="popupEl">
+      <div v-if="expanded" class="token-usage-popup" ref="popupEl" :style="popupStyle">
         <div class="popup-header">
           <span class="popup-title">Context Window</span>
           <button class="popup-close" @click="expanded = false">
@@ -77,7 +77,7 @@
         </div>
 
         <div v-if="usagePct >= 70" class="usage-warning">
-          Quality may decline as limit nears.
+          Quality declines as limit nears.
         </div>
       </div>
     </Teleport>
@@ -90,7 +90,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue';
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue';
 
 const props = defineProps<{
   visible: boolean;
@@ -109,6 +109,8 @@ const props = defineProps<{
 
 const expanded = ref(false);
 const popupEl = ref<HTMLElement | null>(null);
+const ringBtnEl = ref<HTMLElement | null>(null);
+const popupStyle = ref<Record<string, string>>({});
 
 // Ring dimensions
 const size = 20;
@@ -150,13 +152,28 @@ function categoryPct(value: number): string {
 
 // Position the popup above the ring button
 function positionPopup() {
-  if (!popupEl.value) return;
-  const btn = popupEl.value.parentElement?.querySelector?.('.token-ring-btn');
+  const indicator = popupEl.value?.closest?.('body');
+  // Find the ring button via the component's root element
+  const root = document.querySelector('.token-usage-indicator');
+  const btn = root?.querySelector('.token-ring-btn');
   if (!btn) {
-    // Fallback: bottom-right corner
-    popupEl.value.style.bottom = '60px';
-    popupEl.value.style.right = '16px';
+    popupStyle.value = { bottom: '60px', right: '16px' };
     return;
+  }
+  const rect = btn.getBoundingClientRect();
+  const popupHeight = popupEl.value?.offsetHeight || 260;
+  const top = rect.top - popupHeight - 8;
+  // If popup would go off-screen top, position below instead
+  if (top < 4) {
+    popupStyle.value = {
+      top: `${rect.bottom + 8}px`,
+      right: `${window.innerWidth - rect.right}px`
+    };
+  } else {
+    popupStyle.value = {
+      top: `${top}px`,
+      right: `${window.innerWidth - rect.right}px`
+    };
   }
 }
 
@@ -177,8 +194,8 @@ onBeforeUnmount(() => {
 
 watch(expanded, (val) => {
   if (val) {
-    // Position after next render tick
-    requestAnimationFrame(positionPopup);
+    // Position after DOM update + render
+    nextTick(() => requestAnimationFrame(positionPopup));
   }
 });
 </script>

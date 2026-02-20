@@ -622,14 +622,19 @@ export class AgentChatExecutor {
         // Emit token usage to the webview for the live indicator
         const toolDefCount = useNativeTools ? this.toolRegistry.getOllamaToolDefinitions().length : 0;
         const categories = estimateTokensByCategory(messages, toolDefCount, lastPromptTokens);
-        this.emitter.postMessage({
-          type: 'tokenUsage',
-          sessionId,
+        const tokenPayload = {
           promptTokens: lastPromptTokens ?? categories.total,
           completionTokens: streamResult.completionTokens,
           contextWindow,
           categories
+        };
+        this.emitter.postMessage({
+          type: 'tokenUsage',
+          sessionId,
+          ...tokenPayload
         });
+        // Persist to DB so session history shows the last token usage state
+        await this.persistUiEvent(sessionId, 'tokenUsage', tokenPayload);
 
         // Token usage system reminder: when context usage exceeds key thresholds,
         // inject a brief note so the model knows to be concise. Adapted

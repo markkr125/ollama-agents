@@ -1,5 +1,5 @@
 import { recalcBlockTotals } from './messageHandlers/filesChanged';
-import { filesChangedBlocks } from './state';
+import { filesChangedBlocks, tokenUsage } from './state';
 import type {
     AssistantThreadFilesChangedBlock,
     AssistantThreadItem,
@@ -118,6 +118,7 @@ class TimelineBuilder {
       case 'fileChangeResult': this.handleFileChangeResult(payload); break;
       case 'keepUndoResult': this.handleKeepUndoResult(payload); break;
       case 'contextFiles': this.handleContextFiles(payload); break;
+      case 'tokenUsage': this.handleTokenUsage(payload); break;
       default: break;
     }
   }
@@ -579,6 +580,26 @@ class TimelineBuilder {
     const newBlock: AssistantThreadToolsBlock = { type: 'tools', tools: [] };
     thread.blocks.push(newBlock);
     return newBlock;
+  }
+
+  /**
+   * Restore token usage state from a persisted __ui__ tokenUsage event.
+   * Each event overwrites the previous — only the last one matters so the
+   * pie shows the final token state when reopening a session.
+   */
+  private handleTokenUsage(payload: any): void {
+    tokenUsage.visible = true;
+    tokenUsage.promptTokens = payload.promptTokens ?? 0;
+    tokenUsage.completionTokens = payload.completionTokens ?? 0;
+    tokenUsage.contextWindow = payload.contextWindow ?? 0;
+    if (payload.categories) {
+      tokenUsage.categories.system = payload.categories.system ?? 0;
+      tokenUsage.categories.toolDefinitions = payload.categories.toolDefinitions ?? 0;
+      tokenUsage.categories.messages = payload.categories.messages ?? 0;
+      tokenUsage.categories.toolResults = payload.categories.toolResults ?? 0;
+      tokenUsage.categories.files = payload.categories.files ?? 0;
+      tokenUsage.categories.total = payload.categories.total ?? 0;
+    }
   }
 
   private appendText(content: string, model?: string): void {
