@@ -1,6 +1,13 @@
 <template>
   <div class="input-container">
     <div class="input-box">
+      <TokenUsageIndicator
+        :visible="tokenUsage.contextWindow > 0"
+        :prompt-tokens="tokenUsage.promptTokens"
+        :completion-tokens="tokenUsage.completionTokens"
+        :context-window="tokenUsage.contextWindow"
+        :categories="tokenUsage.categories"
+      />
       <!-- Attached context area (inside the input box, above textarea) -->
       <div class="attached-context">
         <!-- Implicit selection chip -->
@@ -101,13 +108,6 @@
           </button>
         </div>
         <div class="toolbar-right">
-          <TokenUsageIndicator
-            :visible="tokenUsage.visible"
-            :prompt-tokens="tokenUsage.promptTokens"
-            :completion-tokens="tokenUsage.completionTokens"
-            :context-window="tokenUsage.contextWindow"
-            :categories="tokenUsage.categories"
-          />
           <button class="send-btn" :title="isGenerating ? 'Stop' : 'Send'" @click="handleSend">
             <span class="codicon" :class="isGenerating ? 'codicon-debug-stop' : 'codicon-send'"></span>
           </button>

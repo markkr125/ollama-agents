@@ -1,3 +1,4 @@
+import { nextTick } from 'vue';
 import { contextList, currentMode, currentSessionId, implicitFile, implicitFileEnabled, implicitSelection, inputEl, inputText, isGenerating, vscode } from '../state';
 import { resizeInput } from './scroll';
 
@@ -55,7 +56,7 @@ export const handleSend = () => {
 
   vscode.postMessage({ type: 'sendMessage', text, context: safeContext });
   inputText.value = '';
-  resizeInput(inputEl.value);
+  nextTick(() => resizeInput(inputEl.value));
   contextList.value = [];
 };
 
