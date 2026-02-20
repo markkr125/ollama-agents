@@ -85,6 +85,18 @@ async function searchWithRipgrep(
     args.push('--glob', '!*.min.js');
     args.push('--glob', '!*.min.css');
     args.push('--glob', '!package-lock.json');
+    // Exclude binary/diagnostic artifacts that produce massive, useless results
+    args.push('--glob', '!*.heapsnapshot');
+    args.push('--glob', '!*.log');
+    args.push('--glob', '!*.cpuprofile');
+    args.push('--glob', '!profiler/**');
+    args.push('--glob', '!*.map');
+    args.push('--glob', '!*.snap');
+    args.push('--glob', '!*.wasm');
+    args.push('--glob', '!*.pb');
+    args.push('--glob', '!*.pyc');
+    args.push('--glob', '!yarn.lock');
+    args.push('--glob', '!pnpm-lock.yaml');
 
     // Pass query followed by all root paths (rg accepts multiple paths)
     args.push('--', query, ...rootPaths);
@@ -153,7 +165,7 @@ async function searchManual(
   }
 ): Promise<SearchMatch[]> {
   const glob = opts.filePattern || '**/*';
-  const exclude = '{**/node_modules/**,**/.git/**,**/dist/**,**/out/**}';
+  const exclude = '{**/node_modules/**,**/.git/**,**/dist/**,**/out/**,**/*.heapsnapshot,**/*.log,**/*.cpuprofile,**/profiler/**,**/*.map,**/*.snap}';
   // vscode.workspace.findFiles already searches all workspace folders
   const uris = await vscode.workspace.findFiles(glob, exclude, 500);
   const matches: SearchMatch[] = [];
@@ -242,6 +254,7 @@ export const searchWorkspaceTool: Tool = {
     type: 'object',
     properties: {
       query: { type: 'string', description: 'Text or regex pattern to search for. To find MULTIPLE symbols at once, use regex alternation: "funcA|funcB|funcC" with isRegex=true. For regex: use (?i) for case-insensitive, | for alternatives, .* for wildcards.' },
+      directory: { type: 'string', description: 'Optional: restrict search to a specific directory (relative to workspace root, or folder name in multi-root). When omitted, searches ALL workspace folders.' },
       filePattern: { type: 'string', description: 'Glob pattern to filter files (e.g. "**/*.ts", "src/**/*.py"). Optional.' },
       isRegex: { type: 'boolean', description: 'Set to true when searching for multiple symbols (a|b|c), case-insensitive, patterns, or when unsure of exact spelling. Default: false.' },
       maxResults: { type: 'number', description: 'Maximum number of matching lines to return. Default: 30' },
@@ -259,12 +272,46 @@ export const searchWorkspaceTool: Tool = {
     const contextLines = params.contextLines ?? 2;
     const filePattern = params.filePattern;
     const isRegex = params.isRegex ?? false;
+    const directory = params.directory;
 
-    // Collect all workspace root paths for multi-root support
-    const allFolders = context.workspaceFolders;
-    const rootPaths = (allFolders && allFolders.length > 0)
+    // Collect all workspace root paths for multi-root support.
+    // DEFENSIVE: always re-read vscode.workspace.workspaceFolders as well,
+    // in case context.workspaceFolders was stale at construction time.
+    const allFolders = context.workspaceFolders?.length
+      ? context.workspaceFolders
+      : vscode.workspace.workspaceFolders;
+    let rootPaths = (allFolders && allFolders.length > 0)
       ? allFolders.map(f => f.uri.fsPath)
       : [context.workspace.uri.fsPath];
+
+    // Optional directory scoping: if the model specifies a directory,
+    // restrict search to paths under that directory.
+    if (directory && typeof directory === 'string' && directory.trim()) {
+      const dirTrimmed = directory.trim().replace(/\/+$/, '');
+      // Check if it matches a workspace folder name (multi-root)
+      if (allFolders && allFolders.length > 1) {
+        const matchingFolder = Array.from(allFolders).find(
+          f => f.name === dirTrimmed || f.name.toLowerCase() === dirTrimmed.toLowerCase()
+        );
+        if (matchingFolder) {
+          rootPaths = [matchingFolder.uri.fsPath];
+        } else {
+          // Treat as a subdirectory relative to each root — filter to existing
+          const path = require('path');
+          const fs = require('fs');
+          const scoped = rootPaths
+            .map(r => path.join(r, dirTrimmed))
+            .filter((p: string) => { try { return fs.statSync(p).isDirectory(); } catch { return false; } });
+          if (scoped.length > 0) rootPaths = scoped;
+        }
+      } else {
+        // Single-root: scope to subdirectory
+        const path = require('path');
+        const fs = require('fs');
+        const scoped = path.join(rootPaths[0], dirTrimmed);
+        try { if (fs.statSync(scoped).isDirectory()) rootPaths = [scoped]; } catch { /* keep original */ }
+      }
+    }
 
     const rgPath = findRipgrepBinary();
     let allMatches: SearchMatch[] = [];

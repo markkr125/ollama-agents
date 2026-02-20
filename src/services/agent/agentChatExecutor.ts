@@ -5,8 +5,7 @@ import { ToolRegistry } from '../../agent/toolRegistry';
 import { resolveMultiRootPath } from '../../agent/tools/pathUtils';
 import { getConfig } from '../../config/settings';
 import { DispatchResult, ExecutorConfig } from '../../types/agent';
-import { ContinuationStrategy } from '../../types/config';
-import { ChatRequest, OllamaError } from '../../types/ollama';
+import { ChatRequest } from '../../types/ollama';
 import { MessageRecord } from '../../types/session';
 import { formatDiagnostics, getErrorDiagnostics, waitForDiagnostics } from '../../utils/diagnosticWaiter';
 import { extractToolCalls, removeToolCalls } from '../../utils/toolCallParser';
@@ -19,6 +18,15 @@ import { OllamaClient } from '../model/ollamaClient';
 import { PendingEditDecorationProvider } from '../pendingEditDecorationProvider';
 import { TerminalManager } from '../terminalManager';
 import { AgentContextCompactor, estimateTokensByCategory } from './agentContextCompactor';
+import {
+    buildLoopContinuationMessage,
+    buildToolCallSummary,
+    checkNoToolCompletion,
+    computeDynamicNumCtx,
+    formatTextToolResults,
+    isCompletionSignaled,
+    type AgentLoopEvent
+} from './agentControlPlane';
 import { AgentExploreExecutor } from './agentExploreExecutor';
 import { AgentFileEditHandler } from './agentFileEditHandler';
 import { AgentPromptBuilder } from './agentPromptBuilder';
@@ -248,7 +256,6 @@ export class AgentChatExecutor {
 
     const useNativeTools = !!capabilities?.tools;
     const { agent: agentConfig } = getConfig();
-    let useThinking = agentConfig.enableThinking && useNativeTools;
 
     // Resolve context window: capabilities DB > live /api/show > user config > Ollama default
     if (!capabilities?.contextLength) {
@@ -279,11 +286,10 @@ export class AgentChatExecutor {
       : this.promptBuilder.buildXmlFallbackPrompt(allFolders, agentSession.workspace, dispatch?.intent);
 
     // Build messages array with conversation history for multi-turn context.
-    // ALL information must live in .content — most Ollama chat templates
-    // only render {{ .Content }} and silently drop .ToolCalls, .ToolName,
-    // and .Thinking fields. So:
-    //   - role:'tool' from DB → role:'user' with tool name in .content
-    //   - role:'assistant' with tool_calls → tool call descriptions in .content
+    // For native tool-calling models, preserve role:'tool' messages with tool_name
+    // so the model gets proper tool-result association via its template renderer.
+    // For XML fallback models, convert role:'tool' → role:'user' with tool name in
+    // content (these models have no template support for the tool role).
     const historyMessages = (conversationHistory || [])
       .filter(m => {
         if (m.tool_name === '__ui__') return false;
@@ -292,28 +298,38 @@ export class AgentChatExecutor {
         return false;
       })
       .map(m => {
-        // Convert role:'tool' → role:'user' with tool name in .content
         if (m.role === 'tool') {
+          if (useNativeTools) {
+            // Native mode: keep role:'tool' with tool_name — the model's template
+            // renderer handles this correctly (see Ollama Go renderers).
+            return { role: 'tool' as const, content: m.content, tool_name: m.tool_name || 'unknown' };
+          }
+          // XML fallback: wrap in role:'user' since there's no tool role support.
           const toolName = m.tool_name || 'unknown';
           return { role: 'user' as const, content: `[${toolName} result]\n${m.content}` };
         }
         const msg: any = { role: m.role as 'user' | 'assistant', content: m.content };
-        // Augment assistant messages: if it had tool_calls, describe them in .content
         if (m.role === 'assistant' && m.tool_calls) {
           try {
-            const calls = JSON.parse(m.tool_calls) as Array<{ function?: { name?: string; arguments?: any } }>;
-            const descs = calls.map(tc => {
-              const name = tc.function?.name || 'unknown';
-              const args = tc.function?.arguments || {};
-              const argParts = Object.entries(args)
-                .filter(([k]) => k !== 'content')
-                .map(([k, v]) => `${k}=${typeof v === 'string' ? `"${v.substring(0, 100)}"` : JSON.stringify(v)}`)
-                .join(', ');
-              return `${name}(${argParts})`;
-            }).join(', ');
-            msg.content = msg.content
-              ? `${msg.content}\n\n[Called: ${descs}]`
-              : `[Called: ${descs}]`;
+            const parsed = JSON.parse(m.tool_calls);
+            if (useNativeTools) {
+              // Native mode: attach structured tool_calls — no need to describe in content.
+              msg.tool_calls = parsed;
+            } else {
+              // XML fallback: describe calls in content (model can't see tool_calls field).
+              const descs = (parsed as Array<{ function?: { name?: string; arguments?: any } }>).map(tc => {
+                const name = tc.function?.name || 'unknown';
+                const args = tc.function?.arguments || {};
+                const argParts = Object.entries(args)
+                  .filter(([k]) => k !== 'content')
+                  .map(([k, v]) => `${k}=${typeof v === 'string' ? `"${v.substring(0, 100)}"` : JSON.stringify(v)}`)
+                  .join(', ');
+                return `${name}(${argParts})`;
+              }).join(', ');
+              msg.content = msg.content
+                ? `${msg.content}\n\n[Called: ${descs}]`
+                : `[Called: ${descs}]`;
+            }
           } catch { /* ignore malformed JSON */ }
         }
         return msg;
@@ -354,7 +370,7 @@ export class AgentChatExecutor {
     // Session memory — tracks discovered facts across iterations
     const sessionMemory = new AgentSessionMemory(this.outputChannel);
     sessionMemory.setOriginalTask(agentSession.task);
-    const continuationStrategy: ContinuationStrategy = getConfig().agent.continuationStrategy || 'full';
+    const continuationStrategy = getConfig().agent.continuationStrategy || 'full';
     let lastPromptTokens: number | undefined;
 
     // Token usage reminder thresholds already sent (prevent duplicate injections)
@@ -383,13 +399,23 @@ export class AgentChatExecutor {
       const roleBreakdown = Object.entries(roleCounts).map(([r, c]) => `${r}:${c}`).join(', ');
       this.outputChannel.appendLine(`[Iteration ${iteration}] Messages: ${messages.length} (${roleBreakdown}) — ~${Math.round(totalContentChars / 4)} est. tokens`);
 
+      // DIAGNOSTIC: Dump full messages array structure so we can verify
+      // tool results are actually being accumulated across iterations
+      for (let mi = 0; mi < messages.length; mi++) {
+        const m = messages[mi];
+        const contentPreview = (m.content || '').substring(0, 120).replace(/\n/g, '\\n');
+        const toolCallsInfo = m.tool_calls ? ` tool_calls:[${Array.isArray(m.tool_calls) ? m.tool_calls.length : '?'}]` : '';
+        const toolNameInfo = (m as any).tool_name ? ` tool_name:${(m as any).tool_name}` : '';
+        this.outputChannel.appendLine(`  [msg ${mi}] role=${m.role}${toolNameInfo}${toolCallsInfo} content(${(m.content || '').length})="${contentPreview}"`);
+      }
+
       let phase = 'preparing request';
 
       try {
         // --- 0. Compact conversation history if approaching context limit ---
-        // contextWindow: detected model capacity (display-only) — used for the
-        //   compaction threshold and the token usage indicator in the UI.
-        //   We do NOT send num_ctx to Ollama; let it manage its own KV cache.
+        // contextWindow: the model's TRUE context limit — used for compaction decisions.
+        // numCtx: the DYNAMIC value sent as num_ctx to Ollama — sized to the actual payload
+        // so Ollama doesn't pre-allocate a massive KV cache (e.g. 393K for a 6K prompt).
         const detectedContextWindow = capabilities?.contextLength;
         const userContextWindow = getConfig().contextWindow || 16000;
         const contextWindow = detectedContextWindow || userContextWindow;
@@ -415,6 +441,18 @@ export class AgentChatExecutor {
             this.emitter.postMessage({ type: 'showToolAction', ...action, sessionId });
             await this.persistUiEvent(sessionId, 'finishProgressGroup', {});
             this.emitter.postMessage({ type: 'finishProgressGroup', sessionId });
+          }
+        }
+
+        // --- 0a. Clean stale system notes from previous iterations ---
+        // [SYSTEM NOTE: ...] messages are ephemeral signals (external mods, IDE focus,
+        // token warnings). They should only be relevant for the iteration they were
+        // injected in. Leaving them accumulates stale context and wastes tokens.
+        if (iteration > 1) {
+          for (let i = messages.length - 1; i >= 0; i--) {
+            if (messages[i].role === 'user' && typeof messages[i].content === 'string' && messages[i].content.startsWith('[SYSTEM NOTE:')) {
+              messages.splice(i, 1);
+            }
           }
         }
 
@@ -469,7 +507,23 @@ export class AgentChatExecutor {
         }
 
         // --- 1. Stream LLM response ---
+        // DEFENSIVE: Strip thinking from ALL history messages before sending.
+        // Per Ollama #10448 / Qwen3 docs: "No Thinking Content in History".
+        // Thinking in previous turns causes models to re-derive the same plan.
+        for (const msg of messages) {
+          if ('thinking' in msg) {
+            delete (msg as any).thinking;
+          }
+        }
+
         const { agentMode: modeConfig } = getConfig();
+
+        // Estimate payload tokens for dynamic num_ctx sizing
+        const payloadChars = messages.reduce((s: number, m: any) => s + (m.content?.length || 0), 0);
+        const toolDefCharsForCtx = useNativeTools ? JSON.stringify(this.toolRegistry.getOllamaToolDefinitions()).length : 0;
+        const payloadEstTokens = Math.round((payloadChars + toolDefCharsForCtx) / 4);
+        const numCtx = computeDynamicNumCtx(payloadEstTokens, modeConfig.maxTokens, contextWindow);
+
         const chatRequest: ChatRequest = {
           model,
           messages,
@@ -477,14 +531,36 @@ export class AgentChatExecutor {
           options: {
             temperature: modeConfig.temperature,
             num_predict: modeConfig.maxTokens,
+            num_ctx: numCtx,
             stop: ['[TASK_COMPLETE]'],
           },
         };
         if (useNativeTools) {
           chatRequest.tools = this.toolRegistry.getOllamaToolDefinitions();
         }
-        if (useThinking) {
-          chatRequest.think = true;
+
+        // --- Diagnostic: log request payload sizes for debugging slow models ---
+        {
+          const sysMsg = messages[0]?.role === 'system' ? messages[0].content : '';
+          const sysChars = sysMsg.length;
+          const sysEstTokens = Math.round(sysChars / 4);
+          const toolDefCount = chatRequest.tools?.length || 0;
+          const toolDefChars = chatRequest.tools ? JSON.stringify(chatRequest.tools).length : 0;
+          const toolDefEstTokens = Math.round(toolDefChars / 4);
+          const totalChars = messages.reduce((s: number, m: any) => s + (m.content?.length || 0), 0);
+          const totalEstTokens = Math.round(totalChars / 4);
+          this.outputChannel.appendLine(
+            `[Iteration ${iteration}] Request payload: system_prompt=${sysEstTokens}tok(${sysChars}ch), ` +
+            `tool_defs=${toolDefEstTokens}tok(${toolDefChars}ch, ${toolDefCount} tools), ` +
+            `total_messages=${totalEstTokens}tok(${totalChars}ch), ` +
+            `num_ctx=${numCtx} (dynamic, model_max=${contextWindow}), num_predict=${modeConfig.maxTokens}, temp=${modeConfig.temperature}`
+          );
+          // On first iteration, dump the full system prompt so users can review it
+          if (iteration === 1) {
+            this.outputChannel.appendLine(`[Iteration 1] === SYSTEM PROMPT START ===`);
+            this.outputChannel.appendLine(sysMsg);
+            this.outputChannel.appendLine(`[Iteration 1] === SYSTEM PROMPT END (${sysChars} chars, ~${sysEstTokens} tokens) ===`);
+          }
         }
 
         // Signal the webview that a new iteration is starting so it can
@@ -497,25 +573,9 @@ export class AgentChatExecutor {
 
         phase = 'streaming response from model';
         const thinkingStartTime = Date.now();
-        let streamResult;
-        try {
-          streamResult = await this.streamProcessor.streamIteration(
+        const streamResult = await this.streamProcessor.streamIteration(
             chatRequest, sessionId, model, iteration, useNativeTools, token, thinkingStartTime
           );
-        } catch (thinkErr: any) {
-          // Ollama returns 400 when `think: true` is sent to models that don't
-          // support thinking. Detect this, disable thinking, and retry.
-          if (useThinking && thinkErr instanceof OllamaError && thinkErr.statusCode === 400) {
-            useThinking = false;
-            delete chatRequest.think;
-            this.outputChannel?.appendLine(`[Iteration ${iteration}] Model does not support thinking — retrying without think:true`);
-            streamResult = await this.streamProcessor.streamIteration(
-              chatRequest, sessionId, model, iteration, useNativeTools, token, thinkingStartTime
-            );
-          } else {
-            throw thinkErr;
-          }
-        }
 
         let { response } = streamResult;
         const { thinkingContent, nativeToolCalls, truncated, toolParseErrors } = streamResult;
@@ -542,7 +602,17 @@ export class AgentChatExecutor {
         // Update real token counts for context compactor (used next iteration)
         if (streamResult.promptTokens != null) {
           lastPromptTokens = streamResult.promptTokens;
-          this.outputChannel.appendLine(`[Iteration ${iteration}] Token usage: prompt=${streamResult.promptTokens}, completion=${streamResult.completionTokens ?? '?'}, context_window=${contextWindow}`);
+          // Truncation detection: compare what we sent vs what the model actually processed
+          const sentChars = messages.reduce((sum, m) => sum + (m.content?.length || 0), 0);
+          const sentEstTokens = Math.round(sentChars / 4);
+          const sentMsgCount = messages.length;
+          const actualPrompt = streamResult.promptTokens;
+          const ratio = sentEstTokens > 0 ? (actualPrompt / sentEstTokens) : 1;
+          let truncationWarning = '';
+          if (ratio < 0.5 && sentEstTokens > 1000) {
+            truncationWarning = ` ⚠️ POSSIBLE TRUNCATION: sent ~${sentEstTokens} est. tokens (${sentMsgCount} msgs, ${sentChars} chars) but model only processed ${actualPrompt} prompt tokens (ratio=${ratio.toFixed(2)}). The server may be silently dropping messages!`;
+          }
+          this.outputChannel.appendLine(`[Iteration ${iteration}] Token usage: prompt=${actualPrompt}, completion=${streamResult.completionTokens ?? '?'}, context_window=${contextWindow}, sent_est=${sentEstTokens}, sent_msgs=${sentMsgCount}, ratio=${ratio.toFixed(2)}${truncationWarning}`);
         }
 
         // Emit token usage to the webview for the live indicator
@@ -596,16 +666,13 @@ export class AgentChatExecutor {
         // Push a continuation message so it can resume from where it was cut off.
         if (truncated && response) {
           this.outputChannel.appendLine(`[Iteration ${iteration}] Output truncated by context limit — requesting continuation`);
-          // THINKING CONTENT FALLBACK: Many Ollama model templates (chatml, llama3, phi-3,
-          // gemma, etc.) render ONLY {{ .Content }} for assistant messages and silently
-          // drop {{ .Thinking }}. When the model produces empty content + thinking (common
-          // for thinking models), the model sees blank assistant turns → amnesia → loops.
-          // Using thinking as content fallback ensures the model's reasoning survives in
-          // all templates. The thinking field is still sent for templates that support it.
-          // DB persist is unaffected (uses original `response`). See Ollama source:
-          // template/*.gotmpl and model/renderers/*.go for per-model rendering behavior.
-          const truncMsg: any = { role: 'assistant', content: response || thinkingContent || '' };
-          if (thinkingContent) truncMsg.thinking = thinkingContent;
+          // NO THINKING IN HISTORY: Per Ollama issue #10448 and Qwen3 docs,
+          // historical model output should only include the final output part.
+          // Including `thinking` causes models to see previous reasoning and
+          // repeat the same plan across iterations.
+          // The '[Reasoning completed]' marker prevents blank-turn amnesia for
+          // templates that only render {{ .Content }}.
+          const truncMsg: any = { role: 'assistant', content: response || (thinkingContent ? '[Reasoning completed]' : '') };
           messages.push(truncMsg);
           messages.push({
             role: 'user',
@@ -670,11 +737,9 @@ export class AgentChatExecutor {
 
         // --- 5. Check for [TASK_COMPLETE] ---
         // Thinking models may signal completion only in thinking content (empty response).
-        const completionSignal = response + ' ' + thinkingContent;
-        if (completionSignal.includes('[TASK_COMPLETE]') || completionSignal.toLowerCase().includes('task is complete')) {
+        if (isCompletionSignaled(response, thinkingContent)) {
           if (taskRequiresWrite && !hasWrittenFiles) {
-            const writeCheckMsg: any = { role: 'assistant', content: response || thinkingContent || '' };
-            if (thinkingContent) writeCheckMsg.thinking = thinkingContent;
+            const writeCheckMsg: any = { role: 'assistant', content: response || (thinkingContent ? '[Reasoning completed]' : '') };
             messages.push(writeCheckMsg);
             messages.push({
               role: 'user',
@@ -687,8 +752,7 @@ export class AgentChatExecutor {
             // Only nudge once — don't block completion if the model insists
             if (!agentSession._terminalNudgeSent) {
               agentSession._terminalNudgeSent = true;
-              const termCheckMsg: any = { role: 'assistant', content: response || thinkingContent || '' };
-              if (thinkingContent) termCheckMsg.thinking = thinkingContent;
+              const termCheckMsg: any = { role: 'assistant', content: response || (thinkingContent ? '[Reasoning completed]' : '') };
               messages.push(termCheckMsg);
               messages.push({
                 role: 'user',
@@ -714,8 +778,7 @@ export class AgentChatExecutor {
                 }
               }
               if (allErrors.length > 0) {
-                const diagCheckMsg: any = { role: 'assistant', content: response || thinkingContent || '' };
-                if (thinkingContent) diagCheckMsg.thinking = thinkingContent;
+                const diagCheckMsg: any = { role: 'assistant', content: response || (thinkingContent ? '[Reasoning completed]' : '') };
                 messages.push(diagCheckMsg);
                 messages.push({
                   role: 'user',
@@ -755,28 +818,32 @@ export class AgentChatExecutor {
         if (toolCalls.length === 0) {
           consecutiveNoToolIterations++;
           // Thinking content fallback — see comment at truncation handler.
-          const noToolMsg: any = { role: 'assistant', content: response || thinkingContent || '' };
-          if (thinkingContent) noToolMsg.thinking = thinkingContent;
+          const noToolMsg: any = { role: 'assistant', content: response || (thinkingContent ? '[Reasoning completed]' : '') };
           messages.push(noToolMsg);
 
-          // If the model responds with text but no tools for 2+ consecutive
-          // iterations, treat it as done — the model has answered and isn't
-          // going to use tools. Without this, the loop sends "Continue with
-          // the task" forever.
-          if (consecutiveNoToolIterations >= 2) {
+          // Smart completion detection (pure function — see agentControlPlane.ts)
+          const completionAction = checkNoToolCompletion({
+            response, thinkingContent, hasWrittenFiles, consecutiveNoToolIterations
+          });
+
+          if (completionAction === 'break_implicit') {
+            this.outputChannel.appendLine(`[Iteration ${iteration}] Breaking: empty response after writing files — implicit completion`);
+            break;
+          }
+          if (completionAction === 'break_consecutive') {
             this.outputChannel.appendLine(`[Iteration ${iteration}] Breaking: ${consecutiveNoToolIterations} consecutive no-tool iterations`);
             break;
           }
 
           if (iteration < config.maxIterations - 1) {
-            messages.push({
-              role: 'user',
-              content: this.buildContinuationMessage(
-                iteration, config.maxIterations, sessionMemory,
-                continuationStrategy, agentSession.filesChanged || [],
-                undefined, agentSession.task
-              )
-            });
+            // Directive probe: tell the model explicitly what to do next
+            const probeContent = hasWrittenFiles
+              ? 'If you are done, respond with [TASK_COMPLETE]. Otherwise, continue using tools.'
+              : buildLoopContinuationMessage(
+                  { iteration, maxIterations: config.maxIterations, strategy: continuationStrategy, filesChanged: agentSession.filesChanged },
+                  { event: 'no_tools' as AgentLoopEvent }
+                );
+            messages.push({ role: 'user', content: probeContent });
           }
           continue;
         }
@@ -794,13 +861,20 @@ export class AgentChatExecutor {
           await this.persistUiEvent(sessionId, 'startProgressGroup', { title: groupTitle });
         }
 
-        // Build assistant message with tool call descriptions in .content
-        // so the model sees what it decided, regardless of template support.
-        let assistantContent = response || thinkingContent || '';
-        if (useNativeTools && toolCalls.length > 0) {
+        // Build assistant message for conversation history.
+        // Native mode: use structured tool_calls, no [Called:] duplication in content.
+        // XML mode: describe calls in content (model can't see tool_calls field).
+        // CRITICAL: Prefer the compact tool summary over the model's verbose
+        // planning text. The response was already streamed to the UI, but
+        // keeping it in history causes the model to see its own plan and
+        // restate it every iteration (see Pitfall #38).
+        const toolSummary = buildToolCallSummary(toolCalls);
+        let assistantContent = toolSummary || response || (thinkingContent ? '[Reasoning completed]' : '');
+        if (!useNativeTools && toolCalls.length > 0) {
+          // XML fallback: describe calls in content since there's no tool_calls field
           const callDescs = toolCalls.map(tc => {
             const argParts = Object.entries(tc.args || {})
-              .filter(([k]) => k !== 'content')  // skip large file content args
+              .filter(([k]) => k !== 'content')
               .map(([k, v]) => `${k}=${typeof v === 'string' ? `"${v.substring(0, 100)}"` : JSON.stringify(v)}`)
               .join(', ');
             return `${tc.name}(${argParts})`;
@@ -809,8 +883,9 @@ export class AgentChatExecutor {
             ? `${assistantContent}\n\n[Called: ${callDescs}]`
             : `[Called: ${callDescs}]`;
         }
+        // NO thinking field in history — see Ollama issue #10448.
+        // Thinking is already persisted to the UI via thinkingBlock events.
         const assistantMsg: any = { role: 'assistant', content: assistantContent };
-        if (thinkingContent) assistantMsg.thinking = thinkingContent;
         if (useNativeTools) assistantMsg.tool_calls = nativeToolCalls;
         messages.push(assistantMsg);
 
@@ -876,29 +951,33 @@ export class AgentChatExecutor {
         }
 
         // Feed tool results back into conversation history.
-        // Convert native role:'tool' results to role:'user' with tool name
-        // in .content — this is the ONLY field all Ollama templates render.
+        // Native mode: use proper role:'tool' messages (Ollama API standard),
+        // then a slim control packet continuation. This gives the model proper
+        // tool-result association via its template renderer.
+        // XML mode: wrap results in role:'user' with a control packet.
         if (useNativeTools) {
-          const toolResultParts = batchResult.nativeResults.map(r =>
-            `[${r.tool_name} result]\n${r.content}`
-          );
-          const toolResultText = toolResultParts.join('\n\n');
+          // Push individual role:'tool' messages — the model's template renderer
+          // handles these correctly (see Ollama Go renderers for each model family).
+          for (const r of batchResult.nativeResults) {
+            messages.push({ role: 'tool', content: r.content, tool_name: r.tool_name });
+          }
+          // Slim continuation — session memory is in the system prompt,
+          // so we only need the control packet (iteration budget + state).
           messages.push({
             role: 'user',
-            content: this.buildContinuationMessage(
-              iteration, config.maxIterations, sessionMemory,
-              continuationStrategy, agentSession.filesChanged || [],
-              toolResultText, agentSession.task
+            content: buildLoopContinuationMessage(
+              { iteration, maxIterations: config.maxIterations, strategy: continuationStrategy, filesChanged: agentSession.filesChanged },
+              { event: 'tool_results' as AgentLoopEvent, note: sessionMemory.getCompactSummary() || undefined }
             )
           });
         } else if (batchResult.xmlResults.length > 0) {
-          const toolResultText = batchResult.xmlResults.join('\n\n');
+          // XML fallback: tool results go in content (no role:'tool' support).
+          const toolResultText = formatTextToolResults(batchResult.xmlResults);
           messages.push({
             role: 'user',
-            content: this.buildContinuationMessage(
-              iteration, config.maxIterations, sessionMemory,
-              continuationStrategy, agentSession.filesChanged || [],
-              toolResultText, agentSession.task
+            content: buildLoopContinuationMessage(
+              { iteration, maxIterations: config.maxIterations, strategy: continuationStrategy, filesChanged: agentSession.filesChanged },
+              { event: 'tool_results' as AgentLoopEvent, toolResults: toolResultText, note: sessionMemory.getCompactSummary() || undefined }
             )
           });
         }
@@ -941,69 +1020,6 @@ export class AgentChatExecutor {
   // -------------------------------------------------------------------------
   // Private helpers
   // -------------------------------------------------------------------------
-
-  /** Build a strategy-aware continuation message for the agent loop. */
-  private buildContinuationMessage(
-    iteration: number,
-    maxIterations: number,
-    sessionMemory: AgentSessionMemory,
-    strategy: ContinuationStrategy,
-    filesChanged: string[],
-    toolResults?: string,
-    originalTask?: string
-  ): string {
-    const remaining = maxIterations - iteration - 1;
-
-    if (strategy === 'minimal') {
-      return toolResults
-        ? `${toolResults}\n\nContinue. Respond with [TASK_COMPLETE] when done.`
-        : 'Continue. Respond with [TASK_COMPLETE] when done.';
-    }
-
-    const parts: string[] = [];
-
-    if (toolResults) {
-      parts.push(toolResults);
-    }
-
-    if (strategy === 'full') {
-      // Iteration budget
-      parts.push(`[Iteration ${iteration + 1}/${maxIterations} — ${remaining} remaining]`);
-
-      // Task reminder — critical for keeping the model focused after errors
-      // or when several tool results push the original request out of attention
-      if (originalTask) {
-        const taskPreview = originalTask.length > 200
-          ? originalTask.substring(0, 200) + '…'
-          : originalTask;
-        parts.push(`Task: ${taskPreview}`);
-      }
-
-      // Files modified so far
-      if (filesChanged.length > 0) {
-        const uniqueFiles = [...new Set(filesChanged)];
-        const fileList = uniqueFiles.length <= 5
-          ? uniqueFiles.join(', ')
-          : `${uniqueFiles.slice(0, 5).join(', ')} (+${uniqueFiles.length - 5} more)`;
-        parts.push(`Files modified: ${fileList}`);
-      }
-
-      // Session memory summary
-      const memorySummary = sessionMemory.getCompactSummary();
-      if (memorySummary) {
-        parts.push(`Memory: ${memorySummary}`);
-      }
-    } else if (strategy === 'standard' && originalTask) {
-      // Standard strategy: include abbreviated task reminder
-      const taskPreview = originalTask.length > 100
-        ? originalTask.substring(0, 100) + '…'
-        : originalTask;
-      parts.push(`Task: ${taskPreview}`);
-    }
-
-    parts.push('Continue with the task. Do NOT restate your plan — proceed directly with tool calls or respond with [TASK_COMPLETE] if finished.');
-    return parts.join('\n');
-  }
 
   /**
    * Recover a tool call from an Ollama tool-parse error message.

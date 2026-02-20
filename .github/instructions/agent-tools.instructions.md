@@ -57,42 +57,75 @@ src/services/agent/
 - `parseToolCalls()` — native vs XML extraction dispatch
 - `logIterationResponse()` — debug output channel logging
 - Pass-through delegates to `checkpointManager` and `approvalManager`
-- `buildContinuationMessage()` — strategy-aware continuation text (see Continuation Strategy below)
+- `buildContinuationMessage()` — **REMOVED** — replaced by `agentControlPlane.buildLoopContinuationMessage()` (see Conversation History Protocol below)
 - Post-task verification gate — diagnostics check on modified files before accepting `[TASK_COMPLETE]`
 - Output truncation handling — detects `StreamResult.truncated` and sends "continue where you left off" message
 - Session memory DB persistence — saves `sessionMemory.toJSON()` via `databaseService.saveSessionMemory()` after loop
 
-#### Continuation Strategy
+#### Conversation History Protocol
 
-The executor builds rich continuation messages via `buildContinuationMessage()` when the LLM needs to keep iterating. The level of detail is controlled by the `ollamaCopilot.agent.continuationStrategy` setting (`ContinuationStrategy` type: `'full' | 'standard' | 'minimal'`):
+The executor follows strict Ollama API conventions to prevent models from repeating actions and losing context. This was redesigned to eliminate 7 sources of redundancy (see Pitfall #37).
 
-| Strategy | Content |
-|----------|---------|")
-| `full` (default) | Iteration budget remaining, files modified so far, session memory compact summary, tool results context |
-| `standard` | Iteration budget remaining, brief context |
-| `minimal` | Bare "Continue with the task" |
+##### Native Tool Calling Mode (`useNativeTools = true`)
 
-The method is called at two sites: (1) when the LLM returns text with no tool calls, and (2) as the standard continuation after a tool batch completes.
+Each iteration produces this conversation history pattern:
+```
+role: 'assistant'  { content: "explanation...", tool_calls: [...] }
+role: 'tool'       { content: "result1", tool_name: "read_file" }
+role: 'tool'       { content: "result2", tool_name: "write_file" }
+role: 'user'       { content: "<agent_control>{...}</agent_control>" }
+```
 
-#### Continuation Message After Tool Results
+**Key rules:**
+- Assistant messages carry `tool_calls` as **structured data** — NO `[Called:]` text appended to `content`
+- Tool results use `role: 'tool'` with `tool_name` field (Ollama protocol — NOT `tool_call_id`)
+- When assistant `response` is empty (thinking model produced only thinking + tool_calls), `buildToolCallSummary()` generates a brief deterministic description of the tool calls (e.g. "I searched for 'query' and read src/file.ts"). Falls back to `'[Reasoning completed]'` only when no tools were called. This gives the model enough context to build on its previous actions without re-deriving the same plan (see Pitfall #38).
+- Continuation is a slim `<agent_control>` JSON packet (state, iteration budget, changed files)
 
-After tool execution, both native and XML tool-calling paths inject a `role: 'user'` continuation message via `buildContinuationMessage()`. This ensures the `continuationStrategy` setting (`full`/`standard`/`minimal`) works consistently regardless of tool-calling mode.
+##### XML Fallback Mode (`useNativeTools = false`)
 
-**`buildContinuationMessage(iteration, maxIterations, sessionMemory, strategy, filesChanged, toolResults?, originalTask?)`** assembles the reminder based on strategy:
+```
+role: 'assistant'  { content: "explanation...\n[Called:] tool_name1, tool_name2" }
+role: 'user'       { content: "<agent_control>{..., \"toolResults\": \"[read_file result]...\"}</agent_control>" }
+```
 
-| Strategy | Content |
-|----------|---------|
-| `minimal` | `Continue. Respond with [TASK_COMPLETE] when done.` |
-| `standard` | Task reminder (100 chars) + continue instruction |
-| `full` | Iteration budget + task reminder (200 chars) + files modified + session memory summary + continue instruction |
+- Tool results are embedded inside the `<agent_control>` packet via `formatTextToolResults()`
+- `[Called:]` summarizes which tools were invoked (since no structured `tool_calls` field)
 
-**Native tool path**: `batchResult.nativeResults` (role: 'tool' messages) are pushed first, then `buildContinuationMessage()` is called with `toolResults=undefined` (tool results are already in the history as separate messages).
+##### Agent Control Plane (`agentControlPlane.ts`)
 
-**XML fallback path**: `batchResult.xmlResults` are joined and passed as `toolResults` (embedded in the continuation message since XML mode uses role: 'user' for everything).
+All continuation messages use `buildLoopContinuationMessage()` from the control plane module. This function emits structured `<agent_control>` JSON packets:
 
-**No-tools path**: Called with no tool results to nudge the model to continue.
+```json
+{
+  "state": "need_tools",
+  "iteration": 3,
+  "maxIterations": 25,
+  "remainingIterations": 22,
+  "filesChanged": ["src/main.ts"],
+  "note": "Continue executing your plan."
+}
+```
 
-**Do NOT bypass `buildContinuationMessage()`** with hardcoded reminders — the whole point is that the user's `continuationStrategy` setting controls the verbosity.
+The `state` field is derived from an `AgentLoopEvent` via `resolveControlState()`:
+- `'tool_results'` → `'need_tools'` (model should continue using tools)
+- `'no_tools'` → `'need_tools'` (model returned text without tools — nudge it)
+- `'diagnostics_found'` → `'need_fixes'` (diagnostics reported errors post-write)
+
+**Anti-repetition**: `buildLoopContinuationMessage()` appends a natural-language directive **after** the JSON packet: `"Do NOT repeat your previous response. Proceed directly with tool calls or respond with [TASK_COMPLETE] when finished."` This is at the highest recency position (the last content before the model generates) — critical for smaller models (≤30B) that ignore instructions buried in the system prompt. The system prompt also has a CONTINUATION BEHAVIOR section as a belt-and-suspenders measure.
+
+##### DB History Loading
+
+When loading conversation history from the database (session resume):
+- **Native mode**: `role: 'tool'` messages are preserved with `tool_name` and structured `tool_calls` on assistant messages
+- **XML mode**: Messages are loaded as `role: 'user'` with `[tool_name result]` prefix format
+- Stale `[SYSTEM NOTE:]` messages are stripped on each iteration to prevent accumulation
+
+##### Session Memory Deduplication
+
+`toSystemReminder()` outputs a `## Task Reference` section with a **120-character preview** of the original task (not the full text, which is always in `messages[1]`). This prevents the task from appearing 3+ times in the context.
+
+**Do NOT bypass the control plane** with hardcoded continuation messages — all continuation logic flows through `buildLoopContinuationMessage()`.
 
 #### Post-Task Verification Gate
 
@@ -103,31 +136,27 @@ When the LLM emits `[TASK_COMPLETE]`, the executor does NOT immediately accept i
 4. Uses `agentSession._verificationDone` guard to prevent infinite verification loops (only runs once)
 5. If no errors, accepts the completion normally
 
-#### Thinking-in-History (Content Fallback + `thinking` Field)
+#### Thinking-in-History — No Thinking Content in History
 
-With thinking models (QwQ, DeepSeek-R1 derivatives, etc.), the model's reasoning lives in the `thinking` field while `response` (the `content` field) is often empty. Ollama supports a `thinking` field on assistant messages, **but whether templates render it is model-specific**.
+Per Ollama issue #10448 and Qwen3 docs: **"No Thinking Content in History — historical model output should only include the final output part."** Including the `thinking` field on previous assistant messages causes models to see ALL their prior reasoning in the rendered prompt. This triggers repetition loops where the model re-derives the same plan every iteration. Ollama v0.6.7+ strips `<think>` from the `content` field via templates, but the separate `thinking` API field bypasses that protection.
 
-**The problem**: Many Ollama model templates (chatml, llama3, phi-3, gemma, vicuna, alpaca, zephyr, etc.) render ONLY `{{ .Content }}` for assistant messages and silently drop `{{ .Thinking }}`. Custom Go renderers vary: Qwen3VL renders thinking, DeepSeek3 renders it only for the current turn, LFM2 actively strips it from past turns, OLMo3/Cogito ignore it entirely. When `content` is empty, the model sees blank assistant turns → loses its own reasoning → re-derives the same plan → infinite loops.
-
-**The fix**: Both executors use `response || thinkingContent` as the `content` value for the in-memory conversation history. This ensures the model's reasoning is in a field ALL templates render. The `thinking` field is also sent for templates that support it (belt and suspenders). DB persist is unaffected — uses original `response`.
+**The fix has two layers**:
+1. **Never assign `thinking` on history messages**: All `if (thinkingContent) msg.thinking = thinkingContent` lines have been removed. Assistant messages use `response || (thinkingContent ? '[Reasoning completed]' : '')` as `content` only.
+2. **Defensive strip before API call**: Both executors strip `thinking` from ALL messages right before building the `chatRequest` — catches any edge case where thinking might leak from external sources.
 
 ```typescript
-// Both executors — tool path AND no-tool path:
-const assistantMsg: any = { role: 'assistant', content: response || thinkingContent || '' };
-if (thinkingContent) assistantMsg.thinking = thinkingContent;
-messages.push(assistantMsg); // In-memory only — NOT persisted to DB
+// Agent executor — assistant message building:
+const historyContent = response || (thinkingContent ? '[Reasoning completed]' : '');
+const assistantMsg: any = { role: 'assistant', content: historyContent };
+// NO thinking field — per Ollama #10448
+messages.push(assistantMsg);
 ```
 
-**Behavior by template type:**
-- Template renders only `{{ .Content }}` (most templates): Model sees thinking as content. Loop prevented.
-- Template renders `{{ .Thinking }}` + `{{ .Content }}`: Model sees thinking twice (redundant but harmless).
-- Template renders only `{{ .Thinking }}`: Model sees thinking. Content fallback is unused.
+**TASK_COMPLETE detection**: Also checks `thinkingContent` via `isCompletionSignaled()` — thinking models may signal completion only in their thinking field.
 
-**TASK_COMPLETE detection**: Also checks `thinkingContent` — thinking models may signal completion only in their thinking field (not in response content).
+**CRITICAL**: The modified content is for the in-memory `messages` array only. DB persist uses original `response`. Thinking content is separately persisted as a `thinkingBlock` UI event — no data loss.
 
-**CRITICAL**: The modified content is for the in-memory `messages` array only. DB persist uses original `response` (or empty string if text was already persisted via `iterationDelta`). Thinking content is separately persisted as a `thinkingBlock` UI event. `timelineBuilder.ts` has a backward-compat strip of the `[My previous reasoning: ...]` prefix for old sessions.
-
-**No repetition safety nets**: All similarity-based repetition detection has been removed. The content fallback addresses the root cause (model amnesia), not the symptom (repeated output).
+**No repetition safety nets**: All similarity-based repetition detection has been removed. Stripping thinking from history addresses the root cause (model sees prior reasoning), not the symptom (repeated output).
 
 ### `AgentExploreExecutor` — Read-Only Modes
 
@@ -488,14 +517,15 @@ The executor supports two tool calling paths, selected based on model capabiliti
 ```
 [system] You are a coding agent...
 [user] Create a hello world file
-[assistant, thinking: "...", tool_calls: [{function:{name:"write_file", arguments:{...}}}]]
+[assistant, content: "[Reasoning completed]", tool_calls: [{function:{name:"write_file", arguments:{...}}}]]
 [tool, tool_name: "write_file"] File written successfully
-[assistant, thinking: "..."] Done! [TASK_COMPLETE]
+[assistant, content: "Done!"] [TASK_COMPLETE]
 ```
 
 **Key rules:**
-- Assistant messages MUST include `thinking`, `content`, AND `tool_calls` — omitting `thinking` causes the model to lose chain-of-thought context across iterations
+- Assistant messages MUST NOT include `thinking` — per Ollama #10448 / Qwen3 docs: "No Thinking Content in History." Including it causes the model to see all previous reasoning → repetition loops. Use `'[Reasoning completed]'` as `content` when response is empty.
 - Tool result messages MUST include `tool_name` — without it, the model can't match results to calls in multi-tool responses
+- Both executors defensively strip `thinking` from ALL messages before building the chatRequest
 - Do NOT deduplicate tool calls — Ollama sends each as a complete object in its own chunk; dedup would drop legitimate repeated calls
 - `ToolCall` type has optional `id`, `type`, and `function.index` fields — Ollama returns `type: 'function'` and `function.index` but NOT `id`
 
@@ -571,7 +601,7 @@ All core agent types are centralised in `src/types/agent.ts`:
 | `read_file` | Read file contents (streaming, chunked in 100-line blocks via `countFileLines` + `readFileChunk`; see `src/agent/tools/readFile.ts`) |
 | `write_file` | Write/create file (handles both) |
 | `list_files` | List directory contents (output includes `basePath` for click handling) |
-| `search_workspace` | Search for text or regex patterns in files (ripgrep-based; supports `isRegex` flag for case-insensitive, alternatives, wildcards) |
+| `search_workspace` | Search for text or regex patterns in files (ripgrep-based; supports `isRegex` flag, optional `directory` param to scope to a specific workspace folder or subdirectory) |
 | `run_terminal_command` | Execute shell commands |
 | `get_diagnostics` | Get file errors/warnings |
 
@@ -669,9 +699,18 @@ All built-in tools resolve file paths through `resolveWorkspacePath()` (single-r
 
 **Multi-root path** has a separate handling: step 4 of the resolution order interprets the first path segment as a workspace folder **name** and strips it.
 
-### `search_workspace` — Regex Support & Output Format
+### `search_workspace` — Regex Support, Directory Scoping & Output Format
 
-The tool supports both plain-text and regex searches via the `isRegex` parameter. The LLM is guided toward regex through:
+The tool supports both plain-text and regex searches via the `isRegex` parameter, and optional directory scoping via the `directory` parameter.
+
+**Directory scoping** (`directory` param):
+- In **multi-root workspaces**, pass a workspace folder name (e.g. `"search-node-master"`) to restrict results to that folder
+- In any workspace, pass a relative subdirectory (e.g. `"src/controllers"`) to narrow the search
+- When omitted, all workspace folders are searched
+- The system prompt tells the model about this parameter in the `WORKSPACE` section
+- Defensive: the tool re-reads `vscode.workspace.workspaceFolders` at execution time in case the context was stale
+
+The LLM is guided toward regex through:
 
 1. **Tool description**: Explains when to use `isRegex=true` (uncertain casing, alternatives, wildcards)
 2. **Schema**: `query` and `isRegex` field descriptions mention `(?i)`, `|`, `.*` syntax

@@ -92,11 +92,19 @@ export class AgentPromptBuilder {
   private workspaceInfo(allFolders: readonly vscode.WorkspaceFolder[], primaryWorkspace?: vscode.WorkspaceFolder): string {
     if (allFolders.length > 1) {
       const folderList = allFolders.map(f => `  - ${f.name}: ${f.uri.fsPath}`).join('\n');
+      // Include active file folder hint so the model knows where the user's context is from.
+      // This helps it scope searches to the right folder in multi-root workspaces.
+      const activeFile = vscode.window.activeTextEditor?.document.uri;
+      const activeFolder = activeFile ? vscode.workspace.getWorkspaceFolder(activeFile) : undefined;
+      const activeHint = activeFolder
+        ? `\nThe user's active file is in the "${activeFolder.name}" folder. When searching or listing files, prefer this folder unless the user specifies otherwise.`
+        : '';
       return `WORKSPACE:
 This is a multi-root workspace with ${allFolders.length} folders:
 ${folderList}
 All file paths are relative to the folder that contains them (or prefixed with the folder name). The primary folder is: ${primaryWorkspace?.uri?.fsPath || allFolders[0]?.uri?.fsPath || ''}.
-Terminal commands run in the primary workspace directory by default.`;
+Terminal commands run in the primary workspace directory by default.${activeHint}
+When using search_workspace, you can pass directory="folder_name" to scope the search to a specific workspace folder.`;
     }
     return `WORKSPACE:
 The workspace root is: ${primaryWorkspace?.uri?.fsPath || allFolders[0]?.uri?.fsPath || '(unknown)'}. All file paths are relative to this workspace. Terminal commands run in this directory by default.`;
@@ -264,7 +272,14 @@ If you need temporary files (test scripts, intermediate output, scratch work), c
 When you have fully completed the task, respond with [TASK_COMPLETE] at the end of your final message. Do not use this signal until all requested changes have been made and verified.
 - Before declaring completion, verify your work: use get_diagnostics to check for errors in modified files.
 - If you wrote code, confirm it compiles/lints cleanly before completing.
-- Include a brief summary of what was done in your final message.`;
+- Include a brief summary of what was done in your final message.
+
+CONTINUATION BEHAVIOR:
+Between iterations, you receive an <agent_control> packet with iteration budget and state. Follow these rules:
+- Do NOT restate your plan or summarize what you already did. Proceed directly with the next action.
+- Do NOT repeat tool calls you already made — the results are in your conversation history.
+- If tool results are provided, use them immediately. Do not re-read files you just read.
+- Act on the state field: "need_tools" = continue working, "need_fixes" = fix the reported errors first.`;
   }
 
   // ---------------------------------------------------------------------------

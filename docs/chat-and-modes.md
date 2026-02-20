@@ -45,7 +45,7 @@ The autonomous coding agent. It can read/write files, search your workspace, and
 - **Native** — If the model supports function calling (shown in the Tools column of Model Capabilities), the extension uses Ollama's native `tools` API with structured `tool_calls` responses. This is the most reliable path. The conversation history uses `{role: 'tool', content, tool_name}` so the model can match results to the originating call.
 - **XML fallback** — If the model does not support native tool calling, the agent falls back to XML-based tool parsing (`<tool_call>` tags). Tool results are bundled into a single user message instead of individual tool messages. A warning banner is shown at the top of the chat to indicate degraded functionality.
 
-**Thinking support:** When `ollamaCopilot.agent.enableThinking` is enabled, the extension passes `think: true` to the API. The model's internal reasoning (`thinking` field) is preserved in conversation history across iterations so the model maintains its chain-of-thought context.
+**Thinking support:** Thinking models (Qwen 3, GPT-OSS, DeepSeek R1, etc.) reason automatically — Ollama enables thinking by default for supported models. The model's reasoning trace is displayed in a collapsible block in the UI but is **not** included in conversation history (per Ollama best practices). The model thinks fresh each iteration.
 
 **Available tools:**
 | Tool | Description |
@@ -54,7 +54,7 @@ The autonomous coding agent. It can read/write files, search your workspace, and
 | `write_file` | Write/modify files |
 | `create_file` | Create new files |
 | `list_files` | List directory contents |
-| `search_workspace` | Search for text or regex patterns in files (supports case-insensitive matching, alternatives, wildcards via `isRegex` flag) |
+| `search_workspace` | Search for text or regex patterns in files (supports case-insensitive matching, alternatives, wildcards via `isRegex` flag; optional `directory` param to scope to a folder) |
 | `run_terminal_command` | Execute shell commands |
 | `get_diagnostics` | Get TypeScript/ESLint errors for a file |
 | `get_document_symbols` | Get a file's outline — classes, functions, variables with line ranges |
@@ -148,7 +148,7 @@ The `run_subagent` tool allows the main Agent to spawn a read-only sub-agent for
 
 ## Thinking Blocks
 
-When `ollamaCopilot.agent.enableThinking` is enabled (default: `true`), the extension passes `think: true` to the Ollama API. Models that support chain-of-thought reasoning will return their internal reasoning alongside the normal response.
+Thinking models (Qwen 3, GPT-OSS, DeepSeek R1, etc.) automatically produce a reasoning trace alongside their response — Ollama enables thinking by default for supported models. The extension does not send an explicit `think` parameter; it relies on the model's default behavior.
 
 **During live chat:**
 - Thinking tokens stream in real time inside a collapsible `<details>` element labeled "Thought"

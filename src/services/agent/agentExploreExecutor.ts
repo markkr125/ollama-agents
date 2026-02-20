@@ -2,7 +2,7 @@ import * as vscode from 'vscode';
 import { ToolRegistry } from '../../agent/toolRegistry';
 import { getConfig } from '../../config/settings';
 import { ExecutorConfig } from '../../types/agent';
-import { ChatRequest, OllamaError } from '../../types/ollama';
+import { ChatRequest } from '../../types/ollama';
 import { MessageRecord } from '../../types/session';
 import { extractToolCalls, removeToolCalls } from '../../utils/toolCallParser';
 import { WebviewMessageEmitter } from '../../views/chatTypes';
@@ -11,6 +11,7 @@ import { DatabaseService } from '../database/databaseService';
 import { extractContextLength, ModelCapabilities } from '../model/modelCompatibility';
 import { OllamaClient } from '../model/ollamaClient';
 import { AgentContextCompactor, estimateTokensByCategory } from './agentContextCompactor';
+import { buildToolCallSummary, checkNoToolCompletion, computeDynamicNumCtx } from './agentControlPlane';
 import { AgentPromptBuilder } from './agentPromptBuilder';
 import { AgentStreamProcessor } from './agentStreamProcessor';
 
@@ -82,7 +83,6 @@ export class AgentExploreExecutor {
     const primaryWorkspace = primaryWorkspaceHint || allFolders[0];
     const useNativeTools = !!capabilities?.tools;
     const { agent: agentConfig } = getConfig();
-    let useThinking = agentConfig.enableThinking && useNativeTools;
 
     // Resolve context window: capabilities DB > live /api/show > user config > Ollama default
     if (!capabilities?.contextLength) {
@@ -180,13 +180,22 @@ export class AgentExploreExecutor {
       const roleBreakdown = Object.entries(roleCounts).map(([r, c]) => `${r}:${c}`).join(', ');
       this.outputChannel.appendLine(`[Explore Iteration ${iteration}] Messages: ${messages.length} (${roleBreakdown}) — ~${Math.round(totalContentChars / 4)} est. tokens`);
 
+      // DIAGNOSTIC: Dump full messages array structure so we can verify
+      // tool results are actually being accumulated across iterations
+      for (let mi = 0; mi < messages.length; mi++) {
+        const m = messages[mi];
+        const contentPreview = (m.content || '').substring(0, 120).replace(/\n/g, '\\n');
+        const toolCallsInfo = m.tool_calls ? ` tool_calls:[${m.tool_calls.length}]` : '';
+        const toolNameInfo = m.tool_name ? ` tool_name:${m.tool_name}` : '';
+        this.outputChannel.appendLine(`  [msg ${mi}] role=${m.role}${toolNameInfo}${toolCallsInfo} content(${(m.content || '').length})="${contentPreview}"`);
+      }
+
       let phase = 'preparing request';
 
       try {
         // Context compaction for long explorations
-        // contextWindow: detected model capacity (display-only) — used for
-        //   compaction threshold and token usage UI. We do NOT send num_ctx
-        //   to Ollama; let it manage its own KV cache.
+        // contextWindow: the model's TRUE context limit — used for compaction decisions.
+        // numCtx: the DYNAMIC value sent to Ollama — sized to the actual payload.
         const detectedContextWindow = capabilities?.contextLength;
         const userContextWindow = getConfig().contextWindow || 16000;
         const contextWindow = detectedContextWindow || userContextWindow;
@@ -209,12 +218,28 @@ export class AgentExploreExecutor {
           }
         }
 
+        // DEFENSIVE: Strip thinking from ALL history messages before sending.
+        // Per Ollama #10448 / Qwen3 docs: "No Thinking Content in History".
+        for (const msg of messages) {
+          if ('thinking' in msg) {
+            delete (msg as any).thinking;
+          }
+        }
+
         // Build chat request — pick the mode-specific config for temperature/maxTokens
         const modeConfigMap: Record<string, 'chatMode' | 'planMode' | 'agentMode'> = {
           chat: 'chatMode', plan: 'planMode', explore: 'agentMode',
           'deep-explore': 'agentMode', review: 'agentMode',
         };
         const modeConfig = getConfig()[modeConfigMap[mode] || 'agentMode'];
+
+        // Estimate payload tokens for dynamic num_ctx sizing
+        const payloadChars = messages.reduce((s: number, m: any) => s + (m.content?.length || 0), 0);
+        const toolDefsForMode = useNativeTools ? this.getToolDefinitions(mode) : undefined;
+        const toolDefCharsForCtx = toolDefsForMode ? JSON.stringify(toolDefsForMode).length : 0;
+        const payloadEstTokens = Math.round((payloadChars + toolDefCharsForCtx) / 4);
+        const numCtx = computeDynamicNumCtx(payloadEstTokens, modeConfig.maxTokens, contextWindow);
+
         const chatRequest: ChatRequest = {
           model,
           messages,
@@ -222,14 +247,36 @@ export class AgentExploreExecutor {
           options: {
             temperature: modeConfig.temperature,
             num_predict: modeConfig.maxTokens,
+            num_ctx: numCtx,
             stop: ['[TASK_COMPLETE]'],
           },
         };
         if (useNativeTools) {
-          chatRequest.tools = this.getToolDefinitions(mode);
+          chatRequest.tools = toolDefsForMode;
         }
-        if (useThinking) {
-          chatRequest.think = true;
+
+        // --- Diagnostic: log request payload sizes for debugging slow models ---
+        {
+          const sysMsg = messages[0]?.role === 'system' ? messages[0].content : '';
+          const sysChars = sysMsg.length;
+          const sysEstTokens = Math.round(sysChars / 4);
+          const toolDefCount = chatRequest.tools?.length || 0;
+          const toolDefChars = chatRequest.tools ? JSON.stringify(chatRequest.tools).length : 0;
+          const toolDefEstTokens = Math.round(toolDefChars / 4);
+          const totalChars = messages.reduce((s: number, m: any) => s + (m.content?.length || 0), 0);
+          const totalEstTokens = Math.round(totalChars / 4);
+          this.outputChannel.appendLine(
+            `[${mode}][Iteration ${iteration}] Request payload: system_prompt=${sysEstTokens}tok(${sysChars}ch), ` +
+            `tool_defs=${toolDefEstTokens}tok(${toolDefChars}ch, ${toolDefCount} tools), ` +
+            `total_messages=${totalEstTokens}tok(${totalChars}ch), ` +
+            `num_ctx=${numCtx} (dynamic, model_max=${contextWindow}), num_predict=${modeConfig.maxTokens}, temp=${modeConfig.temperature}`
+          );
+          // On first iteration, dump the full system prompt so users can review it
+          if (iteration === 1) {
+            this.outputChannel.appendLine(`[${mode}][Iteration 1] === SYSTEM PROMPT START ===`);
+            this.outputChannel.appendLine(sysMsg);
+            this.outputChannel.appendLine(`[${mode}][Iteration 1] === SYSTEM PROMPT END (${sysChars} chars, ~${sysEstTokens} tokens) ===`);
+          }
         }
 
         if (iteration > 1) {
@@ -238,22 +285,9 @@ export class AgentExploreExecutor {
 
         phase = 'streaming response from model';
         const thinkingStartTime = Date.now();
-        let streamResult;
-        try {
-          streamResult = await activeStreamProcessor.streamIteration(
+        const streamResult = await activeStreamProcessor.streamIteration(
             chatRequest, sessionId, model, iteration, useNativeTools, token, thinkingStartTime
           );
-        } catch (thinkErr: any) {
-          if (useThinking && thinkErr instanceof OllamaError && thinkErr.statusCode === 400) {
-            useThinking = false;
-            delete chatRequest.think;
-            streamResult = await activeStreamProcessor.streamIteration(
-              chatRequest, sessionId, model, iteration, useNativeTools, token, thinkingStartTime
-            );
-          } else {
-            throw thinkErr;
-          }
-        }
 
         let { response } = streamResult;
         const { thinkingContent, nativeToolCalls, toolParseErrors } = streamResult;
@@ -275,7 +309,17 @@ export class AgentExploreExecutor {
         // Update real token counts for context compactor (used next iteration)
         if (streamResult.promptTokens != null) {
           lastPromptTokens = streamResult.promptTokens;
-          this.outputChannel.appendLine(`[${mode}][Iteration ${iteration}] Token usage: prompt=${streamResult.promptTokens}, completion=${streamResult.completionTokens ?? '?'}, context_window=${contextWindow}`);
+          // Truncation detection: compare what we sent vs what the model actually processed
+          const sentChars = messages.reduce((sum, m) => sum + (m.content?.length || 0), 0);
+          const sentEstTokens = Math.round(sentChars / 4);
+          const sentMsgCount = messages.length;
+          const actualPrompt = streamResult.promptTokens;
+          const ratio = sentEstTokens > 0 ? (actualPrompt / sentEstTokens) : 1;
+          let truncationWarning = '';
+          if (ratio < 0.5 && sentEstTokens > 1000) {
+            truncationWarning = ` ⚠️ POSSIBLE TRUNCATION: sent ~${sentEstTokens} est. tokens (${sentMsgCount} msgs, ${sentChars} chars) but model only processed ${actualPrompt} prompt tokens (ratio=${ratio.toFixed(2)}). The server may be silently dropping messages!`;
+          }
+          this.outputChannel.appendLine(`[${mode}][Iteration ${iteration}] Token usage: prompt=${actualPrompt}, completion=${streamResult.completionTokens ?? '?'}, context_window=${contextWindow}, sent_est=${sentEstTokens}, sent_msgs=${sentMsgCount}, ratio=${ratio.toFixed(2)}${truncationWarning}`);
         }
 
         // Emit token usage to the webview for the live indicator
@@ -382,22 +426,30 @@ export class AgentExploreExecutor {
 
         if (filteredToolCalls.length === 0) {
           consecutiveNoToolIterations++;
-          // THINKING CONTENT FALLBACK: Many Ollama model templates render ONLY
-          // {{ .Content }} and silently drop {{ .Thinking }}. When a thinking model
-          // produces empty content, using thinking as content fallback prevents the
-          // model from losing its own reasoning → avoids re-derivation loops.
-          // DB persist is unaffected (uses original `response`).
-          const noToolMsg: any = { role: 'assistant', content: response || thinkingContent || '' };
-          if (thinkingContent) noToolMsg.thinking = thinkingContent;
+          // NO THINKING IN HISTORY: Per Ollama issue #10448 and Qwen3 docs.
+          // Use response content or '[Reasoning completed]' marker to prevent
+          // blank-turn amnesia without re-injecting thinking content.
+          const noToolMsg: any = { role: 'assistant', content: response || (thinkingContent ? '[Reasoning completed]' : '') };
           messages.push(noToolMsg);
 
-          if (consecutiveNoToolIterations >= 2) break;
+          // Smart completion detection (pure function — see agentControlPlane.ts).
+          // Explore executor doesn't track hasWrittenFiles directly — for
+          // deep-explore-write mode, an empty response is still a strong
+          // done signal, so we pass hasWrittenFiles=true to trigger
+          // break_implicit on truly empty responses in all modes.
+          const completionAction = checkNoToolCompletion({
+            response, thinkingContent, hasWrittenFiles: true, consecutiveNoToolIterations
+          });
+
+          if (completionAction !== 'continue') {
+            this.outputChannel.appendLine(`[${mode}] Breaking: ${completionAction}`);
+            break;
+          }
 
           if (iteration < maxIterations - 1) {
-            const taskPreview = task.length > 200 ? task.substring(0, 200) + '…' : task;
             messages.push({
               role: 'user',
-              content: `Reminder — your task: ${taskPreview}\nContinue exploring. Use tools to find more information or respond with [TASK_COMPLETE] if finished.`
+              content: 'If you are done, respond with [TASK_COMPLETE]. Otherwise, continue using tools.'
             });
           }
           continue;
@@ -412,9 +464,14 @@ export class AgentExploreExecutor {
         emit({ type: 'startProgressGroup', title: groupTitle, sessionId });
         await this.persistUiEvent(sessionId, 'startProgressGroup', { title: groupTitle });
 
-        // Thinking content fallback — see comment at no-tool path above.
-        const assistantMsg: any = { role: 'assistant', content: response || thinkingContent || '' };
-        if (thinkingContent) assistantMsg.thinking = thinkingContent;
+        // NO thinking field in history — see Ollama issue #10448.
+        // CRITICAL: Prefer the compact tool summary over the model's verbose
+        // planning text. The response was already streamed to the UI, but
+        // keeping it in history causes the model to see its own plan and
+        // restate it every iteration (see Pitfall #38).
+        const toolSummary = buildToolCallSummary(filteredToolCalls);
+        const assistantContent = toolSummary || response || (thinkingContent ? '[Reasoning completed]' : '');
+        const assistantMsg: any = { role: 'assistant', content: assistantContent };
         if (useNativeTools) assistantMsg.tool_calls = nativeToolCalls;
         messages.push(assistantMsg);
 
@@ -530,19 +587,20 @@ export class AgentExploreExecutor {
         emit({ type: 'finishProgressGroup', sessionId });
         await this.persistUiEvent(sessionId, 'finishProgressGroup', {});
 
-        // Feed results back
+        // Feed results back. NO task reminder — the full task is in messages[1].
+        // Adding a truncated preview caused models to fixate on the incomplete
+        // snippet instead of referencing the original user message.
         if (useNativeTools) {
           messages.push(...toolResults);
 
-          const taskPreview = task.length > 200 ? task.substring(0, 200) + '…' : task;
           messages.push({
             role: 'user',
-            content: `Reminder — your task: ${taskPreview}\nDo NOT repeat your plan. Proceed directly with tool calls or [TASK_COMPLETE].\nWhen searching for multiple symbols, use ONE search_workspace call with regex: query="symbolA|symbolB|symbolC" isRegex=true`
+            content: `Proceed with tool calls or [TASK_COMPLETE].`
           });
         } else if (xmlResults.length > 0) {
           messages.push({
             role: 'user',
-            content: xmlResults.join('\n\n') + `\n\nDo NOT repeat your plan. Proceed directly with tool calls or [TASK_COMPLETE].\nWhen searching for multiple symbols, use ONE search_workspace call with regex: query="symbolA|symbolB|symbolC" isRegex=true`
+            content: xmlResults.join('\n\n') + `\n\nProceed with tool calls or [TASK_COMPLETE].`
           });
         }
       } catch (error: any) {

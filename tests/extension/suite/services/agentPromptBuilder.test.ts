@@ -282,6 +282,19 @@ suite('AgentPromptBuilder', () => {
       assert.ok(prompt.includes('compiles/lints cleanly'), 'Should mention clean compilation');
     });
 
+    test('completionSignal includes CONTINUATION BEHAVIOR section', () => {
+      const prompt = builder.buildNativeToolPrompt(singleRoot, singleRoot[0]);
+      assert.ok(prompt.includes('CONTINUATION BEHAVIOR'), 'Should have CONTINUATION BEHAVIOR section');
+      assert.ok(prompt.includes('agent_control'), 'Should reference agent_control packets');
+      assert.ok(prompt.includes('Do NOT restate your plan'), 'Should include anti-repetition rules');
+    });
+
+    test('XML prompt also includes CONTINUATION BEHAVIOR', () => {
+      const prompt = builder.buildXmlFallbackPrompt(singleRoot, singleRoot[0]);
+      assert.ok(prompt.includes('CONTINUATION BEHAVIOR'), 'XML prompt should also have continuation rules');
+      assert.ok(prompt.includes('Do NOT repeat tool calls'), 'Should include anti-repetition for tools');
+    });
+
     test('plan prompt includes quality rules', () => {
       const prompt = builder.buildPlanPrompt(singleRoot, singleRoot[0], true);
       assert.ok(prompt.includes('PLAN QUALITY RULES'), 'Should have plan quality section');

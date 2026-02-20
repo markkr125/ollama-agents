@@ -61,6 +61,33 @@ export type PersistUiEventFn = (
 ) => Promise<void>;
 
 // ---------------------------------------------------------------------------
+// Agent Control Plane — structured continuation messages
+// ---------------------------------------------------------------------------
+
+/**
+ * State of the agent loop communicated via `<agent_control>` packets.
+ * Replaces the old free-text continuation messages with a machine-readable
+ * format that models can parse unambiguously.
+ */
+export type AgentControlState = 'need_tools' | 'need_fixes' | 'need_summary' | 'complete';
+
+/**
+ * Structured control packet embedded in continuation messages.
+ * Contains iteration budget, task context, and loop state so the model
+ * knows exactly what's expected without redundant natural-language prompts.
+ */
+export interface AgentControlPacket {
+  state: AgentControlState;
+  iteration: number;
+  maxIterations: number;
+  remainingIterations: number;
+  task?: string;
+  filesChanged?: string[];
+  toolResults?: string;
+  note?: string;
+}
+
+// ---------------------------------------------------------------------------
 // Agent Dispatcher — intent classification for routing + prompt framing
 // ---------------------------------------------------------------------------
 

@@ -378,16 +378,26 @@ suite('AgentSessionMemory', () => {
     assert.strictEqual(memory.getOriginalTask(), 'Create a documentation file');
   });
 
-  test('toSystemReminder includes Original Task as first section', () => {
+  test('toSystemReminder includes Task Reference as first section (truncated)', () => {
     memory.setOriginalTask('Scan processSearch and document all functions');
     memory.set('project_type', 'TypeScript');
     const result = memory.toSystemReminder();
-    assert.ok(result.includes('## Original Task'), 'Should have Original Task section');
-    assert.ok(result.includes('Scan processSearch'), 'Should include task text');
-    // Original Task should appear BEFORE Session Notes
-    const taskIdx = result.indexOf('## Original Task');
+    assert.ok(result.includes('## Task Reference'), 'Should have Task Reference section');
+    assert.ok(result.includes('Scan processSearch'), 'Should include task text (short enough to survive truncation)');
+    // Task Reference should appear BEFORE Session Notes
+    const taskIdx = result.indexOf('## Task Reference');
     const notesIdx = result.indexOf('## Session Notes');
-    assert.ok(taskIdx < notesIdx, 'Original Task should come before Session Notes');
+    assert.ok(taskIdx < notesIdx, 'Task Reference should come before Session Notes');
+  });
+
+  test('toSystemReminder truncates long tasks to 120 chars', () => {
+    const longTask = 'A'.repeat(200);
+    memory.setOriginalTask(longTask);
+    memory.set('project_type', 'TypeScript');
+    const result = memory.toSystemReminder();
+    assert.ok(result.includes('## Task Reference'), 'Should have Task Reference section');
+    assert.ok(result.includes('…'), 'Should include ellipsis for truncated task');
+    assert.ok(!result.includes('A'.repeat(200)), 'Should NOT include full 200-char task');
   });
 
   test('toJSON/fromJSON round-trip preserves originalTask', () => {
@@ -399,9 +409,9 @@ suite('AgentSessionMemory', () => {
     assert.strictEqual(restored.getOriginalTask(), 'Fix the login bug');
   });
 
-  test('toSystemReminder omits Original Task when not set', () => {
+  test('toSystemReminder omits Task Reference when not set', () => {
     memory.set('project_type', 'TypeScript');
     const result = memory.toSystemReminder();
-    assert.ok(!result.includes('## Original Task'), 'Should not have Original Task if not set');
+    assert.ok(!result.includes('## Task Reference'), 'Should not have Task Reference if not set');
   });
 });

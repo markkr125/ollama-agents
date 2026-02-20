@@ -157,9 +157,14 @@ export class AgentSessionMemory {
 
     const sections: string[] = [];
 
-    // Original task — always first so the model never forgets what it's doing
+    // Task reference — abbreviated since the full task is always in the
+    // original user message (messages[1]). Only include enough for the model
+    // to stay anchored without duplicating the full text.
     if (this.originalTask) {
-      sections.push(`## Original Task\n${this.originalTask}`);
+      const taskPreview = this.originalTask.length > 120
+        ? this.originalTask.substring(0, 120) + '…'
+        : this.originalTask;
+      sections.push(`## Task Reference\n${taskPreview}`);
     }
 
     // Session notes
