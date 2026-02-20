@@ -48,6 +48,9 @@
               <th class="col-cap cap-header" title="Embedding model — generates vector embeddings for text.&#10;These models cannot chat or generate text, only produce numerical representations.">
                 <span class="cap-header-label">Embed</span>
               </th>
+              <th class="col-ctx cap-header" title="Context window cap for this model.&#10;'Default' uses the global Agent setting.&#10;Choose a value to override for this model only.">
+                <span class="cap-header-label">Context</span>
+              </th>
             </tr>
           </thead>
           <tbody>
@@ -80,6 +83,21 @@
               <td class="col-cap">
                 <span :class="model.capabilities.embedding ? 'cap-yes' : 'cap-no'">{{ model.capabilities.embedding ? '✓' : '✗' }}</span>
               </td>
+              <td class="col-ctx">
+                <select
+                  class="ctx-select"
+                  :value="model.maxContext ?? 0"
+                  :title="contextTitle(model)"
+                  @change="onMaxContextChange(model.name, $event)"
+                >
+                  <option :value="0">Default</option>
+                  <option
+                    v-for="opt in contextOptions(model)"
+                    :key="opt.value"
+                    :value="opt.value"
+                  >{{ opt.label }}</option>
+                </select>
+              </td>
             </tr>
           </tbody>
         </table>
@@ -95,6 +113,30 @@
         </button>
         <button class="btn btn-secondary" :disabled="allEnabled" @click="enableAll">Enable All</button>
         <button class="btn btn-secondary" :disabled="noneEnabled" @click="disableAll">Disable All</button>
+      </div>
+
+      <!-- Context Window -->
+      <h3 class="subsection-title">Context Window</h3>
+      <p class="section-desc">
+        Limit the context window (<code>num_ctx</code>) sent to Ollama.
+        Large values allocate more KV cache memory and slow down generation.
+      </p>
+      <div class="settings-item">
+        <label class="settings-label">Default Cap</label>
+        <select v-model.number="settings.maxContextWindow" class="settings-select" @change="onDefaultCapChange">
+          <option :value="2048">2K</option>
+          <option :value="4096">4K</option>
+          <option :value="8192">8K</option>
+          <option :value="16384">16K</option>
+          <option :value="32768">32K</option>
+          <option :value="65536">64K (default)</option>
+          <option :value="131072">128K</option>
+          <option :value="262144">256K</option>
+          <option :value="524288">512K</option>
+        </select>
+        <p class="field-hint">
+          Applies to all models unless overridden in the Context column above.
+        </p>
       </div>
 
       <!-- Model Selection -->
@@ -140,6 +182,8 @@ const props = defineProps<{
   capabilityCheckProgress: CapabilityCheckProgress;
   refreshCapabilities: () => void;
   toggleModelEnabled: (modelName: string, enabled: boolean) => void;
+  updateModelMaxContext: (modelName: string, maxContext: number | null) => void;
+  saveMaxContextWindow: () => void;
   settings: Settings;
   modelOptions: string[];
   saveModelSettings: () => void;
@@ -188,6 +232,46 @@ function formatSize(bytes: number): string {
     unitIndex++;
   }
   return `${size.toFixed(1)} ${units[unitIndex]}`;
+}
+
+// --- Context window dropdown helpers ---
+
+const CTX_SIZES = [
+  { value: 2048, label: '2K' },
+  { value: 4096, label: '4K' },
+  { value: 8192, label: '8K' },
+  { value: 16384, label: '16K' },
+  { value: 32768, label: '32K' },
+  { value: 65536, label: '64K' },
+  { value: 131072, label: '128K' },
+  { value: 262144, label: '256K' },
+  { value: 524288, label: '512K' },
+  { value: 1048576, label: '1M' },
+];
+
+function contextOptions(model: ModelInfo) {
+  const max = model.contextLength || Infinity;
+  return CTX_SIZES.filter(s => s.value <= max);
+}
+
+function contextTitle(model: ModelInfo) {
+  const detected = model.contextLength ? formatContextK(model.contextLength) : '?';
+  const override = model.maxContext ? formatContextK(model.maxContext) : 'Default';
+  return `Detected: ${detected}. Override: ${override}`;
+}
+
+function formatContextK(tokens: number) {
+  return tokens >= 1024 ? `${Math.round(tokens / 1024)}K` : String(tokens);
+}
+
+function onMaxContextChange(modelName: string, event: Event) {
+  const target = event.target as HTMLElement & { value: string };
+  const val = Number(target.value);
+  props.updateModelMaxContext(modelName, val === 0 ? null : val);
+}
+
+function onDefaultCapChange() {
+  props.saveMaxContextWindow();
 }
 </script>
 
@@ -269,6 +353,22 @@ function formatSize(bytes: number): string {
 .col-cap {
   text-align: center !important;
   width: 52px;
+}
+
+.col-ctx {
+  width: 80px;
+  white-space: nowrap;
+}
+
+.ctx-select {
+  font-size: 11px;
+  padding: 2px 4px;
+  background: var(--vscode-dropdown-background, var(--vscode-input-background));
+  color: var(--vscode-dropdown-foreground, var(--vscode-foreground));
+  border: 1px solid var(--vscode-dropdown-border, var(--vscode-widget-border, rgba(128,128,128,0.3)));
+  border-radius: 3px;
+  cursor: pointer;
+  width: 100%;
 }
 
 .cap-header {

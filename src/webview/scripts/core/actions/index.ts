@@ -58,7 +58,7 @@ export {
     updateSessionSensitivePatterns
 } from './sessions';
 export {
-    recreateMessagesTable, refreshCapabilities, runDbMaintenance, saveAgentSettings, saveBaseUrl, saveBearerToken, saveModelSettings, saveStoragePath, testConnection, toggleAutocomplete, toggleModelEnabled, toggleToken
+    recreateMessagesTable, refreshCapabilities, runDbMaintenance, saveAgentSettings, saveBaseUrl, saveBearerToken, saveMaxContextWindow, saveModelSettings, saveStoragePath, testConnection, toggleAutocomplete, toggleModelEnabled, toggleToken, updateModelMaxContext
 } from './settings';
 export { applySettings, clearToken, setGenerating, updateInitState, updateThinking } from './stateUpdates';
 export { showDbMaintenanceStatus, showRecreateMessagesStatus, showStatus } from './status';

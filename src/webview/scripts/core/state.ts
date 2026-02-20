@@ -71,7 +71,8 @@ export const settings = reactive({
   continuationStrategy: 'full' as 'full' | 'standard' | 'minimal',
   temperature: 0.7,
   sensitiveFilePatterns: '',
-  storagePath: ''
+  storagePath: '',
+  maxContextWindow: 65536
 });
 
 export const chatSettings = reactive({

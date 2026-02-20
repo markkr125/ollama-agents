@@ -26,7 +26,7 @@ export async function mergeCachedCapabilities(databaseService: DatabaseService, 
  * Handles model management messages: capability refresh, enable/disable toggle.
  */
 export class ModelMessageHandler implements IMessageHandler {
-  readonly handledTypes = ['refreshCapabilities', 'toggleModelEnabled'] as const;
+  readonly handledTypes = ['refreshCapabilities', 'toggleModelEnabled', 'updateModelMaxContext'] as const;
 
   private capabilityRefreshInProgress = false;
 
@@ -43,6 +43,9 @@ export class ModelMessageHandler implements IMessageHandler {
         break;
       case 'toggleModelEnabled':
         await this.handleToggleModelEnabled(data.modelName, !!data.enabled);
+        break;
+      case 'updateModelMaxContext':
+        await this.handleUpdateModelMaxContext(data.modelName, data.maxContext);
         break;
     }
   }
@@ -118,6 +121,18 @@ export class ModelMessageHandler implements IMessageHandler {
   private async handleToggleModelEnabled(modelName: string, enabled: boolean) {
     if (!modelName) return;
     await this.databaseService.setModelEnabled(modelName, enabled);
+    let models: Model[];
+    try {
+      models = await this.databaseService.getCachedModels();
+    } catch {
+      return;
+    }
+    this.emitter.postMessage({ type: 'modelEnabledChanged', models: enrichModels(models) });
+  }
+
+  private async handleUpdateModelMaxContext(modelName: string, maxContext: number | null) {
+    if (!modelName) return;
+    await this.databaseService.setModelMaxContext(modelName, maxContext);
     let models: Model[];
     try {
       models = await this.databaseService.getCachedModels();

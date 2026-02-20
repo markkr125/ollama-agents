@@ -413,12 +413,16 @@ export class AgentChatExecutor {
 
       try {
         // --- 0. Compact conversation history if approaching context limit ---
-        // contextWindow: the model's TRUE context limit — used for compaction decisions.
+        // contextWindow: the model's EFFECTIVE context limit — used for compaction decisions.
         // numCtx: the DYNAMIC value sent as num_ctx to Ollama — sized to the actual payload
         // so Ollama doesn't pre-allocate a massive KV cache (e.g. 393K for a 6K prompt).
         const detectedContextWindow = capabilities?.contextLength;
         const userContextWindow = getConfig().contextWindow || 16000;
-        const contextWindow = detectedContextWindow || userContextWindow;
+        const rawContextWindow = detectedContextWindow || userContextWindow;
+        // Two-tier cap: per-model override → global setting (default 64K)
+        const globalCap = getConfig().agent.maxContextWindow;
+        const effectiveCap = capabilities?.maxContext ?? globalCap;
+        const contextWindow = Math.min(rawContextWindow, effectiveCap);
         if (iteration > 1) {
           // Inject session memory reminder into system prompt before compaction
           const memoryReminder = sessionMemory.toSystemReminder();

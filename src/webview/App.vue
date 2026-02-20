@@ -80,6 +80,8 @@
         :capability-check-progress="capabilityCheckProgress"
         :refresh-capabilities="refreshCapabilities"
         :toggle-model-enabled="toggleModelEnabled"
+        :update-model-max-context="updateModelMaxContext"
+        :save-max-context-window="saveMaxContextWindow"
         :save-model-settings="saveModelSettings"
         :chat-settings="chatSettings"
         :temperature-slider="temperatureSlider"
@@ -214,6 +216,7 @@ import {
     saveAgentSettings,
     saveBaseUrl,
     saveBearerToken,
+    saveMaxContextWindow,
     saveModelSettings,
     saveStoragePath,
     scrollTargetMessageId,
@@ -252,6 +255,7 @@ import {
     tokenVisible,
     tools,
     toolTimeoutSeconds,
+    updateModelMaxContext,
     vscode
 } from './scripts/app/App';
 

@@ -18,6 +18,7 @@ export interface AgentConfig {
   keepAlive: string;
   sessionTitleGeneration: 'currentModel' | 'selectModel' | 'firstMessage';
   sessionTitleModel: string;
+  maxContextWindow: number;
 }
 
 export interface ExtensionConfig {

@@ -377,6 +377,12 @@
           "default": "full",
           "markdownDescription": "Controls how the agent continues between iterations.\n- **full**: Session memory injection with rich context (best quality, higher token usage)\n- **standard**: Tool results only, simpler continuation (balanced)\n- **minimal**: Single-pass with auto-diagnostics retry (fastest, least context)"
         },
+        "ollamaCopilot.agent.maxContextWindow": {
+          "type": "number",
+          "default": 65536,
+          "enum": [2048, 4096, 8192, 16384, 32768, 65536, 131072, 262144, 524288],
+          "markdownDescription": "Global cap on the context window sent to Ollama (`num_ctx`). Limits KV cache allocation even when the model advertises a larger context. Per-model overrides (set in the Models tab) take precedence. Default: 64K."
+        },
         "ollamaCopilot.agent.keepAlive": {
           "type": "string",
           "default": "",

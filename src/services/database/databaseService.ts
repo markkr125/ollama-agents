@@ -187,6 +187,11 @@ export class DatabaseService {
     await this.sessionIndex.setModelEnabled(name, enabled);
   }
 
+  async setModelMaxContext(name: string, maxContext: number | null): Promise<void> {
+    this.ensureReady();
+    await this.sessionIndex.setModelMaxContext(name, maxContext);
+  }
+
   // --------------------------------------------------------------------------
   // Message CRUD (delegates to SQLite, fire-and-forget LanceDB indexing)
   // --------------------------------------------------------------------------

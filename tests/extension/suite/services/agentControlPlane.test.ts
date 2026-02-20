@@ -4,6 +4,7 @@ import {
     buildControlPacketMessage,
     buildLoopContinuationMessage,
     checkNoToolCompletion,
+    computeDynamicNumCtx,
     formatNativeToolResults,
     formatTextToolResults,
     isCompletionSignaled,
@@ -245,5 +246,57 @@ suite('checkNoToolCompletion — smart completion detection', () => {
     // At iteration 2+, both conditions are true — break_implicit should win (checked first)
     const result = checkNoToolCompletion({ response: '', thinkingContent: '', hasWrittenFiles: true, consecutiveNoToolIterations: 2 });
     assert.strictEqual(result, 'break_implicit');
+  });
+});
+
+// ── computeDynamicNumCtx ──────────────────────────────────────────
+
+suite('computeDynamicNumCtx — dynamic num_ctx sizing', () => {
+  test('small payload returns MIN_NUM_CTX (4096)', () => {
+    // 100 tokens payload + 2048 predict + 512 buffer = 2660 → aligned to 4096 → clamped to MIN
+    const result = computeDynamicNumCtx(100, 2048, 131072);
+    assert.strictEqual(result, 4096);
+  });
+
+  test('medium payload aligns up to nearest 2048', () => {
+    // 3000 tokens + 4096 predict + 512 buffer = 7608 → ceil to 8192
+    const result = computeDynamicNumCtx(3000, 4096, 131072);
+    assert.strictEqual(result, 8192);
+  });
+
+  test('large payload capped at model context window', () => {
+    // 50000 tokens + 8192 predict + 512 buffer = 58704 → aligned to 59392
+    // But model only has 32768 → capped
+    const result = computeDynamicNumCtx(50000, 8192, 32768);
+    assert.strictEqual(result, 32768);
+  });
+
+  test('exact alignment boundary stays at that boundary', () => {
+    // 1024 + 512 + 512 = 2048 → exactly 2048 → max(2048, 4096) = 4096
+    const result = computeDynamicNumCtx(1024, 512, 131072);
+    assert.strictEqual(result, 4096);
+  });
+
+  test('zero payload still returns MIN_NUM_CTX', () => {
+    const result = computeDynamicNumCtx(0, 0, 131072);
+    assert.strictEqual(result, 4096);
+  });
+
+  test('payload close to model max returns model max', () => {
+    // 60000 + 8192 + 512 = 68704 → aligned to 69632 → but model is 65536 → capped
+    const result = computeDynamicNumCtx(60000, 8192, 65536);
+    assert.strictEqual(result, 65536);
+  });
+
+  test('realistic first iteration: ~6K tokens payload', () => {
+    // Typical first turn: ~1500 system + ~500 user + ~2600 tools ≈ 4600 tokens
+    // 4600 + 8192 predict + 512 buffer = 13304 → aligned to 14336
+    const result = computeDynamicNumCtx(4600, 8192, 393216);
+    assert.strictEqual(result, 14336);
+  });
+
+  test('small model context is respected', () => {
+    const result = computeDynamicNumCtx(1000, 2048, 2048);
+    assert.strictEqual(result, 2048);
   });
 });

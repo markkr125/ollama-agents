@@ -60,6 +60,7 @@ Each mode also has `temperature` and `maxTokens` settings:
 | `ollamaCopilot.agent.keepAlive` | `""` | — | How long Ollama keeps the model loaded after a request. Examples: `5m`, `30m`, `1h`, `-1` (forever), `0` (unload immediately). Empty = Ollama server default (typically 5m). |
 | `ollamaCopilot.agent.sessionTitleGeneration` | `firstMessage` | `firstMessage`, `currentModel`, `selectModel` | How to generate session titles. `firstMessage` truncates the first message (instant). `currentModel` calls the active model (slower, higher quality). `selectModel` uses a specific small model. |
 | `ollamaCopilot.agent.sessionTitleModel` | `""` | — | Model for title generation when `sessionTitleGeneration` is `selectModel`. If empty, falls back to `firstMessage`. |
+| `ollamaCopilot.agent.maxContextWindow` | `65536` | 2048–524288 | Global cap on the context window (`num_ctx`) sent to Ollama. Prevents massive KV cache allocation when a model advertises a very large context (e.g. 393K). Per-model overrides in the Models tab take precedence. |
 | `ollamaCopilot.agent.sensitiveFilePatterns` | *(see below)* | — | Glob→boolean map for file edit approval |
 
 ### Sensitive File Patterns
@@ -101,6 +102,7 @@ The **Models** tab in the settings page shows every downloaded model alongside i
 | **FIM** | Fill-In-Middle — required for inline code completions |
 | **Tools** | Function/tool calling — required for agent mode |
 | **Embed** | Embedding model — generates vector embeddings, cannot chat |
+| **Context** | Per-model context window cap — select a value to override the global setting, or leave as "Default" |
 
 Capabilities are sourced from the **Ollama `/api/show` endpoint**, which returns a `capabilities` array for each model (e.g. `["completion", "vision", "tools"]`). The extension calls `/api/show` in parallel for every model when the model list is fetched and maps the results:
 

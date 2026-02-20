@@ -474,7 +474,7 @@ Settings are defined in `package.json` under `contributes.configuration`:
 | `ollamaCopilot.agent.toolTimeout` | `30000` | Tool timeout in ms |
 | `ollamaCopilot.agent.maxActiveSessions` | `1` | Max concurrent active sessions |
 | `ollamaCopilot.agent.continuationStrategy` | `full` | Agent control plane verbosity: `full` (iteration budget + files + memory in `<agent_control>` packets), `standard` (budget + brief), `minimal` (bare continue) |
-| `ollamaCopilot.agent.keepAlive` | `""` | How long Ollama keeps the model loaded. Empty = server default. Examples: `5m`, `30m`, `-1` (forever) |
+| `ollamaCopilot.agent.keepAlive` | `\"\"` | How long Ollama keeps the model loaded. Empty = server default. Examples: `5m`, `30m`, `-1` (forever) |\n| `ollamaCopilot.agent.maxContextWindow` | `65536` | Global cap on context window (`num_ctx`) sent to Ollama. Prevents massive KV cache allocation. Per-model overrides in the Models tab take precedence. |
 | `ollamaCopilot.agent.sessionTitleGeneration` | `firstMessage` | Session title mode: `firstMessage` (instant, no LLM), `currentModel` (uses active model), `selectModel` (uses specific model) |
 | `ollamaCopilot.agent.sessionTitleModel` | `""` | Model for title generation when `sessionTitleGeneration` is `selectModel` |
 | `ollamaCopilot.storagePath` | `""` | Custom absolute path for database storage. Empty = stable default under `globalStorageUri`. Requires reload. |

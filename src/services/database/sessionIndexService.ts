@@ -117,6 +117,7 @@ export class SessionIndexService {
     await this.ensureColumn('models', 'capabilities', 'TEXT DEFAULT NULL');
     await this.ensureColumn('models', 'enabled', 'INTEGER NOT NULL DEFAULT 1');
     await this.ensureColumn('models', 'context_length', 'INTEGER DEFAULT NULL');
+    await this.ensureColumn('models', 'max_context', 'INTEGER DEFAULT NULL');
 
     // ---- Checkpoints table (file-change tracking per agent request) ----
     await dbExec(this.db, `
@@ -295,14 +296,16 @@ export class SessionIndexService {
   async upsertModels(models: Model[]): Promise<void> {
     this.ensureReady();
     const now = Date.now();
-    const existingRows = await dbAll(this.db!, 'SELECT name, enabled FROM models;');
+    const existingRows = await dbAll(this.db!, 'SELECT name, enabled, max_context FROM models;');
     const enabledMap = new Map(existingRows.map(r => [String(r.name), Number(r.enabled ?? 1)]));
+    const maxCtxMap = new Map(existingRows.map(r => [String(r.name), r.max_context != null ? Number(r.max_context) : null]));
     await dbRun(this.db!, 'DELETE FROM models;');
     for (const m of models) {
       const enabled = m.enabled !== undefined ? (m.enabled ? 1 : 0) : (enabledMap.get(m.name) ?? 1);
+      const maxCtx = maxCtxMap.get(m.name) ?? null;
       await dbRun(this.db!,
-        `INSERT OR REPLACE INTO models (name, size, modified_at, digest, family, families, parameter_size, quantization_level, capabilities, enabled, context_length, fetched_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);`,
+        `INSERT OR REPLACE INTO models (name, size, modified_at, digest, family, families, parameter_size, quantization_level, capabilities, enabled, context_length, max_context, fetched_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);`,
         [
           m.name,
           m.size ?? 0,
@@ -315,6 +318,7 @@ export class SessionIndexService {
           m.capabilities ? JSON.stringify(m.capabilities) : null,
           enabled,
           (m as any).contextLength ?? null,
+          maxCtx,
           now
         ]
       );
@@ -330,6 +334,11 @@ export class SessionIndexService {
   async setModelEnabled(name: string, enabled: boolean): Promise<void> {
     this.ensureReady();
     await dbRun(this.db!, 'UPDATE models SET enabled = ? WHERE name = ?;', [enabled ? 1 : 0, name]);
+  }
+
+  async setModelMaxContext(name: string, maxContext: number | null): Promise<void> {
+    this.ensureReady();
+    await dbRun(this.db!, 'UPDATE models SET max_context = ? WHERE name = ?;', [maxContext, name]);
   }
 
   private mapModelRow(row: Record<string, any>): Model {
@@ -354,7 +363,8 @@ export class SessionIndexService {
       },
       capabilities,
       enabled: row.enabled === undefined ? true : !!row.enabled,
-      contextLength: row.context_length != null ? Number(row.context_length) : undefined
+      contextLength: row.context_length != null ? Number(row.context_length) : undefined,
+      maxContext: row.max_context != null ? Number(row.max_context) : null
     } as any;
   }
 

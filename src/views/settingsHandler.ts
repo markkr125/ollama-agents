@@ -19,7 +19,9 @@ export function enrichModels(models: Model[]) {
       parameterSize: m.details?.parameter_size ?? undefined,
       quantizationLevel: m.details?.quantization_level ?? undefined,
       capabilities: caps,
-      enabled: m.enabled !== false
+      enabled: m.enabled !== false,
+      contextLength: caps.contextLength ?? undefined,
+      maxContext: (m as any).maxContext ?? null
     };
   });
 }
@@ -47,7 +49,8 @@ export class SettingsHandler {
       continuationStrategy: config.agent.continuationStrategy,
       temperature: config.agentMode.temperature,
       sensitiveFilePatterns: JSON.stringify(config.agent.sensitiveFilePatterns, null, 2),
-      storagePath: config.storagePath
+      storagePath: config.storagePath,
+      maxContextWindow: config.agent.maxContextWindow
     };
   }
 
@@ -121,6 +124,9 @@ export class SettingsHandler {
     }
     if (settings.storagePath !== undefined) {
       await config.update('storagePath', settings.storagePath, vscode.ConfigurationTarget.Global);
+    }
+    if (settings.maxContextWindow !== undefined) {
+      await config.update('agent.maxContextWindow', settings.maxContextWindow, vscode.ConfigurationTarget.Global);
     }
 
     this.emitter.postMessage({ type: 'settingsSaved' });

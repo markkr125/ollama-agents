@@ -106,3 +106,14 @@ export const refreshCapabilities = () => {
 export const toggleModelEnabled = (modelName: string, enabled: boolean) => {
   vscode.postMessage({ type: 'toggleModelEnabled', modelName, enabled });
 };
+
+export const updateModelMaxContext = (modelName: string, maxContext: number | null) => {
+  vscode.postMessage({ type: 'updateModelMaxContext', modelName, maxContext });
+};
+
+export const saveMaxContextWindow = () => {
+  vscode.postMessage({
+    type: 'saveSettings',
+    settings: { maxContextWindow: settings.maxContextWindow }
+  });
+};

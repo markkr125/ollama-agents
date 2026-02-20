@@ -42,7 +42,8 @@ export function getConfig(): ExtensionConfig {
       continuationStrategy: config.get('agent.continuationStrategy', 'full') as 'full' | 'standard' | 'minimal',
       keepAlive: config.get('agent.keepAlive', ''),
       sessionTitleGeneration: config.get('agent.sessionTitleGeneration', 'firstMessage') as 'currentModel' | 'selectModel' | 'firstMessage',
-      sessionTitleModel: config.get('agent.sessionTitleModel', '')
+      sessionTitleModel: config.get('agent.sessionTitleModel', ''),
+      maxContextWindow: config.get('agent.maxContextWindow', 65536)
     }
   };
 }

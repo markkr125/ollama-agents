@@ -27,6 +27,8 @@ export interface ModelCapabilities {
   embedding: boolean;
   /** Model's native context window size in tokens, as reported by /api/show model_info. */
   contextLength?: number;
+  /** Per-model context window cap set by the user (null = use global default). */
+  maxContext?: number | null;
 }
 
 /**
@@ -81,7 +83,9 @@ export function getModelCapabilities(model: Model): ModelCapabilities {
     vision: caps.includes('vision'),
     embedding: caps.includes('embedding'),
     // contextLength is populated separately via extractContextLength + DB cache
-    contextLength: (model as any).contextLength ?? undefined
+    contextLength: (model as any).contextLength ?? undefined,
+    // maxContext is the per-model cap set by the user in the Models settings tab
+    maxContext: (model as any).maxContext ?? null
   };
 }
 

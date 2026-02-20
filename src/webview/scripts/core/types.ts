@@ -13,6 +13,8 @@ export type ModelInfo = {
   quantizationLevel?: string;
   capabilities: ModelCapabilities;
   enabled: boolean;
+  contextLength?: number;
+  maxContext?: number | null;
 };
 
 export type ContextFileRef = {

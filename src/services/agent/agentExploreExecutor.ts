@@ -194,11 +194,15 @@ export class AgentExploreExecutor {
 
       try {
         // Context compaction for long explorations
-        // contextWindow: the model's TRUE context limit — used for compaction decisions.
+        // contextWindow: the model's EFFECTIVE context limit — used for compaction decisions.
         // numCtx: the DYNAMIC value sent to Ollama — sized to the actual payload.
         const detectedContextWindow = capabilities?.contextLength;
         const userContextWindow = getConfig().contextWindow || 16000;
-        const contextWindow = detectedContextWindow || userContextWindow;
+        const rawContextWindow = detectedContextWindow || userContextWindow;
+        // Two-tier cap: per-model override → global setting (default 64K)
+        const globalCap = getConfig().agent.maxContextWindow;
+        const effectiveCap = capabilities?.maxContext ?? globalCap;
+        const contextWindow = Math.min(rawContextWindow, effectiveCap);
         if (iteration > 1) {
           const compacted = await this.contextCompactor.compactIfNeeded(messages, contextWindow, model, lastPromptTokens);
           if (compacted) {

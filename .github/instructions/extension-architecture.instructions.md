@@ -116,6 +116,7 @@ The webview uses **camelCase** keys, VS Code configuration uses **dot-separated*
 | `maxIterations` | `agent.maxIterations` |
 | `toolTimeout` | `agent.toolTimeout` |
 | `maxActiveSessions` | `agent.maxActiveSessions` |
+| `maxContextWindow` | `agent.maxContextWindow` |
 | `sensitiveFilePatterns` | `agent.sensitiveFilePatterns` |
 | `enableAutoComplete` | `enableAutoComplete` |
 | `temperature` | `agentMode.temperature` |

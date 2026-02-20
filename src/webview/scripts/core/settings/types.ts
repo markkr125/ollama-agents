@@ -28,6 +28,7 @@ export type Settings = {
   temperature: number;
   sensitiveFilePatterns: string;
   storagePath: string;
+  maxContextWindow: number;
 };
 
 export type ChatSettings = {
@@ -74,6 +75,8 @@ export interface SettingsPageProps {
   capabilityCheckProgress: CapabilityCheckProgress;
   refreshCapabilities: () => void;
   toggleModelEnabled: (modelName: string, enabled: boolean) => void;
+  updateModelMaxContext: (modelName: string, maxContext: number | null) => void;
+  saveMaxContextWindow: () => void;
   saveModelSettings: () => void;
   chatSettings: ChatSettings;
   temperatureSlider: number;

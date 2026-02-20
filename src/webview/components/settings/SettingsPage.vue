@@ -42,6 +42,8 @@
             :capabilityCheckProgress="capabilityCheckProgress"
             :refreshCapabilities="refreshCapabilities"
             :toggleModelEnabled="toggleModelEnabled"
+            :updateModelMaxContext="updateModelMaxContext"
+            :saveMaxContextWindow="saveMaxContextWindow"
             :settings="settings"
             :modelOptions="modelOptions"
             :saveModelSettings="saveModelSettings"
