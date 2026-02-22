@@ -13,6 +13,8 @@ export interface ExecutorConfig {
   maxIterations: number;
   toolTimeout: number;
   temperature: number;
+  /** Resolved explorer model for sub-agents (3-tier fallback: session → global → agent model). Empty string = use same model as orchestrator. */
+  explorerModel?: string;
 }
 
 /**
@@ -45,8 +47,12 @@ export interface ToolContext {
   /**
    * Optional callback for running a sub-agent with read-only tools.
    * Injected by the agent executor; used by `run_subagent` tool.
+   * @param task - Detailed task description for the sub-agent
+   * @param mode - Execution mode (explore/review/deep-explore)
+   * @param contextHint - Optional hint to focus the sub-agent's exploration
+   * @param title - Optional short label for UI display
    */
-  runSubagent?: (task: string, mode: 'explore' | 'review' | 'deep-explore') => Promise<string>;
+  runSubagent?: (task: string, mode: 'explore' | 'review' | 'deep-explore', contextHint?: string, title?: string) => Promise<string>;
 }
 
 /**

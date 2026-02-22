@@ -29,6 +29,7 @@ export type Settings = {
   sensitiveFilePatterns: string;
   storagePath: string;
   maxContextWindow: number;
+  explorerModel: string;
 };
 
 export type ChatSettings = {

@@ -84,6 +84,11 @@
           <span v-else-if="action.detail" class="detail" :class="{ 'diff-stats': action.filePath }"> {{ action.detail }}</span>
         </div>
       </div>
+      <!-- Sub-agent thinking (collapsible) -->
+      <details v-if="item.thinkingContent" class="subagent-thinking" @toggle.stop>
+        <summary class="subagent-thinking-summary">Sub-agent reasoning</summary>
+        <pre class="subagent-thinking-content">{{ item.thinkingContent }}</pre>
+      </details>
     </div>
   </div>
 </template>

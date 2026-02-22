@@ -1,6 +1,6 @@
 import { scrollToBottom } from '../actions/index';
 import { activeThinkingGroup, currentProgressIndex, currentSessionId, progressIndexStack } from '../state';
-import type { ActionItem, AssistantThreadToolsBlock, ProgressItem, ShowToolActionMessage, StartProgressGroupMessage } from '../types';
+import type { ActionItem, AssistantThreadToolsBlock, ProgressItem, ShowToolActionMessage, StartProgressGroupMessage, SubagentThinkingMessage } from '../types';
 import { closeActiveThinkingGroup } from './streaming';
 import { ensureAssistantThread, getOrCreateToolsBlock } from './threadUtils';
 
@@ -200,4 +200,26 @@ export const handleShowError = (msg: any) => {
   group.status = 'error';
   group.collapsed = true;
   currentProgressIndex.value = progressIndexStack.value.pop() ?? null;
+};
+
+/**
+ * Handle sub-agent thinking content. Attaches thinking to the last
+ * sub-agent progress group so it can be shown as a collapsible <details>.
+ */
+export const handleSubagentThinking = (msg: SubagentThinkingMessage) => {
+  if (msg.sessionId && msg.sessionId !== currentSessionId.value) {
+    return;
+  }
+  ensureAssistantThread();
+  const toolsBlock = resolveToolsBlock();
+
+  // Find the last progress group (should be a sub-agent group)
+  for (let i = toolsBlock.tools.length - 1; i >= 0; i--) {
+    if (toolsBlock.tools[i].type === 'progress') {
+      const group = toolsBlock.tools[i] as ProgressItem;
+      group.thinkingContent = msg.content || '';
+      group.thinkingCollapsed = true;
+      break;
+    }
+  }
 };

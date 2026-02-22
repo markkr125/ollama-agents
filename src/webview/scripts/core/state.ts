@@ -72,7 +72,8 @@ export const settings = reactive({
   temperature: 0.7,
   sensitiveFilePatterns: '',
   storagePath: '',
-  maxContextWindow: 65536
+  maxContextWindow: 65536,
+  explorerModel: ''
 });
 
 export const chatSettings = reactive({
@@ -92,6 +93,7 @@ export const agentSettings = reactive({
 });
 
 export const sessionSensitiveFilePatterns = ref('');
+export const sessionExplorerModel = ref('');
 
 export const connectionStatus = reactive<StatusMessage>({ visible: false, success: true, message: '' });
 export const modelsStatus = reactive<StatusMessage>({ visible: false, success: true, message: '' });

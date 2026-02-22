@@ -45,6 +45,7 @@ export interface SessionRecord {
   auto_approve_commands?: boolean;
   auto_approve_sensitive_edits?: boolean;
   sensitive_file_patterns?: string | null;
+  explorer_model?: string;
   created_at: number;
   updated_at: number;
 }

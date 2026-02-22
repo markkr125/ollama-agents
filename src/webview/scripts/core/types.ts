@@ -122,6 +122,8 @@ export type ProgressItem = {
   collapsed: boolean;
   actions: ActionItem[];
   lastActionStatus?: ActionItem['status'];
+  thinkingContent?: string;
+  thinkingCollapsed?: boolean;
 };
 
 export type CommandApprovalItem = {
@@ -200,6 +202,7 @@ export type LoadSessionMessagesMessage = {
   autoApproveCommands?: boolean;
   autoApproveSensitiveEdits?: boolean;
   sessionSensitiveFilePatterns?: string | null;
+  sessionExplorerModel?: string;
 };
 
 export type StreamChunkMessage = {
@@ -299,4 +302,11 @@ export type ShowWarningBannerMessage = {
   type: 'showWarningBanner';
   sessionId?: string;
   message?: string;
+};
+
+export type SubagentThinkingMessage = {
+  type: 'subagentThinking';
+  sessionId?: string;
+  content?: string;
+  durationSeconds?: number;
 };

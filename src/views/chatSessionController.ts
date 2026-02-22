@@ -34,6 +34,13 @@ export class ChatSessionController {
     return null;
   }
 
+  /**
+   * Get the per-session explorer model override (empty string = use global/agent model).
+   */
+  getSessionExplorerModel(): string {
+    return this.currentSession?.explorer_model ?? '';
+  }
+
   pushMessage(message: MessageRecord) {
     this.currentMessages.push(message);
   }
@@ -187,7 +194,8 @@ export class ChatSessionController {
       sessionId,
       autoApproveCommands: !!session.auto_approve_commands,
       autoApproveSensitiveEdits: !!session.auto_approve_sensitive_edits,
-      sessionSensitiveFilePatterns: session.sensitive_file_patterns ?? null
+      sessionSensitiveFilePatterns: session.sensitive_file_patterns ?? null,
+      sessionExplorerModel: session.explorer_model ?? ''
     });
 
     // Ensure filesChanged widget appears even if the original __ui__ event

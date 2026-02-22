@@ -1089,3 +1089,78 @@ describe('planReady / modeChanged handlers', () => {
     expect(state.pendingPlanContent.value).toBeNull();
   });
 });
+
+describe('subagentThinking handler', () => {
+  test('handleSubagentThinking attaches thinking to last progress group', async () => {
+    const state = await import('../../../src/webview/scripts/core/state');
+    const progressHandlers = await import('../../../src/webview/scripts/core/messageHandlers/progress');
+
+    state.timeline.value = [];
+    state.currentProgressIndex.value = null;
+    state.currentStreamIndex.value = null;
+    state.currentAssistantThreadId.value = null;
+
+    // Create a progress group first
+    progressHandlers.handleStartProgressGroup({ type: 'startProgressGroup', title: 'Sub-agent task' });
+
+    // Send sub-agent thinking
+    progressHandlers.handleSubagentThinking({
+      type: 'subagentThinking',
+      content: 'I analyzed the code structure and found...',
+      durationSeconds: 5
+    } as any);
+
+    const thread = state.timeline.value[0] as any;
+    const toolsBlock = thread.blocks.find((b: any) => b.type === 'tools');
+    const group = toolsBlock.tools[0];
+    expect(group.thinkingContent).toBe('I analyzed the code structure and found...');
+    expect(group.thinkingCollapsed).toBe(true);
+  });
+
+  test('handleSubagentThinking with empty content still attaches', async () => {
+    const state = await import('../../../src/webview/scripts/core/state');
+    const progressHandlers = await import('../../../src/webview/scripts/core/messageHandlers/progress');
+
+    state.timeline.value = [];
+    state.currentProgressIndex.value = null;
+    state.currentStreamIndex.value = null;
+    state.currentAssistantThreadId.value = null;
+
+    progressHandlers.handleStartProgressGroup({ type: 'startProgressGroup', title: 'Task' });
+    progressHandlers.handleSubagentThinking({
+      type: 'subagentThinking',
+      content: '',
+      durationSeconds: 0
+    } as any);
+
+    const thread = state.timeline.value[0] as any;
+    const toolsBlock = thread.blocks.find((b: any) => b.type === 'tools');
+    const group = toolsBlock.tools[0];
+    expect(group.thinkingContent).toBe('');
+    expect(group.thinkingCollapsed).toBe(true);
+  });
+
+  test('handleSubagentThinking with wrong sessionId is ignored', async () => {
+    const state = await import('../../../src/webview/scripts/core/state');
+    const progressHandlers = await import('../../../src/webview/scripts/core/messageHandlers/progress');
+
+    state.timeline.value = [];
+    state.currentProgressIndex.value = null;
+    state.currentStreamIndex.value = null;
+    state.currentAssistantThreadId.value = null;
+    state.currentSessionId.value = 'session-abc';
+
+    progressHandlers.handleStartProgressGroup({ type: 'startProgressGroup', title: 'Task' });
+    progressHandlers.handleSubagentThinking({
+      type: 'subagentThinking',
+      sessionId: 'session-wrong',
+      content: 'Should be ignored',
+      durationSeconds: 1
+    } as any);
+
+    const thread = state.timeline.value[0] as any;
+    const toolsBlock = thread.blocks.find((b: any) => b.type === 'tools');
+    const group = toolsBlock.tools[0];
+    expect(group.thinkingContent).toBeUndefined();
+  });
+});

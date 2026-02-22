@@ -477,6 +477,7 @@ Settings are defined in `package.json` under `contributes.configuration`:
 | `ollamaCopilot.agent.keepAlive` | `\"\"` | How long Ollama keeps the model loaded. Empty = server default. Examples: `5m`, `30m`, `-1` (forever) |\n| `ollamaCopilot.agent.maxContextWindow` | `65536` | Global cap on context window (`num_ctx`) sent to Ollama. Prevents massive KV cache allocation. Per-model overrides in the Models tab take precedence. |
 | `ollamaCopilot.agent.sessionTitleGeneration` | `firstMessage` | Session title mode: `firstMessage` (instant, no LLM), `currentModel` (uses active model), `selectModel` (uses specific model) |
 | `ollamaCopilot.agent.sessionTitleModel` | `""` | Model for title generation when `sessionTitleGeneration` is `selectModel` |
+| `ollamaCopilot.agent.explorerModel` | `""` | Model for sub-agent (explorer) tasks. Empty = use the same model as the orchestrator. Can be overridden per-session via SessionControls. |
 | `ollamaCopilot.storagePath` | `""` | Custom absolute path for database storage. Empty = stable default under `globalStorageUri`. Requires reload. |
 
 ### Model Management
@@ -495,15 +496,15 @@ The agent executor is **decomposed into focused sub-handlers** — each owning a
 
 | File | Responsibility |
 |------|----------------|
-| `agentChatExecutor.ts` | **Thin orchestrator** — wires sub-handlers, runs main `while` loop, owns `persistUiEvent`, session memory injection, post-task verification gate, truncation handling. Conversation history uses `agentControlPlane` for structured continuation |
+| `agentChatExecutor.ts` | **Thin orchestrator** — wires sub-handlers, runs main `while` loop, owns `persistUiEvent`, session memory injection, post-task verification gate, truncation handling, explorer model resolution, duplicate tool call detection. Restricted to 3 tools: `write_file`, `run_terminal_command`, `run_subagent`. Conversation history uses `agentControlPlane` for structured continuation |
 | `agentExploreExecutor.ts` | **Read-only executor** — explore/plan/review/deep-explore/chat modes with restricted tool set (no writes, no terminal by default) |
-| `agentDispatcher.ts` | **Intent classifier** — LLM classification (10s timeout), defaults to `mixed` on failure. Routes pure analysis to explore executor; all other intents to agent executor with `intent` passed to `AgentPromptBuilder.doingTasks()` |
+| `agentDispatcher.ts` | **Intent classifier** — LLM classification (10s timeout), defaults to `mixed` on failure. Routes pure analysis to explore executor; all other intents to agent executor with `intent` passed to `AgentPromptBuilder.doingTasksOrchestrator()` |
 | `agentStreamProcessor.ts` | Owns the `for await (chunk)` streaming loop — thinking accumulation, throttled UI emission, first-chunk gate, output truncation detection (`done_reason === 'length'`) |
 | `agentToolRunner.ts` | Executes a batch of tool calls per iteration — progress groups, approvals, inline diff stats, contextual reminders, auto-diagnostics injection after file writes |
 | `agentSummaryBuilder.ts` | Post-loop finalization — summary generation (LLM or fallback), final message, `filesChanged` event, scratch cleanup |
 | `agentTerminalHandler.ts` | Terminal command approval + execution via `TerminalManager` |
 | `agentFileEditHandler.ts` | File edit approval + execution via workspace FS |
-| `agentPromptBuilder.ts` | Modular system prompt assembly — identity, workspace, tone, tasks, tools, safety, navigation. Anti-sycophancy rules, auto-diagnostics guidance. Builds mode-specific prompts (explore/plan/review) |
+| `agentPromptBuilder.ts` | Modular system prompt assembly — orchestrator-specific (`buildOrchestratorNativePrompt`, `buildOrchestratorXmlPrompt`) with `doingTasksOrchestrator()` + `orchestratorToolPolicy()`, plus mode-specific (explore/plan/review/chat/deep-explore). Orchestrator tool restriction (`ORCHESTRATOR_TOOLS` set), delegation strategy prompt |
 | `agentContextCompactor.ts` | Conversation summarization when tokens exceed 70% of context window — 7-section structured analysis (including failed approaches & promises made) |
 | `agentSessionMemory.ts` | Structured in-memory notes (files explored, errors, preferences) with `toJSON()`/`fromJSON()` serialization and DB persistence via `session_memory` column |
 | `agentControlPlane.ts` | Structured continuation messages — `buildLoopContinuationMessage()`, `formatNativeToolResults()`, `formatTextToolResults()`, `isCompletionSignaled()`. Emits `<agent_control>` JSON packets with state/iteration/files |
@@ -693,6 +694,8 @@ npx tsc -p tsconfig.test.json --noEmit
 | Modify agent streaming | `src/services/agent/agentStreamProcessor.ts` | `agent-tools` instructions |
 | Modify agent tool execution | `src/services/agent/agentToolRunner.ts` | `agent-tools` instructions |
 | Modify agent summary/finalization | `src/services/agent/agentSummaryBuilder.ts` | `agent-tools` instructions |
+| Explorer model resolution | `src/services/agent/agentChatExecutor.ts` (`resolveExplorerCapabilities`) + `src/views/messageHandlers/chatMessageHandler.ts` (3-tier fallback) + `src/config/settings.ts` + `package.json` | `agent-tools` instructions → "Explorer Model Resolution" |
+| Per-session explorer override | `src/views/chatSessionController.ts` + `src/webview/components/chat/components/SessionControls.vue` + `src/services/database/sessionRepository.ts` | `agent-tools` + `webview-ui` instructions |
 | Message storage (LanceDB) | `src/services/database/lanceSearchService.ts` + `src/services/database/databaseService.ts` | `database-rules` instructions |
 | Session storage (SQLite) | `src/services/database/sessionIndexService.ts` | `database-rules` instructions |
 | Storage path resolution | `src/services/database/storagePath.ts` (`resolveStoragePath`, `migrateIfNeeded`, `workspaceKey`) | `database-rules` instructions |

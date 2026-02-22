@@ -2,7 +2,8 @@ import * as assert from 'assert';
 import {
     detectPartialToolCall,
     extractToolCalls,
-    removeToolCalls
+    removeToolCalls,
+    stripBareJsonToolCalls
 } from '../../../../src/utils/toolCallParser';
 
 suite('toolCallParser', () => {
@@ -226,6 +227,149 @@ suite('toolCallParser', () => {
       assert.strictEqual(result.length, 1);
       assert.strictEqual(result[0].name, 'list_files');
       assert.deepStrictEqual(result[0].args, {});
+    });
+  });
+
+  // ── Bare JSON fallback extraction ────────────────────────────────
+
+  suite('bare JSON fallback', () => {
+    test('extracts bare JSON tool call without XML wrapping', () => {
+      const response = 'I will read the file now.\n{"name": "read_file", "arguments": {"path": "src/main.ts"}}';
+      const result = extractToolCalls(response);
+
+      assert.strictEqual(result.length, 1);
+      assert.strictEqual(result[0].name, 'read_file');
+      assert.strictEqual(result[0].args.path, 'src/main.ts');
+    });
+
+    test('extracts bare JSON from code fence', () => {
+      const response = 'Here is the tool call:\n```json\n{"name": "search_workspace", "arguments": {"query": "hello"}}\n```';
+      const result = extractToolCalls(response);
+
+      assert.strictEqual(result.length, 1);
+      assert.strictEqual(result[0].name, 'search_workspace');
+      assert.strictEqual(result[0].args.query, 'hello');
+    });
+
+    test('extracts multiple bare JSON tool calls', () => {
+      const response = '{"name": "read_file", "arguments": {"path": "a.ts"}}\n{"name": "list_files", "arguments": {"path": "src/"}}';
+      const result = extractToolCalls(response);
+
+      assert.strictEqual(result.length, 2);
+      assert.strictEqual(result[0].name, 'read_file');
+      assert.strictEqual(result[1].name, 'list_files');
+    });
+
+    test('does NOT use bare JSON when XML tool calls are present', () => {
+      const response = '<tool_call>{"name": "read_file", "arguments": {"path": "a.ts"}}</tool_call>\n{"name": "write_file", "arguments": {"path": "b.ts", "content": "x"}}';
+      const result = extractToolCalls(response);
+
+      // Should only extract the XML one, not the bare JSON
+      assert.strictEqual(result.length, 1);
+      assert.strictEqual(result[0].name, 'read_file');
+    });
+
+    test('handles bare JSON with "args" field instead of "arguments"', () => {
+      const response = '{"name": "read_file", "args": {"path": "test.ts"}}';
+      const result = extractToolCalls(response);
+
+      assert.strictEqual(result.length, 1);
+      assert.strictEqual(result[0].name, 'read_file');
+      assert.strictEqual(result[0].args.path, 'test.ts');
+    });
+  });
+
+  // ── knownToolNames filtering for bare JSON ────────────────────────────
+
+  suite('knownToolNames filtering', () => {
+    test('bare JSON with known tool name is extracted', () => {
+      const known = new Set(['read_file', 'search_workspace']);
+      const response = '{"name": "read_file", "arguments": {"path": "a.ts"}}';
+      const result = extractToolCalls(response, known);
+
+      assert.strictEqual(result.length, 1);
+      assert.strictEqual(result[0].name, 'read_file');
+    });
+
+    test('bare JSON with unknown tool name is skipped', () => {
+      const known = new Set(['read_file', 'search_workspace']);
+      const response = '{"name": "not_a_tool", "arguments": {"path": "a.ts"}}';
+      const result = extractToolCalls(response, known);
+
+      assert.strictEqual(result.length, 0);
+    });
+
+    test('mixed known and unknown bare JSON: only known extracted', () => {
+      const known = new Set(['read_file', 'list_files']);
+      const response = '{"name": "read_file", "arguments": {"path": "a.ts"}}\n{"name": "fake_tool", "arguments": {"x": 1}}\n{"name": "list_files", "arguments": {"path": "src/"}}';
+      const result = extractToolCalls(response, known);
+
+      assert.strictEqual(result.length, 2);
+      assert.strictEqual(result[0].name, 'read_file');
+      assert.strictEqual(result[1].name, 'list_files');
+    });
+
+    test('without knownToolNames, all bare JSON tool calls are accepted', () => {
+      const response = '{"name": "anything_goes", "arguments": {"x": 1}}';
+      const result = extractToolCalls(response);
+
+      assert.strictEqual(result.length, 1);
+      assert.strictEqual(result[0].name, 'anything_goes');
+    });
+
+    test('XML tool calls are not filtered by knownToolNames', () => {
+      const known = new Set(['read_file']);
+      const response = '<tool_call>{"name": "write_file", "arguments": {"path": "a.ts", "content": "hi"}}</tool_call>';
+      const result = extractToolCalls(response, known);
+
+      // XML calls bypass knownToolNames filtering
+      assert.strictEqual(result.length, 1);
+      assert.strictEqual(result[0].name, 'write_file');
+    });
+  });
+
+  // ── stripBareJsonToolCalls ────────────────────────────────────────────
+
+  suite('stripBareJsonToolCalls', () => {
+    test('removes bare JSON tool calls with known tool names', () => {
+      const known = new Set(['read_file']);
+      const response = 'I will read the file now.\n{"name": "read_file", "arguments": {"path": "src/main.ts"}}';
+      const result = stripBareJsonToolCalls(response, known);
+
+      assert.strictEqual(result, 'I will read the file now.');
+    });
+
+    test('preserves bare JSON with unknown tool names', () => {
+      const known = new Set(['read_file']);
+      const response = 'Some JSON: {"name": "other_tool", "arguments": {"x": 1}}';
+      const result = stripBareJsonToolCalls(response, known);
+
+      assert.ok(result.includes('other_tool'));
+    });
+
+    test('removes code-fenced JSON tool calls', () => {
+      const known = new Set(['search_workspace']);
+      const response = 'Let me search:\n```json\n{"name": "search_workspace", "arguments": {"query": "hello"}}\n```\nDone.';
+      const result = stripBareJsonToolCalls(response, known);
+
+      assert.ok(!result.includes('search_workspace'));
+      assert.ok(result.includes('Done.'));
+    });
+
+    test('handles empty known set (nothing stripped)', () => {
+      const known = new Set<string>();
+      const response = '{"name": "read_file", "arguments": {"path": "a.ts"}}';
+      const result = stripBareJsonToolCalls(response, known);
+
+      assert.ok(result.includes('read_file'));
+    });
+
+    test('handles response with no tool calls', () => {
+      const known = new Set(['read_file']);
+      const response = 'This is a normal response with no tool calls.';
+      const result = stripBareJsonToolCalls(response, known);
+
+      assert.strictEqual(result, 'This is a normal response with no tool calls.');
     });
   });
 });

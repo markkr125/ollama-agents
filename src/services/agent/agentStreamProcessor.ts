@@ -59,7 +59,8 @@ export class AgentStreamProcessor {
     iteration: number,
     useNativeTools: boolean,
     token: vscode.CancellationToken,
-    thinkingStartTime?: number
+    thinkingStartTime?: number,
+    knownToolNames?: Set<string>
   ): Promise<StreamResult> {
     let response = '';
     let thinkingContent = '';
@@ -184,6 +185,20 @@ export class AgentStreamProcessor {
               message: `Preparing to use ${partialTool}...`,
               sessionId
             });
+          }
+          // Bare JSON pre-scan — detect models (e.g. Qwen2.5-Coder) that emit
+          // tool calls as raw JSON without <tool_call> wrapping. Freeze text
+          // early to prevent bare JSON from leaking into streamed assistant text.
+          if (!textFrozen && knownToolNames) {
+            const bareMatch = response.match(/\{[^{}]*?"name"\s*:\s*"(\w+)"[^{}]*?"(?:arguments|args)"\s*:\s*\{/);
+            if (bareMatch && knownToolNames.has(bareMatch[1])) {
+              textFrozen = true;
+              this.emitter.postMessage({
+                type: 'showThinking',
+                message: `Preparing to use ${bareMatch[1]}...`,
+                sessionId
+              });
+            }
           }
         }
 

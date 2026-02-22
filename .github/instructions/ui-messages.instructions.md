@@ -16,6 +16,7 @@ description: "Backend-to-frontend and frontend-to-backend message protocol for t
 | `startProgressGroup` | `{title, sessionId}` | Start collapsible group |
 | `showToolAction` | `{status, icon, text, detail, filePath?, checkpointId?, startLine?, sessionId}` | Add/update action in group |
 | `finishProgressGroup` | `{sessionId}` | Mark group complete |
+| `subagentThinking` | `{content, durationSeconds?, sessionId}` | Attach sub-agent reasoning to last progress group as collapsible `<details>` |
 | `requestToolApproval` | `{id, command, cwd, severity, reason, sessionId}` | Show terminal command approval card |
 | `toolApprovalResult` | `{approvalId, status, output, command?, autoApproved?, sessionId}` | Update terminal command approval status |
 | `requestFileEditApproval` | `{id, filePath, severity, reason, diffHtml, sessionId}` | Show file edit approval card with diff |

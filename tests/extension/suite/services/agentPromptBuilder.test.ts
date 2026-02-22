@@ -61,11 +61,11 @@ suite('AgentPromptBuilder', () => {
     builder = new AgentPromptBuilder(createStubToolRegistry());
   });
 
-  // ── Native tool prompt ──────────────────────────────────────────
+  // ── Orchestrator native prompt ───────────────────────────────────
 
-  suite('buildNativeToolPrompt', () => {
+  suite('buildOrchestratorNativePrompt', () => {
     test('includes all mandatory behavioral sections', () => {
-      const prompt = builder.buildNativeToolPrompt(singleRoot, singleRoot[0]);
+      const prompt = builder.buildOrchestratorNativePrompt(singleRoot, singleRoot[0]);
 
       // Identity
       assert.ok(prompt.includes('interactive coding assistant'), 'Missing identity section');
@@ -76,11 +76,13 @@ suite('AgentPromptBuilder', () => {
       // Tone and style
       assert.ok(prompt.includes('COMMUNICATION RULES'), 'Missing communication rules');
 
-      // Task execution
+      // Orchestrator-specific task execution
       assert.ok(prompt.includes('TASK EXECUTION'), 'Missing task execution rules');
+      assert.ok(prompt.includes('Delegate research'), 'Orchestrator task should mention delegation');
 
-      // Tool usage policy
+      // Orchestrator-specific tool policy
       assert.ok(prompt.includes('TOOL USAGE'), 'Missing tool usage rules');
+      assert.ok(prompt.includes('You have ONLY 3 tools'), 'Orchestrator tool policy should mention 3 tools');
 
       // Safety
       assert.ok(prompt.includes('SAFETY'), 'Missing safety rules');
@@ -88,10 +90,15 @@ suite('AgentPromptBuilder', () => {
       // User-provided context
       assert.ok(prompt.includes('USER-PROVIDED CONTEXT'), 'Missing user context');
 
-      // Native tool prompt uses compact deepExplorationReminder (not verbose codeNavigationStrategy)
-      assert.ok(!prompt.includes('CODE NAVIGATION STRATEGY'), 'Native prompt should not have verbose code nav');
-      assert.ok(!prompt.includes('SEARCH TIPS'), 'Native prompt should not have search tips (in tool descriptions)');
-      assert.ok(prompt.includes('DEEP EXPLORATION'), 'Missing compact deep exploration reminder');
+      // Orchestrator prompt does NOT include code navigation or deep exploration (those are for sub-agents)
+      assert.ok(!prompt.includes('CODE NAVIGATION STRATEGY'), 'Orchestrator should not have code nav (sub-agent only)');
+      assert.ok(!prompt.includes('SEARCH TIPS'), 'Orchestrator should not have search tips (sub-agent only)');
+
+      // Orchestrator DOES include delegation strategy
+      assert.ok(prompt.includes('ORCHESTRATOR DELEGATION STRATEGY'), 'Missing orchestrator delegation strategy');
+
+      // Orchestrator task section should NOT reference read_file/search_workspace directly
+      assert.ok(!prompt.includes('Read before writing'), 'Orchestrator task should not say Read before writing');
 
       // Scratch dir
       assert.ok(prompt.includes('.ollama-copilot-scratch'), 'Missing scratch dir');
@@ -101,14 +108,14 @@ suite('AgentPromptBuilder', () => {
     });
 
     test('does NOT include XML fallback sections', () => {
-      const prompt = builder.buildNativeToolPrompt(singleRoot, singleRoot[0]);
+      const prompt = builder.buildOrchestratorNativePrompt(singleRoot, singleRoot[0]);
 
       assert.ok(!prompt.includes('TOOLS:'), 'Native prompt should not include tool definitions');
       assert.ok(!prompt.includes('FORMAT - Always use'), 'Native prompt should not include XML format');
     });
 
     test('multi-root workspace lists all folders', () => {
-      const prompt = builder.buildNativeToolPrompt(multiRoot, multiRoot[0]);
+      const prompt = builder.buildOrchestratorNativePrompt(multiRoot, multiRoot[0]);
 
       assert.ok(prompt.includes('multi-root workspace'), 'Missing multi-root label');
       assert.ok(prompt.includes('frontend'), 'Missing frontend folder');
@@ -118,32 +125,73 @@ suite('AgentPromptBuilder', () => {
     });
 
     test('native tool prompt mentions parallel tool calls', () => {
-      const prompt = builder.buildNativeToolPrompt(singleRoot, singleRoot[0]);
+      const prompt = builder.buildOrchestratorNativePrompt(singleRoot, singleRoot[0]);
       assert.ok(prompt.includes('parallel'), 'Missing parallel batching');
+    });
+
+    test('orchestrator tool policy does not reference read_file or search_workspace', () => {
+      const prompt = builder.buildOrchestratorNativePrompt(singleRoot, singleRoot[0]);
+      // The TOOL USAGE section should mention write_file, run_terminal_command, run_subagent
+      // but NOT read_file or search_workspace (those are sub-agent tools)
+      assert.ok(prompt.includes('write_file'), 'Should mention write_file');
+      assert.ok(prompt.includes('run_terminal_command'), 'Should mention run_terminal_command');
+      assert.ok(prompt.includes('run_subagent'), 'Should mention run_subagent');
     });
   });
 
-  // ── XML fallback prompt ─────────────────────────────────────────
+  // ── Orchestrator XML prompt ─────────────────────────────────────
 
-  suite('buildXmlFallbackPrompt', () => {
-    test('includes tool definitions and XML format examples', () => {
-      const prompt = builder.buildXmlFallbackPrompt(singleRoot, singleRoot[0]);
+  suite('buildOrchestratorXmlPrompt', () => {
+    test('includes orchestrator tool definitions and XML format examples', () => {
+      const prompt = builder.buildOrchestratorXmlPrompt(singleRoot, singleRoot[0]);
 
       assert.ok(prompt.includes('TOOLS:'), 'Missing TOOLS: section');
-      assert.ok(prompt.includes('read_file:'), 'Missing read_file tool definition');
+      // Orchestrator XML only includes the 3 orchestrator tools
       assert.ok(prompt.includes('write_file:'), 'Missing write_file tool definition');
+      assert.ok(prompt.includes('run_terminal_command:'), 'Missing run_terminal_command tool definition');
+      assert.ok(prompt.includes('run_subagent:'), 'Missing run_subagent tool definition');
+      // read_file is NOT in the orchestrator (it's a sub-agent tool)
+      assert.ok(!prompt.includes('read_file:'), 'Orchestrator XML should NOT include read_file');
       assert.ok(prompt.includes('FORMAT - Always use'), 'Missing tool call format');
       assert.ok(prompt.includes('<tool_call>'), 'Missing XML example');
     });
 
+    test('includes orchestrator delegation strategy', () => {
+      const prompt = builder.buildOrchestratorXmlPrompt(singleRoot, singleRoot[0]);
+      assert.ok(prompt.includes('ORCHESTRATOR DELEGATION STRATEGY'), 'Missing orchestrator delegation strategy');
+    });
+
+    test('uses orchestrator-specific task and tool sections', () => {
+      const prompt = builder.buildOrchestratorXmlPrompt(singleRoot, singleRoot[0]);
+
+      assert.ok(prompt.includes('Delegate research'), 'XML orchestrator should use orchestrator-specific task section');
+      assert.ok(prompt.includes('You have ONLY 3 tools'), 'XML orchestrator should use orchestrator tool policy');
+    });
+
     test('also includes all mandatory behavioral sections', () => {
-      const prompt = builder.buildXmlFallbackPrompt(singleRoot, singleRoot[0]);
+      const prompt = builder.buildOrchestratorXmlPrompt(singleRoot, singleRoot[0]);
 
       assert.ok(prompt.includes('interactive coding assistant'), 'Missing identity');
       assert.ok(prompt.includes('COMMUNICATION RULES'), 'Missing tone');
       assert.ok(prompt.includes('TASK EXECUTION'), 'Missing tasks');
       assert.ok(prompt.includes('SAFETY'), 'Missing safety');
       assert.ok(prompt.includes('[TASK_COMPLETE]'), 'Missing completion signal');
+    });
+  });
+
+  // ── Deprecated aliases ──────────────────────────────────────────
+
+  suite('deprecated aliases', () => {
+    test('buildNativeToolPrompt delegates to buildOrchestratorNativePrompt', () => {
+      const oldResult = builder.buildNativeToolPrompt(singleRoot, singleRoot[0]);
+      const newResult = builder.buildOrchestratorNativePrompt(singleRoot, singleRoot[0]);
+      assert.strictEqual(oldResult, newResult);
+    });
+
+    test('buildXmlFallbackPrompt delegates to buildOrchestratorXmlPrompt', () => {
+      const oldResult = builder.buildXmlFallbackPrompt(singleRoot, singleRoot[0]);
+      const newResult = builder.buildOrchestratorXmlPrompt(singleRoot, singleRoot[0]);
+      assert.strictEqual(oldResult, newResult);
     });
   });
 
@@ -253,44 +301,45 @@ suite('AgentPromptBuilder', () => {
 
   suite('enhanced prompt sections', () => {
     test('tone section includes anti-sycophancy rules', () => {
-      const prompt = builder.buildNativeToolPrompt(singleRoot, singleRoot[0]);
+      const prompt = builder.buildOrchestratorNativePrompt(singleRoot, singleRoot[0]);
       assert.ok(prompt.includes('sycophantic'), 'Should mention sycophantic behavior');
       assert.ok(prompt.includes('PROFESSIONAL OBJECTIVITY'), 'Should mention professional objectivity');
     });
 
-    test('doingTasks section includes diagnostics guidance', () => {
-      const prompt = builder.buildNativeToolPrompt(singleRoot, singleRoot[0]);
-      assert.ok(prompt.includes('get_diagnostics'), 'Should mention get_diagnostics');
+    test('orchestrator doingTasks mentions delegation', () => {
+      const prompt = builder.buildOrchestratorNativePrompt(singleRoot, singleRoot[0]);
+      assert.ok(prompt.includes('Delegate research'), 'Orchestrator should mention delegation');
       assert.ok(prompt.includes('Complete each step'), 'Should mention completing steps');
     });
 
-    test('toolUsagePolicy section includes subagent delegation', () => {
-      const prompt = builder.buildNativeToolPrompt(singleRoot, singleRoot[0]);
+    test('orchestrator toolPolicy mentions only 3 tools', () => {
+      const prompt = builder.buildOrchestratorNativePrompt(singleRoot, singleRoot[0]);
       assert.ok(prompt.includes('run_subagent'), 'Should mention run_subagent');
       assert.ok(prompt.includes('diagnostics are automatically checked'), 'Should mention auto-diagnostics after writes');
+      assert.ok(prompt.includes('You have ONLY 3 tools'), 'Should mention only 3 tools');
     });
 
     test('executingWithCare includes investigation before fixing', () => {
-      const prompt = builder.buildNativeToolPrompt(singleRoot, singleRoot[0]);
+      const prompt = builder.buildOrchestratorNativePrompt(singleRoot, singleRoot[0]);
       assert.ok(prompt.includes('investigate before'), 'Should mention investigating before acting');
       assert.ok(prompt.includes('verify the package name'), 'Should mention package verification');
     });
 
     test('completionSignal includes verification instructions', () => {
-      const prompt = builder.buildNativeToolPrompt(singleRoot, singleRoot[0]);
+      const prompt = builder.buildOrchestratorNativePrompt(singleRoot, singleRoot[0]);
       assert.ok(prompt.includes('verify your work'), 'Should mention verifying work');
       assert.ok(prompt.includes('compiles/lints cleanly'), 'Should mention clean compilation');
     });
 
     test('completionSignal includes CONTINUATION BEHAVIOR section', () => {
-      const prompt = builder.buildNativeToolPrompt(singleRoot, singleRoot[0]);
+      const prompt = builder.buildOrchestratorNativePrompt(singleRoot, singleRoot[0]);
       assert.ok(prompt.includes('CONTINUATION BEHAVIOR'), 'Should have CONTINUATION BEHAVIOR section');
       assert.ok(prompt.includes('agent_control'), 'Should reference agent_control packets');
       assert.ok(prompt.includes('Do NOT restate your plan'), 'Should include anti-repetition rules');
     });
 
     test('XML prompt also includes CONTINUATION BEHAVIOR', () => {
-      const prompt = builder.buildXmlFallbackPrompt(singleRoot, singleRoot[0]);
+      const prompt = builder.buildOrchestratorXmlPrompt(singleRoot, singleRoot[0]);
       assert.ok(prompt.includes('CONTINUATION BEHAVIOR'), 'XML prompt should also have continuation rules');
       assert.ok(prompt.includes('Do NOT repeat tool calls'), 'Should include anti-repetition for tools');
     });
@@ -409,20 +458,21 @@ suite('AgentPromptBuilder', () => {
   // ── Agent prompt debugging and deep explore sections ────────────
 
   suite('agent prompt enhancements', () => {
-    test('native prompt uses compact deepExplorationReminder (not verbose sections)', () => {
-      const prompt = builder.buildNativeToolPrompt(singleRoot, singleRoot[0]);
-      // Native prompt should use the compact reminder, NOT the verbose codeNavigationStrategy
-      assert.ok(prompt.includes('DEEP EXPLORATION'), 'Missing deep exploration reminder in native prompt');
+    test('orchestrator native prompt uses delegation (not verbose exploration sections)', () => {
+      const prompt = builder.buildOrchestratorNativePrompt(singleRoot, singleRoot[0]);
+      // Orchestrator prompt should have delegation strategy, NOT verbose exploration sections
+      assert.ok(prompt.includes('ORCHESTRATOR DELEGATION STRATEGY'), 'Missing orchestrator delegation strategy in native prompt');
       assert.ok(!prompt.includes('DEBUGGING STRATEGY'), 'Verbose debugging strategy should not be in native prompt');
       assert.ok(!prompt.includes('CODE NAVIGATION STRATEGY'), 'Verbose code nav should not be in native prompt');
     });
 
-    test('XML fallback still includes codeNavigationStrategy sections', () => {
-      const prompt = builder.buildXmlFallbackPrompt(singleRoot, singleRoot[0]);
-      assert.ok(prompt.includes('CODE NAVIGATION STRATEGY'), 'XML fallback should keep code nav');
-      assert.ok(prompt.includes('DEBUGGING STRATEGY'), 'XML fallback should keep debugging');
-      assert.ok(prompt.includes('DEEP EXPLORATION'), 'XML fallback should keep deep exploration');
+    test('orchestrator XML includes delegation and search tips', () => {
+      const prompt = builder.buildOrchestratorXmlPrompt(singleRoot, singleRoot[0]);
+      // Orchestrator XML prompt has delegation strategy + search tips, NOT verbose exploration sections
+      assert.ok(prompt.includes('ORCHESTRATOR DELEGATION STRATEGY'), 'XML fallback should have orchestrator delegation');
       assert.ok(prompt.includes('SEARCH TIPS'), 'XML fallback should keep search tips');
+      assert.ok(!prompt.includes('CODE NAVIGATION STRATEGY'), 'Verbose code nav should not be in orchestrator XML');
+      assert.ok(!prompt.includes('DEBUGGING STRATEGY'), 'Verbose debugging should not be in orchestrator XML');
     });
 
     test('plan prompt mentions all 8 LSP tools', () => {
@@ -450,6 +500,62 @@ suite('AgentPromptBuilder', () => {
       assert.ok(prompt.includes('get_type_hierarchy'), 'Missing get_type_hierarchy in review intelligence');
       assert.ok(prompt.includes('find_symbol'), 'Missing find_symbol in review intelligence');
       assert.ok(prompt.includes('get_hover_info'), 'Missing get_hover_info in review intelligence');
+    });
+  });
+
+  // ── Orchestrator tool restriction ───────────────────────────────
+
+  suite('orchestrator tool restriction', () => {
+    test('getOrchestratorToolDefinitions returns only 3 tools', () => {
+      const tools = builder.getOrchestratorToolDefinitions();
+      const names = tools.map((t: any) => t.function.name).sort();
+
+      assert.deepStrictEqual(names, ['run_subagent', 'run_terminal_command', 'write_file']);
+    });
+
+    test('getOrchestratorToolDefinitions filters out read-only tools', () => {
+      const tools = builder.getOrchestratorToolDefinitions();
+      const names = tools.map((t: any) => t.function.name);
+
+      assert.ok(!names.includes('read_file'), 'Should not include read_file');
+      assert.ok(!names.includes('search_workspace'), 'Should not include search_workspace');
+      assert.ok(!names.includes('find_definition'), 'Should not include find_definition');
+      assert.ok(!names.includes('list_files'), 'Should not include list_files');
+      assert.ok(!names.includes('get_diagnostics'), 'Should not include get_diagnostics');
+    });
+
+    test('orchestrator native prompt includes delegation strategy', () => {
+      const prompt = builder.buildOrchestratorNativePrompt(singleRoot, singleRoot[0]);
+      assert.ok(prompt.includes('ORCHESTRATOR DELEGATION STRATEGY'), 'Missing delegation strategy');
+      assert.ok(prompt.includes('SCOUT'), 'Missing SCOUT step');
+      assert.ok(prompt.includes('EXPLORE'), 'Missing EXPLORE step');
+      assert.ok(prompt.includes('WRITE'), 'Missing WRITE step');
+      assert.ok(prompt.includes('VERIFY'), 'Missing VERIFY step');
+    });
+
+    test('orchestrator XML prompt includes delegation strategy', () => {
+      const prompt = builder.buildOrchestratorXmlPrompt(singleRoot, singleRoot[0]);
+      assert.ok(prompt.includes('ORCHESTRATOR DELEGATION STRATEGY'), 'Missing delegation strategy');
+    });
+
+    test('orchestrator XML includes only orchestrator tool definitions', () => {
+      const prompt = builder.buildOrchestratorXmlPrompt(singleRoot, singleRoot[0]);
+      // The XML fallback should define write_file, run_terminal_command, run_subagent
+      assert.ok(prompt.includes('write_file:'), 'Missing write_file definition in XML');
+      assert.ok(prompt.includes('run_terminal_command:'), 'Missing run_terminal_command definition in XML');
+      assert.ok(prompt.includes('run_subagent:'), 'Missing run_subagent definition in XML');
+      // Should NOT define read-only tools
+      assert.ok(!prompt.includes('read_file:'), 'Should not include read_file definition in orchestrator XML');
+      assert.ok(!prompt.includes('search_workspace:'), 'Should not include search_workspace definition in orchestrator XML');
+    });
+
+    test('orchestrator prompts do NOT include projectContextBlock', () => {
+      const native = builder.buildOrchestratorNativePrompt(singleRoot, singleRoot[0]);
+      const xml = builder.buildOrchestratorXmlPrompt(singleRoot, singleRoot[0]);
+
+      // Both should NOT have code navigation strategy (that's for sub-agents)
+      assert.ok(!native.includes('CODE NAVIGATION STRATEGY'), 'Native orchestrator should not have code nav');
+      assert.ok(!xml.includes('CODE NAVIGATION STRATEGY'), 'XML orchestrator should not have code nav');
     });
   });
 });

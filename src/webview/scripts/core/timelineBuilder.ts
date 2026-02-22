@@ -108,6 +108,7 @@ class TimelineBuilder {
     switch (eventType) {
       case 'startProgressGroup': this.handleStartProgressGroup(payload, messageId); break;
       case 'showToolAction': this.handleShowToolAction(payload, messageId); break;
+      case 'subagentThinking': this.handleSubagentThinking(payload); break;
       case 'finishProgressGroup': this.handleFinishProgressGroup(); break;
       case 'requestToolApproval': this.handleRequestToolApproval(payload, messageId); break;
       case 'toolApprovalResult': this.handleToolApprovalResult(payload, messageId); break;
@@ -310,6 +311,23 @@ class TimelineBuilder {
     }
 
     if (status === 'error') this.currentGroup.status = 'error';
+  }
+
+  /**
+   * Attach sub-agent thinking content to the last progress group.
+   * Displayed as a collapsible <details> in ProgressGroup.vue.
+   */
+  private handleSubagentThinking(payload: any): void {
+    const toolsBlock = this.resolveToolsBlock();
+    // Find the last progress group and attach thinking content
+    for (let i = toolsBlock.tools.length - 1; i >= 0; i--) {
+      if (toolsBlock.tools[i].type === 'progress') {
+        const group = toolsBlock.tools[i] as ProgressItem;
+        group.thinkingContent = payload?.content || '';
+        group.thinkingCollapsed = true;
+        break;
+      }
+    }
   }
 
   private handleFinishProgressGroup(): void {

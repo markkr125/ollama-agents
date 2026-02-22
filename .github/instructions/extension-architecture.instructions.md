@@ -58,9 +58,30 @@ In `extension.ts → activate()`, a `ServiceContainer` groups all extension-wide
 `AgentDispatcher` (`src/services/agent/agentDispatcher.ts`) classifies user intent before the agent loop starts. Created in `ChatMessageHandler`'s constructor, it runs an LLM call (no timeout — waits for model, caller shows "Analyzing request..." spinner) and defaults to `mixed` intent on failure. The `DispatchResult` determines:
 
 1. **Executor routing** — ALL analysis tasks (`analyze`) route to `AgentExploreExecutor`: `needsWrite=false` uses `deep-explore` mode (read-only), `needsWrite=true` uses `deep-explore-write` mode (read-only + write_file for docs output). All other intents go to `AgentChatExecutor`
-2. **Prompt adaptation** — `intent` is passed to `AgentPromptBuilder.buildNativeToolPrompt(folders, workspace, intent)`, which feeds it to `doingTasks(intent)` to adapt the TASK EXECUTION section
+2. **Prompt adaptation** — `intent` is passed to `AgentPromptBuilder.buildOrchestratorNativePrompt(folders, workspace, intent)`, which feeds it to `doingTasksOrchestrator(intent)` to adapt the TASK EXECUTION section
 
 See `agent-tools.instructions.md` → "Agent Dispatcher — Intent Classification" for full routing table and anti-patterns.
+
+## Explorer Model Resolution
+
+The orchestrator can delegate research tasks to sub-agents via `run_subagent`. Sub-agents can use a **different model** from the orchestrator, configured at three tiers:
+
+| Priority | Source | Setting / Column |
+|----------|--------|------------------|
+| 1 (highest) | Per-session override | `explorer_model` column in `sessions` table (set via `SessionControls.vue`) |
+| 2 | Global setting | `ollamaCopilot.agent.explorerModel` in VS Code settings |
+| 3 (fallback) | Same as orchestrator | Uses the orchestrator's model + capabilities |
+
+**Resolution flow** (`agentChatExecutor.ts → resolveExplorerCapabilities()`):
+1. Check `sessionExplorerModel` (passed from `chatMessageHandler.ts` which queries the session record)
+2. If empty, check `getAgentConfig().explorerModel` (global setting)
+3. If a model name is resolved, call `modelManager.getModelCapabilities(modelName)` to get capabilities
+4. If capabilities are `undefined` (model not found/not downloaded), show a warning banner and fall back to orchestrator model
+5. If no override configured, use orchestrator model + capabilities
+
+**Database**: The `explorer_model TEXT DEFAULT NULL` column was added to the `sessions` table via `ALTER TABLE` migration in `sessionIndexService.ts`. CRUD operations are in `sessionRepository.ts` (`createSession`, `updateSessionExplorerModel`, `getSessionById`).
+
+**UI**: `SessionControls.vue` shows an explorer model dropdown (only visible in agent mode). Selection triggers `setSessionExplorerModel` → backend `sessionMessageHandler.ts` → `sessionRepository.updateSessionExplorerModel()`.
 
 ## DatabaseService Singleton Pattern
 

@@ -19,6 +19,7 @@ export interface AgentConfig {
   sessionTitleGeneration: 'currentModel' | 'selectModel' | 'firstMessage';
   sessionTitleModel: string;
   maxContextWindow: number;
+  explorerModel: string;
 }
 
 export interface ExtensionConfig {

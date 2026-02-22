@@ -286,4 +286,28 @@ suite('toolRegistry', () => {
       assert.ok(result.output?.includes('required'), 'Should indicate task is required');
     });
   });
+
+  suite('getToolNames()', () => {
+    test('returns a Set of all registered tool names', () => {
+      const names = toolRegistry.getToolNames();
+
+      assert.ok(names instanceof Set, 'Should return a Set');
+      assert.ok(names.size > 0, 'Should have at least one tool');
+      // Spot-check well-known built-in tools
+      assert.ok(names.has('read_file'), 'Should contain read_file');
+      assert.ok(names.has('write_file'), 'Should contain write_file');
+      assert.ok(names.has('search_workspace'), 'Should contain search_workspace');
+      assert.ok(names.has('list_files'), 'Should contain list_files');
+    });
+
+    test('matches getAll() tool names exactly', () => {
+      const names = toolRegistry.getToolNames();
+      const allTools = toolRegistry.getAll();
+
+      assert.strictEqual(names.size, allTools.length);
+      for (const tool of allTools) {
+        assert.ok(names.has(tool.name), `getToolNames() should contain ${tool.name}`);
+      }
+    });
+  });
 });

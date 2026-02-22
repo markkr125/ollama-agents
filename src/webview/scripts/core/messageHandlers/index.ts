@@ -15,7 +15,7 @@ import type {
 } from '../types';
 import { handleFileEditApprovalResult, handleRequestFileEditApproval, handleRequestToolApproval, handleToolApprovalResult } from './approvals';
 import { handleFileChangeResult, handleFilesChanged, handleFilesDiffStats, handleKeepUndoResult, handleReviewChangePosition } from './filesChanged';
-import { handleFinishProgressGroup, handleShowError, handleShowToolAction, handleStartProgressGroup } from './progress';
+import { handleFinishProgressGroup, handleShowError, handleShowToolAction, handleStartProgressGroup, handleSubagentThinking } from './progress';
 import {
     handleAddContextItem,
     handleAddMessage,
@@ -98,6 +98,9 @@ export const handleMessage = (msg: any) => {
       break;
     case 'finishProgressGroup':
       handleFinishProgressGroup(msg);
+      break;
+    case 'subagentThinking':
+      handleSubagentThinking(msg);
       break;
     case 'iterationBoundary':
       markIterationBoundary();

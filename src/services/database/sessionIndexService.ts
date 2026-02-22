@@ -165,6 +165,9 @@ export class SessionIndexService {
     // Session memory persistence (serialized JSON of structured agent notes)
     await this.ensureColumn('sessions', 'session_memory', 'TEXT DEFAULT NULL');
 
+    // Per-session explorer model override
+    await this.ensureColumn('sessions', 'explorer_model', "TEXT DEFAULT ''");
+
     // Tool calls metadata on assistant messages (serialized JSON)
     await this.ensureColumn('messages', 'tool_calls', 'TEXT DEFAULT NULL');
 

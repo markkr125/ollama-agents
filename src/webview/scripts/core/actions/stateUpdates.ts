@@ -41,4 +41,5 @@ export const applySettings = (msg: any) => {
   settings.temperature = msg.settings.temperature ?? settings.temperature;
   settings.sensitiveFilePatterns = msg.settings.sensitiveFilePatterns ?? settings.sensitiveFilePatterns;
   settings.storagePath = msg.settings.storagePath ?? settings.storagePath;
+  settings.explorerModel = msg.settings.explorerModel ?? settings.explorerModel;
 };

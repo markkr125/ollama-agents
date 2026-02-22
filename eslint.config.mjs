@@ -126,6 +126,7 @@ export default tseslint.config(
         HTMLDivElement: 'readonly',
         HTMLTextAreaElement: 'readonly',
         HTMLInputElement: 'readonly',
+        HTMLSelectElement: 'readonly',
         Element: 'readonly',
         Event: 'readonly',
         MessageEvent: 'readonly',

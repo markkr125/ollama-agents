@@ -77,7 +77,9 @@ export class AgentExploreExecutor {
     capabilities?: ModelCapabilities,
     conversationHistory?: MessageRecord[],
     isSubagent = false,
-    primaryWorkspaceHint?: vscode.WorkspaceFolder
+    primaryWorkspaceHint?: vscode.WorkspaceFolder,
+    subagentTitle?: string,
+    subagentContextHint?: string
   ): Promise<ExploreResult> {
     const allFolders = vscode.workspace.workspaceFolders || [];
     const primaryWorkspace = primaryWorkspaceHint || allFolders[0];
@@ -103,13 +105,20 @@ export class AgentExploreExecutor {
     // emissions. Only tool UI (progress groups, tool actions) passes through.
     // This follows Claude Code's pattern: "The result returned by the agent
     // is not visible to the user."
+    const subLabel = subagentTitle ? `🤖 ${subagentTitle}` : '🤖 Sub-agent';
     const emit = isSubagent
       ? (msg: any) => {
           const TOOL_UI_TYPES = new Set([
             'startProgressGroup', 'showToolAction', 'finishProgressGroup',
-            'showError', 'showWarningBanner',
+            'showError', 'showWarningBanner', 'subagentThinking',
           ]);
-          if (TOOL_UI_TYPES.has(msg.type)) this.emitter.postMessage(msg);
+          if (TOOL_UI_TYPES.has(msg.type)) {
+            // Prefix progress group titles with sub-agent label for visual nesting
+            if (msg.type === 'startProgressGroup' && msg.title) {
+              msg = { ...msg, title: `${subLabel}: ${msg.title}` };
+            }
+            this.emitter.postMessage(msg);
+          }
         }
       : (msg: any) => this.emitter.postMessage(msg);
     const silentEmitter: WebviewMessageEmitter = { postMessage: emit };
@@ -119,7 +128,7 @@ export class AgentExploreExecutor {
 
     // Build mode-specific system prompt
     await this.promptBuilder.loadProjectContext(primaryWorkspace);
-    const systemContent = this.buildSystemPrompt(mode, allFolders, primaryWorkspace, useNativeTools);
+    const systemContent = this.buildSystemPrompt(mode, allFolders, primaryWorkspace, useNativeTools, isSubagent, subagentContextHint);
 
     // Build messages array with conversation history for multi-turn context.
     // CRITICAL: Include role:'tool' messages so the model sees its own prior
@@ -290,7 +299,8 @@ export class AgentExploreExecutor {
         phase = 'streaming response from model';
         const thinkingStartTime = Date.now();
         const streamResult = await activeStreamProcessor.streamIteration(
-            chatRequest, sessionId, model, iteration, useNativeTools, token, thinkingStartTime
+            chatRequest, sessionId, model, iteration, useNativeTools, token, thinkingStartTime,
+            useNativeTools ? undefined : this.toolRegistry.getToolNames()
           );
 
         let { response } = streamResult;
@@ -386,6 +396,17 @@ export class AgentExploreExecutor {
             }
 
           }
+        } else {
+          // Sub-agent thinking: emit as subagentThinking so the parent's
+          // webview can show it inside the sub-agent's progress group.
+          const displayThinking = thinkingContent.replace(/\[TASK_COMPLETE\]/gi, '').trim();
+          if (displayThinking) {
+            const thinkingEndTime = streamResult.lastThinkingTimestamp || Date.now();
+            const durationSeconds = Math.round((thinkingEndTime - thinkingStartTime) / 1000);
+            const thinkingPayload = { content: displayThinking, durationSeconds };
+            await this.persistUiEvent(sessionId, 'subagentThinking', thinkingPayload);
+            emit({ type: 'subagentThinking', ...thinkingPayload, sessionId });
+          }
         }
 
         // Process text
@@ -426,7 +447,7 @@ export class AgentExploreExecutor {
           : mode === 'deep-explore-write' ? ANALYZE_WRITE_TOOLS
           : mode === 'deep-explore' ? DEEP_EXPLORE_TOOLS
           : READ_ONLY_TOOLS;
-        const filteredToolCalls = toolCalls.filter(tc => allowedSet.has(tc.name));
+        let filteredToolCalls = toolCalls.filter(tc => allowedSet.has(tc.name));
 
         if (filteredToolCalls.length < toolCalls.length) {
           const blocked = toolCalls.filter(tc => !allowedSet.has(tc.name)).map(tc => tc.name);
@@ -465,6 +486,14 @@ export class AgentExploreExecutor {
         }
 
         consecutiveNoToolIterations = 0;
+
+        // Over-eager mitigation: truncate excessive tool batches
+        const TOOL_COUNT_HARD = 15;
+        if (filteredToolCalls.length > TOOL_COUNT_HARD) {
+          const dropped = filteredToolCalls.length - TOOL_COUNT_HARD;
+          this.outputChannel.appendLine(`[${mode}][Iteration ${iteration}] Over-eager: truncated ${filteredToolCalls.length} tools to ${TOOL_COUNT_HARD} (dropped ${dropped})`);
+          filteredToolCalls = filteredToolCalls.slice(0, TOOL_COUNT_HARD);
+        }
 
         // Execute read-only tools
         const toolNames = filteredToolCalls.map(tc => tc.name).join(', ');
@@ -691,7 +720,9 @@ export class AgentExploreExecutor {
     sessionId: string,
     model: string,
     mode: 'explore' | 'review' | 'deep-explore',
-    capabilities?: ModelCapabilities
+    capabilities?: ModelCapabilities,
+    contextHint?: string,
+    title?: string
   ): Promise<string> {
     const modeCaps: Record<string, number> = { review: 15, 'deep-explore': 20, explore: 10 };
     const config: ExecutorConfig = {
@@ -702,7 +733,9 @@ export class AgentExploreExecutor {
 
     // Execute in sub-agent mode (isSubagent = true) — suppresses text streaming,
     // thinking, finalMessage, iterationBoundary, and DB assistant message persistence.
-    const result = await this.execute(task, config, token, sessionId, model, mode, capabilities, undefined, /* isSubagent */ true);
+    // The title is used to prefix sub-agent progress groups in the UI.
+    // contextHint is injected into the system prompt for focused exploration.
+    const result = await this.execute(task, config, token, sessionId, model, mode, capabilities, undefined, /* isSubagent */ true, undefined, title, contextHint);
     return result.summary || 'Sub-agent completed with no findings.';
   }
 
@@ -710,7 +743,18 @@ export class AgentExploreExecutor {
   // Private helpers
   // -------------------------------------------------------------------------
 
-  private buildSystemPrompt(mode: ExploreMode, folders: readonly vscode.WorkspaceFolder[], primary?: vscode.WorkspaceFolder, useNativeTools?: boolean): string {
+  private buildSystemPrompt(
+    mode: ExploreMode,
+    folders: readonly vscode.WorkspaceFolder[],
+    primary?: vscode.WorkspaceFolder,
+    useNativeTools?: boolean,
+    isSubagent?: boolean,
+    contextHint?: string
+  ): string {
+    // Sub-agents get a compact, focused prompt to save context budget
+    if (isSubagent) {
+      return this.promptBuilder.buildSubAgentExplorePrompt(folders, primary, useNativeTools, contextHint);
+    }
     switch (mode) {
       case 'plan':
         return this.promptBuilder.buildPlanPrompt(folders, primary, useNativeTools);

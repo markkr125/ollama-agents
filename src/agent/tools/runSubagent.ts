@@ -33,6 +33,16 @@ export const runSubagentTool: Tool = {
         description: 'A detailed description of the task for the sub-agent to perform. ' +
           'Be specific about what to investigate, what files to look at, and what information to return.'
       },
+      title: {
+        type: 'string',
+        description: 'A short (3-5 word) summary of what the sub-agent will do. ' +
+          'Shown to the user as a progress label. Example: "Analyze auth middleware"'
+      },
+      context_hint: {
+        type: 'string',
+        description: 'Optional hint to focus the sub-agent — e.g. "start from src/auth/" or "look at the database schema". ' +
+          'Prepended to the sub-agent system prompt to reduce unnecessary exploration.'
+      },
       mode: {
         type: 'string',
         enum: ['explore', 'review', 'deep-explore'],
@@ -40,13 +50,15 @@ export const runSubagentTool: Tool = {
           '"review" for security and quality review, "deep-explore" for recursive depth-first code tracing.'
       }
     },
-    required: ['task']
+    required: ['task', 'title']
   },
   execute: async (params, context) => {
     const task = params.task;
     if (!task || typeof task !== 'string') {
       return 'Error: "task" parameter is required and must be a string.';
     }
+    const title = params.title && typeof params.title === 'string' ? params.title : undefined;
+    const contextHint = params.context_hint && typeof params.context_hint === 'string' ? params.context_hint : undefined;
     const validModes = ['explore', 'review', 'deep-explore'] as const;
     const mode = (validModes.includes(params.mode) ? params.mode : 'explore') as 'explore' | 'review' | 'deep-explore';
 
@@ -54,8 +66,12 @@ export const runSubagentTool: Tool = {
       return 'Error: Sub-agent execution is not available in this context.';
     }
 
+    // Prepend context_hint to the task if provided
+    const effectiveTask = contextHint ? `[Focus: ${contextHint}]\n\n${task}` : task;
+
     try {
-      const result = await context.runSubagent(task, mode);
+      context.outputChannel.appendLine(`[run_subagent] Launching sub-agent: ${title || mode} — ${task.substring(0, 100)}`);
+      const result = await context.runSubagent(effectiveTask, mode, contextHint, title);
       return result || '(Sub-agent returned no findings.)';
     } catch (error: any) {
       return `Sub-agent error: ${error.message || 'Unknown error'}`;

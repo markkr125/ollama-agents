@@ -38,6 +38,11 @@ export class ToolRegistry {
     return Array.from(this.tools.values());
   }
 
+  /** Get the set of all registered tool names. */
+  getToolNames(): Set<string> {
+    return new Set(this.tools.keys());
+  }
+
   /** Get tool descriptions for LLM prompt text. */
   getToolDescriptions(): string {
     return this.getAll()

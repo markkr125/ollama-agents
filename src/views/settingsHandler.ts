@@ -50,7 +50,8 @@ export class SettingsHandler {
       temperature: config.agentMode.temperature,
       sensitiveFilePatterns: JSON.stringify(config.agent.sensitiveFilePatterns, null, 2),
       storagePath: config.storagePath,
-      maxContextWindow: config.agent.maxContextWindow
+      maxContextWindow: config.agent.maxContextWindow,
+      explorerModel: config.agent.explorerModel
     };
   }
 
@@ -127,6 +128,9 @@ export class SettingsHandler {
     }
     if (settings.maxContextWindow !== undefined) {
       await config.update('agent.maxContextWindow', settings.maxContextWindow, vscode.ConfigurationTarget.Global);
+    }
+    if (settings.explorerModel !== undefined) {
+      await config.update('agent.explorerModel', settings.explorerModel, vscode.ConfigurationTarget.Global);
     }
 
     this.emitter.postMessage({ type: 'settingsSaved' });

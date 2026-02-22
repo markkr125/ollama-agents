@@ -167,6 +167,14 @@
         </select>
         <p class="field-hint">Only models with Fill-in-Middle (FIM) support are shown.</p>
       </div>
+      <div class="settings-item">
+        <label class="settings-label">Explorer Model</label>
+        <select v-model="settings.explorerModel" @change="autoSave">
+          <option value="">(Use Agent Model)</option>
+          <option v-for="m in modelOptions" :key="m" :value="m">{{ m }}</option>
+        </select>
+        <p class="field-hint">Model for sub-agent exploration (code search, tracing, review). A fast 7B model works well. Empty = agent model.</p>
+      </div>
     </div>
   </div>
 </template>

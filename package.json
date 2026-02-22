@@ -399,6 +399,11 @@
           "default": "",
           "markdownDescription": "Model to use for session title generation when `sessionTitleGeneration` is `selectModel`. Leave empty to fall back to `firstMessage` mode."
         },
+        "ollamaCopilot.agent.explorerModel": {
+          "type": "string",
+          "default": "",
+          "markdownDescription": "Model for sub-agent exploration tasks (code search, tracing, review). A fast 7B model works well here. Leave empty to use the agent model."
+        },
         "ollamaCopilot.agent.sensitiveFilePatterns": {
           "type": "object",
           "default": {

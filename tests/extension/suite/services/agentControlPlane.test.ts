@@ -3,6 +3,7 @@ import {
     buildContinuationControlMessage,
     buildControlPacketMessage,
     buildLoopContinuationMessage,
+    buildToolCallSummary,
     checkNoToolCompletion,
     computeDynamicNumCtx,
     formatNativeToolResults,
@@ -298,5 +299,89 @@ suite('computeDynamicNumCtx — dynamic num_ctx sizing', () => {
   test('small model context is respected', () => {
     const result = computeDynamicNumCtx(1000, 2048, 2048);
     assert.strictEqual(result, 2048);
+  });
+});
+
+suite('buildToolCallSummary', () => {
+  test('returns undefined for empty array', () => {
+    assert.strictEqual(buildToolCallSummary([]), undefined);
+  });
+
+  test('returns undefined for undefined input', () => {
+    assert.strictEqual(buildToolCallSummary(undefined as any), undefined);
+  });
+
+  test('summarizes read_file', () => {
+    const result = buildToolCallSummary([{ name: 'read_file', args: { path: 'src/index.ts' } }]);
+    assert.ok(result);
+    assert.ok(result!.includes('read'), `Expected 'read' in: ${result}`);
+    assert.ok(result!.includes('index.ts'), `Expected 'index.ts' in: ${result}`);
+  });
+
+  test('summarizes write_file', () => {
+    const result = buildToolCallSummary([{ name: 'write_file', args: { path: 'src/app.ts' } }]);
+    assert.ok(result);
+    assert.ok(result!.includes('wrote'), `Expected 'wrote' in: ${result}`);
+  });
+
+  test('summarizes search_workspace', () => {
+    const result = buildToolCallSummary([{ name: 'search_workspace', args: { query: 'handleClick' } }]);
+    assert.ok(result);
+    assert.ok(result!.includes('searched'), `Expected 'searched' in: ${result}`);
+    assert.ok(result!.includes('handleClick'), `Expected query in: ${result}`);
+  });
+
+  test('summarizes run_terminal_command', () => {
+    const result = buildToolCallSummary([{ name: 'run_terminal_command', args: { command: 'npm test' } }]);
+    assert.ok(result);
+    assert.ok(result!.includes('ran'), `Expected 'ran' in: ${result}`);
+    assert.ok(result!.includes('npm test'), `Expected command in: ${result}`);
+  });
+
+  test('summarizes run_subagent', () => {
+    const result = buildToolCallSummary([{ name: 'run_subagent', args: { task: 'explore auth' } }]);
+    assert.ok(result);
+    assert.ok(result!.includes('delegated'), `Expected 'delegated' in: ${result}`);
+  });
+
+  test('chains multiple tool calls with "then"', () => {
+    const result = buildToolCallSummary([
+      { name: 'search_workspace', args: { query: 'foo' } },
+      { name: 'read_file', args: { path: 'src/foo.ts' } },
+    ]);
+    assert.ok(result);
+    assert.ok(result!.includes(', then '), `Expected 'then' chaining in: ${result}`);
+    assert.ok(result!.startsWith('I '), `Should start with 'I': ${result}`);
+    assert.ok(result!.endsWith('.'), `Should end with period: ${result}`);
+  });
+
+  test('summarizes LSP tools (find_definition, find_references, etc.)', () => {
+    const result = buildToolCallSummary([
+      { name: 'find_definition', args: { symbol: 'handleClick' } },
+      { name: 'find_references', args: { symbol: 'handleClick' } },
+      { name: 'get_call_hierarchy', args: { symbol: 'handleClick' } },
+    ]);
+    assert.ok(result);
+    assert.ok(result!.includes('definition'), `Expected 'definition' in: ${result}`);
+    assert.ok(result!.includes('references'), `Expected 'references' in: ${result}`);
+    assert.ok(result!.includes('call hierarchy'), `Expected 'call hierarchy' in: ${result}`);
+  });
+
+  test('handles unknown tool names gracefully', () => {
+    const result = buildToolCallSummary([{ name: 'custom_tool', args: { x: 1 } }]);
+    assert.ok(result);
+    assert.ok(result!.includes('used custom_tool'), `Expected fallback 'used custom_tool' in: ${result}`);
+  });
+
+  test('summarizes get_diagnostics', () => {
+    const result = buildToolCallSummary([{ name: 'get_diagnostics', args: { path: 'src/app.ts' } }]);
+    assert.ok(result);
+    assert.ok(result!.includes('diagnostics'), `Expected 'diagnostics' in: ${result}`);
+  });
+
+  test('summarizes list_files', () => {
+    const result = buildToolCallSummary([{ name: 'list_files', args: { path: 'src' } }]);
+    assert.ok(result);
+    assert.ok(result!.includes('listed'), `Expected 'listed' in: ${result}`);
   });
 });

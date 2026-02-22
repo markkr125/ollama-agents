@@ -34,20 +34,21 @@ export class AgentPromptBuilder {
   }
 
   /**
-   * Build the full system prompt for native tool-calling models.
-   * These models receive tool definitions via the Ollama `tools[]` parameter,
-   * so the prompt focuses on behavioral rules and workspace context.
+   * Build the full system prompt for native tool-calling orchestrator.
+   * Uses orchestrator-specific task and tool policy sections that focus on
+   * delegation via run_subagent rather than direct code exploration.
    */
-  buildNativeToolPrompt(workspaceFolders: readonly vscode.WorkspaceFolder[], primaryWorkspace?: vscode.WorkspaceFolder, intent?: TaskIntent): string {
+  buildOrchestratorNativePrompt(workspaceFolders: readonly vscode.WorkspaceFolder[], primaryWorkspace?: vscode.WorkspaceFolder, intent?: TaskIntent): string {
+    // Note: projectContextBlock intentionally excluded from orchestrator prompt.
+    // Sub-agents get it via their own explore/review prompts.
     const sections = [
       this.identity(),
       this.workspaceInfo(workspaceFolders, primaryWorkspace),
-      this.projectContextBlock,
       this.toneAndStyle(),
-      this.doingTasks(intent),
-      this.toolUsagePolicy(true),
+      this.doingTasksOrchestrator(intent),
+      this.orchestratorDelegationStrategy(),
+      this.orchestratorToolPolicy(true),
       this.executingWithCare(),
-      this.deepExplorationReminder(),
       this.userProvidedContext(),
       this.scratchpadDirectory(),
       this.completionSignal(),
@@ -56,29 +57,37 @@ export class AgentPromptBuilder {
   }
 
   /**
-   * Build the full system prompt for XML fallback models.
-   * These models don't support native tool calling, so the prompt includes
-   * tool definitions, call format, and examples inline.
+   * Build the full system prompt for XML fallback orchestrator.
+   * Uses orchestrator-specific sections plus inline tool definitions and format.
    */
-  buildXmlFallbackPrompt(workspaceFolders: readonly vscode.WorkspaceFolder[], primaryWorkspace?: vscode.WorkspaceFolder, intent?: TaskIntent): string {
+  buildOrchestratorXmlPrompt(workspaceFolders: readonly vscode.WorkspaceFolder[], primaryWorkspace?: vscode.WorkspaceFolder, intent?: TaskIntent): string {
+    // Note: projectContextBlock intentionally excluded from orchestrator prompt.
     const sections = [
       this.identity(),
       this.workspaceInfo(workspaceFolders, primaryWorkspace),
-      this.projectContextBlock,
       this.toneAndStyle(),
-      this.doingTasks(intent),
-      this.toolDefinitions(),
+      this.doingTasksOrchestrator(intent),
+      this.buildOrchestratorToolDefinitions_XML(),
       this.toolCallFormat(),
-      this.toolUsagePolicy(false),
+      this.orchestratorDelegationStrategy(),
+      this.orchestratorToolPolicy(false),
       this.executingWithCare(),
-      this.codeNavigationStrategy(),
       this.userProvidedContext(),
       this.scratchpadDirectory(),
       this.completionSignal(),
-      // searchTips LAST — recency bias for small models
       this.searchTips(),
     ];
     return sections.filter(Boolean).join('\n\n');
+  }
+
+  /** @deprecated Use buildOrchestratorNativePrompt — kept for backward compatibility */
+  buildNativeToolPrompt(workspaceFolders: readonly vscode.WorkspaceFolder[], primaryWorkspace?: vscode.WorkspaceFolder, intent?: TaskIntent): string {
+    return this.buildOrchestratorNativePrompt(workspaceFolders, primaryWorkspace, intent);
+  }
+
+  /** @deprecated Use buildOrchestratorXmlPrompt — kept for backward compatibility */
+  buildXmlFallbackPrompt(workspaceFolders: readonly vscode.WorkspaceFolder[], primaryWorkspace?: vscode.WorkspaceFolder, intent?: TaskIntent): string {
+    return this.buildOrchestratorXmlPrompt(workspaceFolders, primaryWorkspace, intent);
   }
 
   // ---------------------------------------------------------------------------
@@ -126,6 +135,34 @@ PROFESSIONAL OBJECTIVITY:
 - Do not announce your plan before doing it. Just do it. Only explain non-obvious reasoning.`;
   }
 
+  /**
+   * Task execution rules for the orchestrator — focuses on delegation workflow.
+   * References only the 3 tools the orchestrator has (write_file, run_terminal_command, run_subagent).
+   */
+  private doingTasksOrchestrator(intent?: TaskIntent): string {
+    const base = `TASK EXECUTION:
+- Delegate research. Use run_subagent for ALL code reading, searching, and analysis. You cannot read files directly.
+- Verify your work. After writing code, use run_terminal_command to build/test, or launch a sub-agent to review your changes.
+- Complete each step end-to-end before starting the next. Don't leave partial implementations.`;
+
+    switch (intent) {
+      case 'modify':
+        return base + `\n- Match scope to request. Only make changes that are directly requested or clearly necessary.
+- Keep it simple. Don't add error handling for impossible scenarios or abstractions for hypothetical future use.
+- When fixing a bug, fix the bug — don't refactor surrounding code unless it's part of the fix.`;
+
+      case 'create':
+        return base + `\n- Launch a sub-agent to understand existing codebase patterns before creating new files.
+- Keep it simple. Don't add error handling for impossible scenarios or abstractions for hypothetical future use.`;
+
+      case 'mixed':
+      default:
+        return base + `\n- Match scope to request. Only make changes that are directly requested or clearly necessary.
+- Keep it simple. Don't add error handling for impossible scenarios or abstractions for hypothetical future use.
+- When fixing a bug, fix the bug — don't refactor surrounding code unless it's part of the fix.`;
+    }
+  }
+
   private doingTasks(intent?: TaskIntent): string {
     // Base rules that apply to ALL intents
     const base = `TASK EXECUTION:
@@ -158,6 +195,25 @@ PROFESSIONAL OBJECTIVITY:
 - If something is unused, delete it completely — don't rename with underscore prefix or add "removed" comments.
 - Be careful not to introduce security vulnerabilities (injection, XSS, auth bypass, path traversal).`;
     }
+  }
+
+  /**
+   * Tool policy for the orchestrator — only references the 3 orchestrator tools.
+   */
+  private orchestratorToolPolicy(isNativeTools: boolean): string {
+    const parallel = isNativeTools
+      ? `- Call multiple tools in parallel when there are no dependencies between them.`
+      : `- When making multiple independent tool calls, emit all of them in your response — batch them.`;
+
+    return `TOOL USAGE:
+${parallel}
+- You have ONLY 3 tools: write_file, run_terminal_command, and run_subagent.
+- Use write_file to create or modify code. Do NOT use terminal echo/heredoc/sed for file writes.
+- Use run_terminal_command for builds, tests, git operations, and system commands.
+- Use run_subagent for ALL research — reading files, searching code, tracing definitions. You CANNOT read files directly.
+- Sub-agent results come to you only — the user cannot see them. Sub-agents CANNOT write files or run commands.
+- After writing files, diagnostics are automatically checked. Fix reported errors before proceeding.
+- Do not re-read files you already received results for. Do not launch duplicate sub-agents for work already done.`;
   }
 
   private toolUsagePolicy(isNativeTools: boolean): string {
@@ -198,6 +254,32 @@ Consider reversibility before every action. Reading files, editing code, searchi
   private deepExplorationReminder(): string {
     return `DEEP EXPLORATION:
 When asked to trace, explore, scan, or document code in depth — use find_definition and get_call_hierarchy to follow every function call recursively. Do not stop at one level. Prefer get_document_symbols + targeted read_file over reading entire files.`;
+  }
+
+  /**
+   * Orchestrator delegation strategy — instructs the model to use run_subagent
+   * for ALL research/exploration and only use write_file and run_terminal_command
+   * for direct actions.
+   */
+  private orchestratorDelegationStrategy(): string {
+    return `ORCHESTRATOR DELEGATION STRATEGY:
+You are an orchestrator. You have ONLY 3 tools: write_file, run_terminal_command, and run_subagent.
+You CANNOT read files, search, or explore code directly. ALL research goes through run_subagent.
+
+WORKFLOW:
+1. SCOUT — Launch a sub-agent to map the codebase structure and understand the task.
+2. EXPLORE — Launch focused sub-agents to investigate specific areas identified by the scout.
+   Give each sub-agent a clear title and specific task. Use context_hint to focus their search.
+3. WRITE — Use write_file to implement changes based on sub-agent findings.
+4. VERIFY — Use run_terminal_command to build/test, or launch a sub-agent to review your changes.
+
+SUB-AGENT BEST PRACTICES:
+- Give each sub-agent a descriptive title (3-5 words): "Analyze auth middleware", "Find test patterns"
+- Use context_hint to narrow their search: "start from src/services/auth/"
+- Be specific in the task description — what to look for, what to return
+- Sub-agents are read-only — they CANNOT write files or run commands
+- Sub-agent results are NOT shown to the user — YOU must summarize or act on their findings
+- Prefer multiple focused sub-agents over one broad one`;
   }
 
   private codeNavigationStrategy(): string {
@@ -310,6 +392,52 @@ EXAMPLES:
 <tool_call>{"name": "find_definition", "arguments": {"path": "src/main.ts", "symbolName": "handleRequest"}}</tool_call>
 
 CRITICAL: To edit a file you must call write_file. Reading alone does NOT change files.`;
+  }
+
+  // ---------------------------------------------------------------------------
+  // Sub-agent explore prompt — compact, focused, no orchestrator delegation.
+  // Used when the explore executor runs as a sub-agent (isSubagent=true).
+  // Shorter than the top-level explore prompt to save context window budget.
+  // ---------------------------------------------------------------------------
+
+  buildSubAgentExplorePrompt(
+    workspaceFolders: readonly vscode.WorkspaceFolder[],
+    primaryWorkspace?: vscode.WorkspaceFolder,
+    useNativeTools?: boolean,
+    contextHint?: string
+  ): string {
+    const contextSection = contextHint
+      ? `\nFOCUS AREA:\nStart your investigation from: ${contextHint}. Expand outward only if needed.`
+      : '';
+    const sections = [
+      `You are a fast read-only code exploration sub-agent. Find, read, and analyze code to answer the caller's question. Report findings clearly and concisely — the caller (not the user) receives your output.
+
+STRICT CONSTRAINTS:
+- You MUST NOT create, modify, or delete any files — you have NO write tools.
+- You MUST NOT run commands that change system state.
+- NEVER use redirect operators (>, >>), heredocs, or pipe-to-file.
+- You are here to READ and ANALYZE only.${contextSection}
+
+OUTPUT BUDGET:
+Keep your final response under 1500 words. Focus on facts, code references, and concrete findings. Omit general advice or disclaimers.`,
+      this.workspaceInfo(workspaceFolders, primaryWorkspace),
+      `EXPLORATION:
+- Use parallel tool calls aggressively — don't search one thing at a time.
+- Use get_document_symbols before reading entire files.
+- Use find_definition to follow calls across files.
+- Use search_workspace with regex alternation for multi-symbol lookups.
+- Use find_references, get_call_hierarchy, find_implementations for cross-cutting analysis.
+- Return file paths as workspace-relative paths.`,
+      `COMPLETION:
+When done, respond with [TASK_COMPLETE].`,
+      this.searchTips(),
+    ];
+
+    if (!useNativeTools) {
+      sections.splice(2, 0, this.buildExploreToolDefinitions(), this.toolCallFormat());
+    }
+
+    return sections.filter(Boolean).join('\n\n');
   }
 
   // ---------------------------------------------------------------------------
@@ -807,5 +935,36 @@ Your response should be a complete, accurate documentation of everything you tra
     ]);
     return this.toolRegistry.getOllamaToolDefinitions()
       .filter((td: any) => allowedNames.has(td.function?.name));
+  }
+
+  // ---------------------------------------------------------------------------
+  // Orchestrator tool restriction — only write_file, run_terminal_command,
+  // and run_subagent. All research/exploration is delegated to sub-agents.
+  // ---------------------------------------------------------------------------
+
+  private static readonly ORCHESTRATOR_TOOLS = new Set([
+    'write_file', 'run_terminal_command', 'run_subagent',
+  ]);
+
+  /** Get Ollama native tool definitions restricted to orchestrator-only tools. */
+  getOrchestratorToolDefinitions(): any[] {
+    return this.toolRegistry.getOllamaToolDefinitions()
+      .filter((td: any) => AgentPromptBuilder.ORCHESTRATOR_TOOLS.has(td.function?.name));
+  }
+
+  /** Build XML tool definitions restricted to orchestrator-only tools. */
+  private buildOrchestratorToolDefinitions_XML(): string {
+    const tools = this.toolRegistry.getAll()
+      .filter(t => AgentPromptBuilder.ORCHESTRATOR_TOOLS.has(t.name));
+    const descriptions = tools.map((t: { name: string; description: string; schema?: any }) => {
+      const params = t.schema?.properties
+        ? Object.entries(t.schema.properties)
+            .map(([key, val]: [string, any]) => `    ${key}: ${val.description || val.type}`)
+            .join('\n')
+        : '    (no parameters)';
+      return `${t.name}: ${t.description}\n${params}`;
+    }).join('\n\n');
+
+    return `TOOLS:\nYou have ONLY 3 tools. All code reading and exploration MUST go through run_subagent.\n\n${descriptions}`;
   }
 }

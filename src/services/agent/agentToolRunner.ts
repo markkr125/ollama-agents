@@ -80,6 +80,30 @@ export class AgentToolRunner {
     const xmlResults: string[] = [];
     let wroteFiles = false;
 
+    // Over-eager mitigation: warn when a model requests too many tools per batch
+    const TOOL_COUNT_WARN = 8;
+    const TOOL_COUNT_HARD = 15;
+    if (toolCalls.length > TOOL_COUNT_HARD) {
+      // Hard limit: truncate and inject a stop-and-focus message
+      const truncated = toolCalls.slice(0, TOOL_COUNT_HARD);
+      const dropped = toolCalls.length - TOOL_COUNT_HARD;
+      const warningMsg = `[SYSTEM NOTE: You requested ${toolCalls.length} tools in one batch — only the first ${TOOL_COUNT_HARD} were executed. ${dropped} were dropped. Break your work into smaller, focused iterations. Execute a few tools, review results, then continue.]`;
+      toolCalls = truncated;
+      if (useNativeTools) {
+        nativeResults.push({ role: 'tool', content: warningMsg, tool_name: 'system' });
+      } else {
+        xmlResults.push(warningMsg);
+      }
+    } else if (toolCalls.length > TOOL_COUNT_WARN) {
+      // Soft warning: still execute all, but inject a hint
+      const warningMsg = `[SYSTEM NOTE: You requested ${toolCalls.length} tools in one batch. Consider using fewer, more targeted tool calls per iteration for better results.]`;
+      if (useNativeTools) {
+        nativeResults.push({ role: 'tool', content: warningMsg, tool_name: 'system' });
+      } else {
+        xmlResults.push(warningMsg);
+      }
+    }
+
     for (const toolCall of toolCalls) {
       if (token.isCancellationRequested) break;
 

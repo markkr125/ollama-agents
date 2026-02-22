@@ -1177,3 +1177,62 @@ describe('buildTimelineFromMessages - contextFiles event', () => {
     expect(secondUser.contextFiles).toEqual([{ fileName: 'target.ts', kind: 'explicit' }]);
   });
 });
+
+describe('buildTimelineFromMessages - subagentThinking event', () => {
+  const makeUiEvent = (id: string, eventType: string, payload: any) => ({
+    id,
+    role: 'tool',
+    toolName: '__ui__',
+    toolOutput: JSON.stringify({ eventType, payload })
+  });
+
+  test('subagentThinking attaches thinking to last progress group', async () => {
+    const builder = await import('../../../src/webview/scripts/core/timelineBuilder');
+    const messages = [
+      { id: 'u1', role: 'user', content: 'analyze code' },
+      { id: 'a1', role: 'assistant', content: 'Working on it' },
+      makeUiEvent('ui1', 'startProgressGroup', { title: 'Running sub-agent' }),
+      makeUiEvent('ui2', 'showToolAction', { status: 'success', icon: '🔍', text: 'Explored files' }),
+      makeUiEvent('ui3', 'subagentThinking', { content: 'I analyzed the structure...' }),
+      makeUiEvent('ui4', 'finishProgressGroup', {})
+    ];
+    const timeline = builder.buildTimelineFromMessages(messages);
+    const thread = timeline[1] as any;
+
+    // Find the tools block in the thread
+    const toolsBlock = thread.blocks.find((b: any) => b.type === 'tools');
+    expect(toolsBlock).toBeDefined();
+
+    const group = toolsBlock.tools[0];
+    expect(group.type).toBe('progress');
+    expect(group.thinkingContent).toBe('I analyzed the structure...');
+    expect(group.thinkingCollapsed).toBe(true);
+  });
+
+  test('subagentThinking with empty content still sets fields', async () => {
+    const builder = await import('../../../src/webview/scripts/core/timelineBuilder');
+    const messages = [
+      { id: 'a1', role: 'assistant', content: '' },
+      makeUiEvent('ui1', 'startProgressGroup', { title: 'Sub-agent' }),
+      makeUiEvent('ui2', 'subagentThinking', { content: '' }),
+      makeUiEvent('ui3', 'finishProgressGroup', {})
+    ];
+    const timeline = builder.buildTimelineFromMessages(messages);
+    const thread = timeline[0] as any;
+    const toolsBlock = thread.blocks.find((b: any) => b.type === 'tools');
+    const group = toolsBlock.tools[0];
+    expect(group.thinkingContent).toBe('');
+    expect(group.thinkingCollapsed).toBe(true);
+  });
+
+  test('subagentThinking without prior progress group does not crash', async () => {
+    const builder = await import('../../../src/webview/scripts/core/timelineBuilder');
+    const messages = [
+      { id: 'a1', role: 'assistant', content: 'hello' },
+      makeUiEvent('ui1', 'subagentThinking', { content: 'orphan thinking' })
+    ];
+    // Should not throw
+    const timeline = builder.buildTimelineFromMessages(messages);
+    expect(timeline.length).toBe(1);
+  });
+});

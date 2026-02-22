@@ -107,7 +107,7 @@ export function getToolActionInfo(
       };
     case 'run_subagent':
       return {
-        actionText: args?.task || 'Subtask',
+        actionText: args?.title || args?.task || 'Subtask',
         actionDetail: args?.mode === 'review' ? 'Security review' : 'Explore',
         actionIcon: '🤖'
       };

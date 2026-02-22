@@ -60,6 +60,7 @@ Each mode also has `temperature` and `maxTokens` settings:
 | `ollamaCopilot.agent.keepAlive` | `""` | — | How long Ollama keeps the model loaded after a request. Examples: `5m`, `30m`, `1h`, `-1` (forever), `0` (unload immediately). Empty = Ollama server default (typically 5m). |
 | `ollamaCopilot.agent.sessionTitleGeneration` | `firstMessage` | `firstMessage`, `currentModel`, `selectModel` | How to generate session titles. `firstMessage` truncates the first message (instant). `currentModel` calls the active model (slower, higher quality). `selectModel` uses a specific small model. |
 | `ollamaCopilot.agent.sessionTitleModel` | `""` | — | Model for title generation when `sessionTitleGeneration` is `selectModel`. If empty, falls back to `firstMessage`. |
+| `ollamaCopilot.agent.explorerModel` | `""` | — | Model for sub-agent (explorer) tasks. When empty, sub-agents use the same model as the orchestrator. Can also be overridden per-session in the Session Controls panel. |
 | `ollamaCopilot.agent.maxContextWindow` | `65536` | 2048–524288 | Global cap on the context window (`num_ctx`) sent to Ollama. Prevents massive KV cache allocation when a model advertises a very large context (e.g. 393K). Per-model overrides in the Models tab take precedence. |
 | `ollamaCopilot.agent.sensitiveFilePatterns` | *(see below)* | — | Glob→boolean map for file edit approval |
 

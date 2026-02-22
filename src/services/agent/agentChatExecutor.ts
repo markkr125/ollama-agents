@@ -13,19 +13,19 @@ import { WebviewMessageEmitter } from '../../views/chatTypes';
 import { getProgressGroupTitle } from '../../views/toolUIFormatter';
 import { DatabaseService } from '../database/databaseService';
 import { EditManager } from '../editManager';
-import { extractContextLength, ModelCapabilities } from '../model/modelCompatibility';
+import { extractContextLength, getModelCapabilities, ModelCapabilities } from '../model/modelCompatibility';
 import { OllamaClient } from '../model/ollamaClient';
 import { PendingEditDecorationProvider } from '../pendingEditDecorationProvider';
 import { TerminalManager } from '../terminalManager';
 import { AgentContextCompactor, estimateTokensByCategory } from './agentContextCompactor';
 import {
-    buildLoopContinuationMessage,
-    buildToolCallSummary,
-    checkNoToolCompletion,
-    computeDynamicNumCtx,
-    formatTextToolResults,
-    isCompletionSignaled,
-    type AgentLoopEvent
+  buildLoopContinuationMessage,
+  buildToolCallSummary,
+  checkNoToolCompletion,
+  computeDynamicNumCtx,
+  formatTextToolResults,
+  isCompletionSignaled,
+  type AgentLoopEvent
 } from './agentControlPlane';
 import { AgentExploreExecutor } from './agentExploreExecutor';
 import { AgentFileEditHandler } from './agentFileEditHandler';
@@ -134,6 +134,45 @@ export class AgentChatExecutor {
 
   handleToolApprovalResponse(approvalId: string, approved: boolean, command?: string): void {
     this.approvalManager.handleResponse(approvalId, approved, command);
+  }
+
+  /**
+   * Resolve model capabilities for the explorer model.
+   * Checks DB cache first, falls back to live /api/show.
+   */
+  private explorerCapabilitiesCache = new Map<string, ModelCapabilities>();
+  private async resolveExplorerCapabilities(explorerModel: string): Promise<ModelCapabilities | undefined> {
+    const cached = this.explorerCapabilitiesCache.get(explorerModel);
+    if (cached) return cached;
+
+    try {
+      // Try DB cache first
+      const models = await this.databaseService.getCachedModels();
+      const record = models.find(m => m.name === explorerModel);
+      if (record) {
+        const caps = getModelCapabilities(record);
+        this.explorerCapabilitiesCache.set(explorerModel, caps);
+        return caps;
+      }
+    } catch { /* fall through to live detection */ }
+
+    try {
+      const showResp = await this.client.showModel(explorerModel);
+      const contextLength = extractContextLength(showResp);
+      const caps: ModelCapabilities = {
+        chat: true,
+        fim: false,
+        tools: (showResp.capabilities ?? []).includes('tools'),
+        vision: (showResp.capabilities ?? []).includes('vision'),
+        embedding: false,
+        contextLength
+      };
+      this.explorerCapabilitiesCache.set(explorerModel, caps);
+      return caps;
+    } catch {
+      this.outputChannel.appendLine(`[AgentChatExecutor] Failed to resolve capabilities for explorer model: ${explorerModel}`);
+      return undefined;
+    }
   }
 
   /** Register a callback invoked after each successful file write (e.g. to trigger CodeLens review). */
@@ -248,8 +287,13 @@ export class AgentChatExecutor {
       sessionId,
       terminalManager: this.terminalManager,
       runSubagent: this._exploreExecutor
-        ? async (task: string, mode: 'explore' | 'review' | 'deep-explore') => {
-            return this._exploreExecutor!.executeSubagent(task, token, sessionId, model, mode, capabilities);
+        ? async (task: string, mode: 'explore' | 'review' | 'deep-explore', contextHint?: string, title?: string) => {
+            // Use resolved explorer model (3-tier: session → global → agent model)
+            const explorerModel = config.explorerModel || model;
+            const explorerCaps = explorerModel !== model
+              ? await this.resolveExplorerCapabilities(explorerModel)
+              : capabilities;
+            return this._exploreExecutor!.executeSubagent(task, token, sessionId, explorerModel, mode, explorerCaps, contextHint, title);
           }
         : undefined
     };
@@ -282,8 +326,8 @@ export class AgentChatExecutor {
     }
 
     const systemContent = useNativeTools
-      ? this.promptBuilder.buildNativeToolPrompt(allFolders, agentSession.workspace, dispatch?.intent)
-      : this.promptBuilder.buildXmlFallbackPrompt(allFolders, agentSession.workspace, dispatch?.intent);
+      ? this.promptBuilder.buildOrchestratorNativePrompt(allFolders, agentSession.workspace, dispatch?.intent)
+      : this.promptBuilder.buildOrchestratorXmlPrompt(allFolders, agentSession.workspace, dispatch?.intent);
 
     // Build messages array with conversation history for multi-turn context.
     // For native tool-calling models, preserve role:'tool' messages with tool_name
@@ -381,6 +425,14 @@ export class AgentChatExecutor {
     // (e.g. by formatters, linters, or user edits). Adapted from Claude Code's
     // "file-opened-in-ide" system reminder pattern.
     const fileWriteTimestamps = new Map<string, number>();
+
+    // Duplicate tool call detection: tracks tool call signatures from recent
+    // iterations. If the model calls the same tool with the same arguments
+    // repeatedly, we inject a warning and skip the duplicates. This prevents
+    // models (especially smaller ones) from looping on the same action.
+    // Key: "toolName|argsHash", Value: iteration number when last seen.
+    const recentToolSignatures = new Map<string, number>();
+    const MAX_TOOLS_PER_BATCH = 10;
 
     // IDE file focus tracking: detect when the user switches files during the
     // agent session and inject a brief note. Helps the model stay aware of
@@ -524,7 +576,7 @@ export class AgentChatExecutor {
 
         // Estimate payload tokens for dynamic num_ctx sizing
         const payloadChars = messages.reduce((s: number, m: any) => s + (m.content?.length || 0), 0);
-        const toolDefCharsForCtx = useNativeTools ? JSON.stringify(this.toolRegistry.getOllamaToolDefinitions()).length : 0;
+        const toolDefCharsForCtx = useNativeTools ? JSON.stringify(this.promptBuilder.getOrchestratorToolDefinitions()).length : 0;
         const payloadEstTokens = Math.round((payloadChars + toolDefCharsForCtx) / 4);
         const numCtx = computeDynamicNumCtx(payloadEstTokens, modeConfig.maxTokens, contextWindow);
 
@@ -540,7 +592,7 @@ export class AgentChatExecutor {
           },
         };
         if (useNativeTools) {
-          chatRequest.tools = this.toolRegistry.getOllamaToolDefinitions();
+          chatRequest.tools = this.promptBuilder.getOrchestratorToolDefinitions();
         }
 
         // --- Diagnostic: log request payload sizes for debugging slow models ---
@@ -578,7 +630,8 @@ export class AgentChatExecutor {
         phase = 'streaming response from model';
         const thinkingStartTime = Date.now();
         const streamResult = await this.streamProcessor.streamIteration(
-            chatRequest, sessionId, model, iteration, useNativeTools, token, thinkingStartTime
+            chatRequest, sessionId, model, iteration, useNativeTools, token, thinkingStartTime,
+            useNativeTools ? undefined : this.toolRegistry.getToolNames()
           );
 
         let { response } = streamResult;
@@ -620,7 +673,7 @@ export class AgentChatExecutor {
         }
 
         // Emit token usage to the webview for the live indicator
-        const toolDefCount = useNativeTools ? this.toolRegistry.getOllamaToolDefinitions().length : 0;
+        const toolDefCount = useNativeTools ? this.promptBuilder.getOrchestratorToolDefinitions().length : 0;
         const categories = estimateTokensByCategory(messages, toolDefCount, lastPromptTokens);
         const tokenPayload = {
           promptTokens: lastPromptTokens ?? categories.total,
@@ -823,6 +876,72 @@ export class AgentChatExecutor {
         this.outputChannel.appendLine(`[Iteration ${iteration}] Parsed ${toolCalls.length} tool calls (${useNativeTools ? 'native' : 'XML'}):`);
         toolCalls.forEach((tc, i) => this.outputChannel.appendLine(`  [${i}] ${tc.name}: ${JSON.stringify(tc.args)}`));
         this.outputChannel.appendLine('---');
+
+        // --- 6a. Deduplicate tool calls ---
+        // Remove intra-batch duplicates (same tool + same args in this batch)
+        // and cross-iteration duplicates (same call made in last 2 iterations).
+        if (toolCalls.length > 0) {
+          const seenInBatch = new Set<string>();
+          const originalCount = toolCalls.length;
+          const dedupedWarnings: string[] = [];
+
+          toolCalls = toolCalls.filter(tc => {
+            // Build a signature from tool name + sorted args keys/values
+            const argsSorted = Object.keys(tc.args || {}).sort()
+              .map(k => `${k}=${JSON.stringify(tc.args[k])}`).join('&');
+            const sig = `${tc.name}|${argsSorted}`;
+
+            // Intra-batch duplicate
+            if (seenInBatch.has(sig)) {
+              dedupedWarnings.push(`${tc.name} (intra-batch duplicate)`);
+              return false;
+            }
+            seenInBatch.add(sig);
+
+            // Cross-iteration duplicate (seen in last 2 iterations)
+            const lastSeen = recentToolSignatures.get(sig);
+            if (lastSeen !== undefined && iteration - lastSeen <= 2) {
+              dedupedWarnings.push(`${tc.name} (repeated from iteration ${lastSeen})`);
+              return false;
+            }
+
+            return true;
+          });
+
+          if (dedupedWarnings.length > 0) {
+            this.outputChannel.appendLine(`[Iteration ${iteration}] Removed ${dedupedWarnings.length} duplicate tool call(s): ${dedupedWarnings.join(', ')}`);
+          }
+
+          // Register all surviving calls in the signature map
+          for (const tc of toolCalls) {
+            const argsSorted = Object.keys(tc.args || {}).sort()
+              .map(k => `${k}=${JSON.stringify(tc.args[k])}`).join('&');
+            recentToolSignatures.set(`${tc.name}|${argsSorted}`, iteration);
+          }
+
+          // Expire old signatures (older than 3 iterations)
+          for (const [sig, iter] of recentToolSignatures) {
+            if (iteration - iter > 3) recentToolSignatures.delete(sig);
+          }
+
+          // Cap batch size to prevent runaway tool invocations
+          if (toolCalls.length > MAX_TOOLS_PER_BATCH) {
+            this.outputChannel.appendLine(`[Iteration ${iteration}] Capping tool calls from ${toolCalls.length} to ${MAX_TOOLS_PER_BATCH}`);
+            toolCalls = toolCalls.slice(0, MAX_TOOLS_PER_BATCH);
+          }
+
+          // If all tool calls were duplicates, inject a warning
+          if (toolCalls.length === 0 && originalCount > 0) {
+            this.outputChannel.appendLine(`[Iteration ${iteration}] All ${originalCount} tool call(s) were duplicates — injecting warning`);
+            messages.push({ role: 'assistant', content: response || '[Reasoning completed]' });
+            messages.push({
+              role: 'user',
+              content: 'You are repeating the same tool calls you already made. The results have not changed. Please use different tools or arguments, or if you have enough information, respond with [TASK_COMPLETE].'
+            });
+            consecutiveNoToolIterations++;
+            continue;
+          }
+        }
 
         if (toolCalls.length === 0) {
           consecutiveNoToolIterations++;

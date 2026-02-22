@@ -51,7 +51,8 @@ export const saveModelSettings = () => {
     settings: {
       agentModel: settings.agentModel,
       chatModel: settings.chatModel,
-      completionModel: settings.completionModel
+      completionModel: settings.completionModel,
+      explorerModel: settings.explorerModel
     }
   });
 };

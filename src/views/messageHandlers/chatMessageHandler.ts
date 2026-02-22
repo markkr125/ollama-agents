@@ -27,7 +27,8 @@ import { mergeCachedCapabilities, ModelMessageHandler } from './modelMessageHand
 export class ChatMessageHandler implements IMessageHandler {
   readonly handledTypes = [
     'ready', 'sendMessage', 'stopGeneration', 'selectModel', 'selectMode', 'newChat', 'addContext',
-    'addContextFromFile', 'addContextCurrentFile', 'addContextFromTerminal', 'implementPlan'
+    'addContextFromFile', 'addContextCurrentFile', 'addContextFromTerminal', 'implementPlan',
+    'setSessionExplorerModel'
   ] as const;
 
   private cancellationTokenSource?: vscode.CancellationTokenSource;
@@ -68,6 +69,9 @@ export class ChatMessageHandler implements IMessageHandler {
         break;
       case 'selectModel':
         await this.handleModelChange(data.model);
+        break;
+      case 'setSessionExplorerModel':
+        await this.handleSetSessionExplorerModel(data.model);
         break;
       case 'selectMode':
         this.state.currentMode = data.mode;
@@ -564,19 +568,18 @@ export class ChatMessageHandler implements IMessageHandler {
       dispatch = { intent: 'mixed', needsWrite: true, confidence: 0, reasoning: 'Classification failed — defaulting to mixed' };
     }
 
-    // Pure analysis with no file output → explore executor (read-only, deep-explore mode)
-    // Analysis WITH file output → explore executor with write_file (deep-explore-write mode)
-    // Both use the analysis-first prompt, NOT the agent executor's "expert coding agent" prompt.
-    if (dispatch.intent === 'analyze') {
-      const exploreMode = dispatch.needsWrite ? 'deep-explore-write' : 'deep-explore';
-      const thinkingMsg = dispatch.needsWrite ? 'Analyzing code...' : 'Analyzing code (read-only)...';
-      this.emitter.postMessage({ type: 'showThinking', message: thinkingMsg, sessionId });
-      return this.handleExploreMode(prompt, token, sessionId, exploreMode, sessionMessages);
-    }
+    // ALL intents (including 'analyze') go through the orchestrator.
+    // The orchestrator delegates research to sub-agents via run_subagent,
+    // ensuring proper tool dedup, over-eager mitigation, and staged delegation.
 
     const agentSession = this.sessionManager.createSession(prompt, this.state.currentModel, workspace);
 
     const config: ExecutorConfig = { maxIterations: getConfig().agent.maxIterations, toolTimeout: getConfig().agent.toolTimeout, temperature: 0.7 };
+
+    // Resolve explorer model: session override → global setting → agent model (empty = same as orchestrator)
+    const sessionExplorer = this.sessionController.getSessionExplorerModel();
+    const globalExplorer = getConfig().agent.explorerModel;
+    config.explorerModel = sessionExplorer || globalExplorer || '';
 
     // Fetch model capabilities to decide native vs XML tool calling
     let capabilities: ModelCapabilities | undefined;
@@ -684,6 +687,17 @@ export class ChatMessageHandler implements IMessageHandler {
     this.state.currentModel = modelName;
     await vscode.workspace.getConfiguration('ollamaCopilot')
       .update('agentMode.model', modelName, vscode.ConfigurationTarget.Global);
+  }
+
+  private async handleSetSessionExplorerModel(model: string) {
+    const sessionId = this.sessionController.getCurrentSessionId();
+    if (!sessionId) return;
+    await this.databaseService.updateSession(sessionId, { explorer_model: model || '' });
+    // Update the in-memory session so getSessionExplorerModel() returns the new value
+    const session = await this.sessionController.getCurrentSession();
+    if (session) {
+      session.explorer_model = model || '';
+    }
   }
 
   // -------------------------------------------------------------------------

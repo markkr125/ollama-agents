@@ -118,7 +118,7 @@ Good `@vscode/test-electron` targets:
 
 The following test suites exist in `tests/webview/`:
 
-**`timelineBuilder.test.ts`** (31 tests) - Tests the `buildTimelineFromMessages` function:
+**`timelineBuilder.test.ts`** (34 tests) - Tests the `buildTimelineFromMessages` function:
 - Block-based structure: user messages, assistant threads, text block merging
 - UI event replay: `startProgressGroup`, `showToolAction`, `finishProgressGroup`
 - Command approval flow: `requestToolApproval`, `toolApprovalResult`, skipped status
@@ -130,8 +130,9 @@ The following test suites exist in `tests/webview/`:
 - **Thinking blocks**: `thinkingBlock` event creates collapsed thinking blocks in thread, multiple blocks, empty content
 - **showError event**: Creates error action in progress group, works within existing groups
 - **Chunked read_file**: `startLine` preserved on chunk actions, `filePath` without `checkpointId` for reads, `list_files` detail with basePath preserved
+- **subagentThinking event**: Attaches thinking to last progress group, empty content, no crash without prior group
 
-**`messageHandlers.test.ts`** (24 tests) - Tests live message handlers:
+**`messageHandlers.test.ts`** (27 tests) - Tests live message handlers:
 - Streaming handlers: `handleStreamChunk` creates/updates text blocks
 - Progress group handlers: start/show/finish progress groups
 - Approval handlers with live/history parity: both progress group action AND approval card
@@ -142,6 +143,7 @@ The following test suites exist in `tests/webview/`:
 - **Thinking block handlers**: `handleStreamThinking` creates/updates thinking blocks, `handleCollapseThinking` collapses them, new thinking after collapse creates new block
 - **Warning banner handler**: `handleShowWarningBanner` sets banner state, ignores wrong session
 - **Chunked read_file handlers**: `startLine` and `filePath` passthrough, no `checkpointId` on read actions, multiple chunks create separate action items
+- **subagentThinking**: Attaches thinking to last progress group, empty content, wrong sessionId ignored
 
 **`actions.test.ts`** (10 tests) - Tests UI actions:
 - Debounced search behavior
@@ -198,7 +200,7 @@ The following test suites exist in `tests/webview/`:
 
 The following test suites exist in `tests/extension/suite/`:
 
-**`utils/toolCallParser.test.ts`** (24 tests) - Tests tool call parsing robustness:
+**`utils/toolCallParser.test.ts`** (35 tests) - Tests tool call parsing robustness:
 - Basic parsing: XML and bracket format tool calls
 - Balanced JSON extraction: nested objects, deeply nested content
 - Alternative argument names: `arguments`, `args`, `params`, `parameters`
@@ -207,13 +209,16 @@ The following test suites exist in `tests/extension/suite/`:
 - Incomplete tool calls: LLM cutoff handling, missing closing braces
 - Edge cases: escaped quotes, newlines, surrounding text, empty args
 - Smart quote normalization: Unicode U+201C and U+201D to regular quotes
+- `knownToolNames` filtering: bare JSON with known/unknown tool names, mixed filtering, XML bypass
+- `stripBareJsonToolCalls`: removes bare/code-fenced JSON for known tools, preserves unknown, handles empty set
 
-**`agent/toolRegistry.test.ts`** (17 tests) - Tests tool execution:
+**`agent/toolRegistry.test.ts`** (19 tests) - Tests tool execution:
 - read_file: accepts `path`, `file`, `filePath` arguments
 - write_file: accepts multiple path formats, writes JSON and special characters
 - list_files: lists workspace root correctly
 - get_diagnostics: accepts multiple path argument names
 - Tool registration: verifies all expected tools are registered
+- `getToolNames()`: returns Set of all registered names, matches `getAll()` exactly
 
 **`agent/pathUtils.test.ts`** (22 tests) - Tests path resolution utilities:
 - `resolveWorkspacePath`: joins relative to workspace root, returns absolute as-is
@@ -276,6 +281,35 @@ The following test suites exist in `tests/extension/suite/`:
 - **`_isNew` flag**: Set to `true` for non-existent files, `false` for existing files
 - **postMessage/persistUiEvent parity**: Every posted event has a matching persisted event with correct sessionId; sensitive file approval flow persists all event types
 - **Deferred content generation**: Uses `description` to generate content via LLM when `content` is missing; uses provided `content` directly when present
+
+**`services/subagentIsolation.test.ts`** (20 tests) - Tests sub-agent filtered emitter:
+- **Suppressed types**: `finalMessage`, `streamChunk`, `thinkingBlock`, `collapseThinking`, `tokenUsage`, `iterationBoundary`, `hideThinking` — each verified individually
+- **Pass-through types**: `startProgressGroup`, `showToolAction`, `finishProgressGroup`, `showError`, `showWarningBanner` — each verified individually
+- **Title prefixing**: `startProgressGroup` titles prefixed with sub-agent label; custom `subagentTitle`; non-progress-group types NOT prefixed
+- **Immutability**: Original message object not mutated by prefixing
+- **Mixed sequences**: Correct filtering in a realistic event sequence (7 types mixed, 5 pass through)
+- **Edge cases**: `startProgressGroup` without title; unknown event types suppressed by allowlist
+
+**`services/duplicateToolDetection.test.ts`** (18 tests) - Tests duplicate tool call detection:
+- **Intra-batch dedup**: Removes exact duplicate tool+args within same batch; keeps different-args calls; removes multiple duplicates
+- **Cross-iteration dedup**: Removes calls repeated from previous iteration; removes from 2 iterations ago; allows from 3+ iterations ago (outside window); mixes intra-batch and cross-iteration
+- **Signature sliding window**: Expires signatures older than 3 iterations
+- **Batch size cap**: Caps at `MAX_TOOLS_PER_BATCH` (10); does not cap at or below limit
+- **All-duplicate warning**: Detects when all calls are duplicates; `allDuplicates` false when some survive; false for empty batch
+- **Signature construction**: Sorted arg keys for consistency; empty args; nested object stringification
+
+**`services/explorerModelResolution.test.ts`** (13 tests) - Tests explorer model 3-tier fallback:
+- **3-tier fallback chain**: Session override wins; global setting when no session override; empty string falls through; same as orchestrator when nothing configured
+- **Capability resolution (DB)**: Resolves from DB cache; detects tools/vision capabilities; handles models without tool support
+- **Capability resolution (live)**: Falls back to `/api/show`; returns undefined when both fail; preserves `contextLength`
+- **Capability cache**: Caches DB results; caches `/api/show` results; does NOT cache failures; separate cache per model
+
+**`services/agentControlPlane.test.ts`** — `buildToolCallSummary` suite (12 tests):
+- Returns undefined for empty/undefined input
+- Summarizes individual tools: `read_file`, `write_file`, `search_workspace`, `run_terminal_command`, `run_subagent`, `get_diagnostics`, `list_files`
+- Chains multiple calls with "then" connector; starts with "I"; ends with period
+- Summarizes LSP tools (definition, references, call hierarchy)
+- Falls back to `used <tool_name>` for unknown tool names
 
 **`utils/commandSafety.test.ts`** - Tests terminal command safety analysis:
 - Dangerous command detection (rm -rf, sudo, etc.)

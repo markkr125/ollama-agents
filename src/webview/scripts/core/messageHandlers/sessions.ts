@@ -40,6 +40,7 @@ import {
     scrollTargetMessageId,
     selectedSessionIds,
     selectionMode,
+    sessionExplorerModel,
     sessions,
     sessionsCursor,
     sessionSensitiveFilePatterns,
@@ -128,6 +129,7 @@ export const handleLoadSessionMessages = (msg: LoadSessionMessagesMessage) => {
   } else if (msg.sessionSensitiveFilePatterns === null) {
     sessionSensitiveFilePatterns.value = '';
   }
+  sessionExplorerModel.value = msg.sessionExplorerModel ?? '';
   timeline.value = buildTimelineFromMessages(messages);
   currentProgressIndex.value = null;
   progressIndexStack.value = [];

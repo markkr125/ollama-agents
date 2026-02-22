@@ -17,6 +17,18 @@
           <span class="option-text">Auto-approve sensitive edits</span>
           <span class="option-hint">Skip approval for sensitive file changes</span>
         </label>
+        <div class="session-control-option explorer-model-picker">
+          <span class="option-text">Explorer Model</span>
+          <select
+            class="explorer-select"
+            :value="sessionExplorerModel"
+            @change="onExplorerModelChange($event)"
+          >
+            <option value="">(Global Default)</option>
+            <option v-for="m in modelOptions" :key="m" :value="m">{{ m }}</option>
+          </select>
+          <span class="option-hint">Override the exploration model for this session</span>
+        </div>
       </div>
     </transition>
   </div>
@@ -67,7 +79,7 @@
 </template>
 
 <script setup lang="ts">
-defineProps<{
+const props = defineProps<{
   currentMode: string;
   expanded: boolean;
   autoApproveCommands: boolean;
@@ -80,9 +92,17 @@ defineProps<{
   toggleAutoApproveSensitiveEdits: () => void;
   confirmAutoApproveSensitiveEdits: () => void;
   cancelAutoApproveSensitiveEdits: () => void;
+  sessionExplorerModel: string;
+  modelOptions: string[];
+  setSessionExplorerModel: (model: string) => void;
 }>();
 
 defineEmits<{
   'update:expanded': [value: boolean];
 }>();
+
+function onExplorerModelChange(event: Event) {
+  const value = (event.target as HTMLSelectElement).value;
+  props.setSessionExplorerModel(value);
+}
 </script>

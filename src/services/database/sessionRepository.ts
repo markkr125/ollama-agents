@@ -18,6 +18,7 @@ export class SessionRepository {
       auto_approve_commands: Boolean(row.auto_approve_commands ?? 0),
       auto_approve_sensitive_edits: Boolean(row.auto_approve_sensitive_edits ?? 0),
       sensitive_file_patterns: row.sensitive_file_patterns ?? null,
+      explorer_model: String(row.explorer_model ?? ''),
       created_at: Number(row.created_at ?? 0),
       updated_at: Number(row.updated_at ?? 0)
     };
@@ -87,6 +88,9 @@ export class SessionRepository {
     }
     if (updates.sensitive_file_patterns !== undefined) {
       fields.push('sensitive_file_patterns = ?'); values.push(updates.sensitive_file_patterns);
+    }
+    if (updates.explorer_model !== undefined) {
+      fields.push('explorer_model = ?'); values.push(updates.explorer_model);
     }
 
     const updatedAt = typeof updates.updated_at === 'number' ? updates.updated_at : Date.now();

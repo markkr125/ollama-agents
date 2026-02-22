@@ -36,6 +36,10 @@ export const selectModel = () => {
   vscode.postMessage({ type: 'selectModel', model: currentModel.value });
 };
 
+export const setSessionExplorerModel = (model: string) => {
+  vscode.postMessage({ type: 'setSessionExplorerModel', model });
+};
+
 export const loadSession = (id: string) => {
   currentSessionId.value = id;
   showPage('chat');

@@ -63,6 +63,8 @@ function makeProps(overrides: Record<string, any> = {}) {
     capabilityCheckProgress: { running: false, completed: 0, total: 0 },
     refreshCapabilities: vi.fn(),
     toggleModelEnabled: vi.fn(),
+    updateModelMaxContext: vi.fn(),
+    saveMaxContextWindow: vi.fn(),
     runDbMaintenance: vi.fn(),
     saveStoragePath: vi.fn(),
     dbMaintenanceStatus: { ...status },
@@ -289,8 +291,8 @@ describe('SettingsPage component', () => {
 
     const options = wrapper.findAll('option');
     const optionValues = options.map(o => o.text());
-    // 3 selects (Agent, Chat, Completion) × 2 options = 6
-    expect(optionValues.filter(v => v === 'llama3').length).toBe(3);
-    expect(optionValues.filter(v => v === 'codellama').length).toBe(3);
+    // 4 selects (Agent, Chat, Completion, Explorer) × 2 options = 8
+    expect(optionValues.filter(v => v === 'llama3').length).toBe(4);
+    expect(optionValues.filter(v => v === 'codellama').length).toBe(4);
   });
 });

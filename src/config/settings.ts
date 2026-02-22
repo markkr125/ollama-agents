@@ -43,7 +43,8 @@ export function getConfig(): ExtensionConfig {
       keepAlive: config.get('agent.keepAlive', ''),
       sessionTitleGeneration: config.get('agent.sessionTitleGeneration', 'firstMessage') as 'currentModel' | 'selectModel' | 'firstMessage',
       sessionTitleModel: config.get('agent.sessionTitleModel', ''),
-      maxContextWindow: config.get('agent.maxContextWindow', 65536)
+      maxContextWindow: config.get('agent.maxContextWindow', 65536),
+      explorerModel: config.get('agent.explorerModel', '')
     }
   };
 }

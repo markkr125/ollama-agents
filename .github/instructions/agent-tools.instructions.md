@@ -61,6 +61,46 @@ src/services/agent/
 - Post-task verification gate — diagnostics check on modified files before accepting `[TASK_COMPLETE]`
 - Output truncation handling — detects `StreamResult.truncated` and sends "continue where you left off" message
 - Session memory DB persistence — saves `sessionMemory.toJSON()` via `databaseService.saveSessionMemory()` after loop
+- Explorer model resolution — `resolveExplorerCapabilities()` resolves the sub-agent model with cache
+- Duplicate tool call detection — filters intra-batch and cross-iteration duplicate calls
+
+#### Orchestrator Tool Restriction
+
+The orchestrator (agent mode executor) is restricted to **only 3 tools**: `write_file`, `run_terminal_command`, and `run_subagent`. All other tools (read_file, search_workspace, LSP tools, etc.) are filtered out and only available to sub-agents via the explore executor.
+
+**Implementation:**
+- `AgentPromptBuilder` has a static `ORCHESTRATOR_TOOLS` set: `{'write_file', 'run_terminal_command', 'run_subagent'}`
+- `getOrchestratorToolDefinitions()` filters `getOllamaToolDefinitions()` by this set → used for native tool mode
+- `buildOrchestratorToolDefinitions_XML()` filters tool descriptions → used for XML fallback mode
+- `agentChatExecutor.ts` uses `getOrchestratorToolDefinitions()` for both the chat request `tools[]` array and token estimation
+- The `orchestratorDelegationStrategy()` prompt section instructs the model on the SCOUT → EXPLORE → WRITE → VERIFY workflow
+
+**Rationale:** Prevents the orchestrator from wasting context window on file reads. Research is offloaded to sub-agents that run with their own context window.
+
+#### Explorer Model Resolution
+
+The orchestrator resolves which model to use for sub-agents via a **3-tier fallback**:
+
+1. **Per-session override** — `sessionController.getSessionExplorerModel()`
+2. **Global setting** — `getConfig().agent.explorerModel`
+3. **Same model** — falls back to the orchestrator's own model (empty string → use `config.model`)
+
+**Implementation:** `resolveExplorerCapabilities()` in `agentChatExecutor.ts`:
+- Caches capabilities per `(model, sessionId)` to avoid repeated API calls
+- Tries DB cache first (`databaseService.getModelCapabilities()`)
+- Falls back to live `/api/show` via `getModelCapabilities()`
+- Determines `useNativeTools` and `useThinking` for the sub-agent
+- The resolved model and capabilities are passed through the `runSubagent` closure
+
+#### Duplicate Tool Call Detection
+
+After tool calls are parsed each iteration, the executor deduplicates them:
+
+1. **Intra-batch dedup** — removes exact duplicates within the same iteration (same tool name + same args)
+2. **Cross-iteration dedup** — removes calls that were made with identical arguments in the last 2 iterations (tracked via `recentToolSignatures` Map)
+3. **Batch cap** — limits to `MAX_TOOLS_PER_BATCH` (10) tool calls per iteration
+4. **All-duplicate handling** — if every tool call was a duplicate, injects a warning message telling the model to try different tools or complete the task
+5. **Signature expiry** — old signatures are evicted after 3 iterations to allow legitimate re-reads
 
 #### Conversation History Protocol
 
@@ -184,11 +224,15 @@ When `execute()` is called with `isSubagent=true` (via `executeSubagent()`), the
 | `finishProgressGroup` | `thinkingBlock` |
 | `showError` | `collapseThinking` |
 | `showWarningBanner` | `tokenUsage` |
-| | `finalMessage` |
+| `subagentThinking` | `finalMessage` |
 | | `hideThinking` |
 | | Iteration text DB messages |
 
 **Silent stream processor:** A separate `AgentStreamProcessor` instance is created with a no-op emitter — the sub-agent's streaming text accumulates internally but is never posted to the webview. The user sees progress groups and tool actions (so they know the sub-agent is working) but not the raw LLM output.
+
+**Sub-agent thinking (`subagentThinking`):** When a sub-agent produces thinking content, the explore executor emits a `subagentThinking` message (only allowed through the filtered emitter) and persists it via `persistUiEvent`. The webview attaches this thinking to the last progress group as a collapsible `<details>` block. This lets the user optionally inspect the sub-agent's reasoning without cluttering the timeline. Handled by `handleSubagentThinking()` in `progress.ts` (live) and `timelineBuilder.ts` (session restore).
+
+**Sub-agent context hint (`subagentContextHint`):** The `execute()` method accepts an optional `subagentContextHint: string` parameter. When running as a sub-agent, this hint is forwarded via `executeSubagent()` from the `run_subagent` tool and passed to `buildSubAgentExplorePrompt()` in `agentPromptBuilder.ts`. The prompt includes a "FOCUS AREA" section with the hint, helping the sub-agent narrow its investigation scope. The sub-agent prompt also enforces an output budget ("Keep your final response under 1500 words") and compact exploration strategy.
 
 **Why each suppression matters:**
 - `finalMessage` — Resets `currentStreamIndex` in the webview, which causes the parent's next `streamChunk` to create a NEW assistant thread instead of continuing the existing one (Pitfall #34).
@@ -200,6 +244,15 @@ When `execute()` is called with `isSubagent=true` (via `executeSubagent()`), the
 **Sub-agent text return:** The sub-agent's accumulated text is returned as a string to the `run_subagent` tool, which passes it back to the parent agent as a tool result. The parent can then act on the findings.
 
 **Prompt enforcement:** `buildExplorePrompt()` tells the sub-agent it is read-only and its output goes to the calling agent (not the user). `toolUsagePolicy()` tells the parent agent that sub-agent results are returned only to it and the user doesn't see them — the parent must act on the findings itself.
+
+#### Sub-Agent UI Labels
+
+When a sub-agent runs, its progress groups are prefixed with a label derived from the `title` parameter:
+- `startProgressGroup` events pass through the emit filter with `title` prefixed: `🤖 Sub-agent: <title> – <groupTitle>`
+- Other tool UI events (`showToolAction`, `finishProgressGroup`) pass through unchanged
+- This lets the user see which sub-agent is responsible for each set of tool actions
+
+The `title` is provided by the orchestrator via the `run_subagent` tool's `title` parameter (required). The `toolUIFormatter.ts` also uses `title` (falling back to `task`) for the progress action display text.
 
 ### `AgentStreamProcessor` — LLM Streaming
 
@@ -351,12 +404,28 @@ Used by both executors to emit `tokenUsage` messages after each iteration. The b
 
 Builds the system prompt from modular sections. Key design principle: **for native tool calling models, tool-specific guidance lives in the tool descriptions (sent via `tools[]` API), NOT in the system prompt.** The system prompt focuses on behavioral rules only.
 
-**Native tool prompt sections** (`buildNativeToolPrompt()`):
-- `identity()`, `workspaceInfo()`, `projectContextBlock`, `toneAndStyle()`, `doingTasks()`, `toolUsagePolicy()`, `executingWithCare()`, `userProvidedContext()`, `scratchpadDirectory()`, `completionSignal()`
-- Does NOT include `codeNavigationStrategy()` or `searchTips()` — these duplicate what's already in tool descriptions
+**Orchestrator prompt architecture**: The orchestrator (agent mode) prompt explicitly excludes `projectContextBlock` — project context auto-discovery is deferred to sub-agents via their explore/review prompts. This keeps the orchestrator prompt slim and focused on delegation.
 
-**XML fallback prompt** (`buildXmlFallbackPrompt()`):
-- Includes ALL of the above PLUS `toolDefinitions()`, `toolCallFormat()`, `codeNavigationStrategy()`, `searchTips()` — because XML models don't receive `tools[]`
+**Native tool prompt sections** (`buildOrchestratorNativePrompt()`):
+- `identity()`, `workspaceInfo()`, `toneAndStyle()`, `doingTasksOrchestrator()`, `orchestratorDelegationStrategy()`, `orchestratorToolPolicy()`, `executingWithCare()`, `userProvidedContext()`, `scratchpadDirectory()`, `completionSignal()`
+- Does NOT include `projectContextBlock`, `codeNavigationStrategy()`, or `searchTips()` — these are for sub-agents
+- `doingTasksOrchestrator()` focuses on delegation (no references to read_file/search_workspace), unlike `doingTasks()` which includes "Read before writing" guidance
+- `orchestratorToolPolicy()` references only the 3 orchestrator tools, unlike `toolUsagePolicy()` which lists all tool alternatives
+
+**XML fallback prompt** (`buildOrchestratorXmlPrompt()`):
+- Includes ALL of the above PLUS `buildOrchestratorToolDefinitions_XML()`, `toolCallFormat()`, `searchTips()` — because XML models don't receive `tools[]`
+- Also excludes `projectContextBlock`
+
+**Deprecated aliases**: `buildNativeToolPrompt()` and `buildXmlFallbackPrompt()` delegate to the orchestrator variants — kept for backward compatibility.
+
+**Orchestrator-only sections:**
+| Section | Purpose |
+|---------|---------|
+| `orchestratorDelegationStrategy()` | SCOUT→EXPLORE→WRITE→VERIFY workflow, sub-agent best practices |
+| `doingTasksOrchestrator()` | Task execution rules focused on delegation — no read/search tool references |
+| `orchestratorToolPolicy()` | Tool usage rules referencing only the 3 orchestrator tools |
+| `getOrchestratorToolDefinitions()` | Filters `tools[]` to only `write_file`, `run_terminal_command`, `run_subagent` |
+| `buildOrchestratorToolDefinitions_XML()` | Same filter for XML fallback mode |
 
 | Section | Key Rules |
 |---------|-----------|
@@ -620,7 +689,7 @@ All core agent types are centralised in `src/types/agent.ts`:
 *Sub-agent tool:*
 | Tool | Mechanism | Description |
 |------|-----------|-------------|
-| `run_subagent` | `context.runSubagent()` callback → `AgentExploreExecutor.executeSubagent()` | Launch an isolated read-only sub-agent for complex investigation tasks. Accepts `task` (string) and optional `mode` (`'explore'`, `'review'`, or `'deep-explore'`). Runs with `isSubagent=true` — suppresses streaming, thinking, token usage, and `finalMessage` to prevent polluting the parent's webview timeline. Only tool UI events (progress groups, tool actions) are visible to the user. Findings are returned as text to the parent agent only — the user does NOT see them. The parent must act on the findings itself. |
+| `run_subagent` | `context.runSubagent()` callback → `AgentExploreExecutor.executeSubagent()` | Launch an isolated read-only sub-agent for complex investigation tasks. Accepts `task` (string), `title` (string, required — 3-5 word summary shown as progress label), optional `context_hint` (string — focus hint prepended to task, e.g. "start from src/auth/"), and optional `mode` (`'explore'`, `'review'`, or `'deep-explore'`). Runs with `isSubagent=true` — suppresses streaming, thinking, token usage, and `finalMessage` to prevent polluting the parent's webview timeline. Only tool UI events (progress groups, tool actions) are visible to the user, prefixed with `🤖 Sub-agent: <title>`. Findings are returned as text to the parent agent only — the user does NOT see them. The parent must act on the findings itself. The sub-agent model is resolved via 3-tier fallback (session → global → agent model) — see Explorer Model Resolution. |
 
 **Tool Call Format (in LLM responses):**
 ```xml
@@ -669,6 +738,31 @@ The parser handles various LLM quirks that smaller models (like devstral-small) 
    <tool_call>{"name": "write_file", "arguments": {"path": "x.ts", "content": "...
    ```
    The parser attempts to repair by adding missing closing braces.
+
+6. **Bare JSON Fallback** - When no XML `<tool_call>` or bracket `[TOOL_CALLS]` format is detected, the parser falls back to extracting bare JSON objects that match the tool call schema:
+   ```json
+   {"name": "read_file", "arguments": {"path": "src/main.ts"}}
+   ```
+   This handles models (like Qwen2.5-Coder) that sometimes emit raw JSON tool calls without any wrapping format. The bare JSON is also extracted from code fences (`` ```json ... ``` ``). This fallback only activates when the primary parsers found zero tool calls — it never interferes with properly formatted output.
+
+   **`knownToolNames` validation:** The `extractToolCalls()` function accepts an optional `knownToolNames: Set<string>` parameter. When provided, the bare JSON fallback only accepts tool calls whose `name` field is in the set — this prevents false positives from JSON snippets in the response that happen to match the tool call schema. XML and bracket-format calls are NOT filtered by `knownToolNames`. Both executors pass `toolRegistry.getToolNames()` when in XML mode (native tool mode doesn't need it since tool calls come from the API, not text parsing).
+
+   **`stripBareJsonToolCalls()`:** Companion function that removes bare JSON tool call objects from a response string so they don't leak into user-visible assistant text. Used by `agentStreamProcessor.ts` when bare JSON pre-scan detects a known tool name in the streaming text.
+
+#### Over-Eager Tool Mitigation
+
+Models sometimes request an excessive number of tool calls in a single batch (e.g., 20+ `read_file` calls). Two thresholds prevent this from exhausting context or slowing execution:
+
+| Threshold | Constant | Behavior |
+|-----------|----------|----------|
+| Soft warning | `TOOL_COUNT_WARN = 8` | All tools executed, but a `[SYSTEM NOTE]` is injected advising fewer tools per iteration |
+| Hard truncation | `TOOL_COUNT_HARD = 15` | Only the first 15 tools are executed; remaining are dropped with a `[SYSTEM NOTE]` explaining the truncation |
+
+**Implementation locations:**
+- `agentToolRunner.ts` `executeBatch()` — applies both thresholds for orchestrator tool batches
+- `agentExploreExecutor.ts` — applies `TOOL_COUNT_HARD` (15) for explore executor's inline tool execution
+
+The injected messages appear as `role: 'tool'` with `tool_name: 'system'` (native mode) or appended to `xmlResults` (XML mode).
 
 ### Tool Argument Flexibility
 

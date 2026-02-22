@@ -47,15 +47,25 @@ The autonomous coding agent. It can read/write files, search your workspace, and
 
 **Thinking support:** Thinking models (Qwen 3, GPT-OSS, DeepSeek R1, etc.) reason automatically — Ollama enables thinking by default for supported models. The model's reasoning trace is displayed in a collapsible block in the UI but is **not** included in conversation history (per Ollama best practices). The model thinks fresh each iteration.
 
-**Available tools:**
+**Available tools (Orchestrator):**
+
+The agent operates as an **orchestrator** with only 3 direct tools. All research and code exploration is delegated to sub-agents:
+
+| Tool | Description |
+|------|-------------|
+| `write_file` | Write/modify/create files |
+| `run_terminal_command` | Execute shell commands |
+| `run_subagent` | Launch a read-only sub-agent for research tasks (accepts `title`, `task`, optional `context_hint` and `mode`) |
+
+**Sub-agent tools (read-only):**
+
+Sub-agents spawned by `run_subagent` have access to the full read-only tool set:
+
 | Tool | Description |
 |------|-------------|
 | `read_file` | Read file contents |
-| `write_file` | Write/modify files |
-| `create_file` | Create new files |
 | `list_files` | List directory contents |
 | `search_workspace` | Search for text or regex patterns in files (supports case-insensitive matching, alternatives, wildcards via `isRegex` flag; optional `directory` param to scope to a folder) |
-| `run_terminal_command` | Execute shell commands |
 | `get_diagnostics` | Get TypeScript/ESLint errors for a file |
 | `get_document_symbols` | Get a file's outline — classes, functions, variables with line ranges |
 | `find_definition` | Go to definition of a symbol (follows function calls across files) |
@@ -65,9 +75,10 @@ The autonomous coding agent. It can read/write files, search your workspace, and
 | `get_call_hierarchy` | Trace incoming and/or outgoing call chains |
 | `find_implementations` | Find concrete implementations of an interface or abstract class |
 | `get_type_hierarchy` | Show inheritance chains — supertypes and subtypes |
-| `run_subagent` | Launch an independent read-only sub-agent for complex investigation tasks |
 
 > **Code intelligence tools** (last 8 above) use VS Code's Language Server Protocol — they work for any language with an active LSP extension (TypeScript, Python, Java, Rust, etc.).
+
+**Explorer model:** You can configure a separate model for sub-agents via `ollamaCopilot.agent.explorerModel` (global setting) or per-session in the Session Controls panel. When not set, sub-agents use the same model as the orchestrator.
 
 **Auto-approve:** You can toggle auto-approve per session for terminal commands and sensitive file edits. Critical commands (`rm -rf`, `sudo`, etc.) always require manual approval regardless of the toggle.
 
@@ -124,14 +135,15 @@ The `/review` command internally uses the explore executor in review mode. It ha
 
 ## Sub-Agent (Internal)
 
-The `run_subagent` tool allows the main Agent to spawn a read-only sub-agent for complex multi-step investigation tasks. This is not a user-facing mode — it's a tool the agent can call autonomously.
+The `run_subagent` tool allows the main Agent (orchestrator) to spawn a read-only sub-agent for complex multi-step investigation tasks. This is not a user-facing mode — it's a tool the agent can call autonomously.
 
 **How it works:**
 1. The agent identifies a research task that requires multiple tool calls
-2. It calls `run_subagent` with a task description and mode (`explore`, `review`, or `deep-explore`)
+2. It calls `run_subagent` with a `title` (shown in UI), `task` description, optional `context_hint` (focus hint), and `mode` (`explore`, `review`, or `deep-explore`)
 3. A lightweight explore/review/deep-explore executor runs the sub-task in **isolated mode**
-4. The sub-agent's findings are returned as text to the main agent — they are **not** shown to the user automatically
-5. The parent agent must act on the findings itself (e.g., write files, make edits)
+4. The sub-agent's progress groups are labeled with `🤖 Sub-agent: <title>` so the user can see which sub-agent is doing what
+5. The sub-agent's findings are returned as text to the main agent — they are **not** shown to the user automatically
+6. The parent agent must act on the findings itself (e.g., write files, make edits)
 
 **Isolation:** The sub-agent runs with a filtered emitter that only passes tool UI events (progress groups, tool actions) to the chat. Streaming text, thinking blocks, token usage, and the final message are all suppressed to prevent interference with the parent agent's timeline. The user sees the sub-agent's tool activity (so they know work is happening) but not its raw output.
 
