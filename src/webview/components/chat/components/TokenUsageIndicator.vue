@@ -29,7 +29,7 @@
 
     <!-- Expanded popup -->
     <Teleport to="body">
-      <div v-if="expanded" class="token-usage-popup" ref="popupEl" :style="popupStyle">
+      <div v-if="expanded" ref="popupEl" class="token-usage-popup" :style="popupStyle">
         <div class="popup-header">
           <span class="popup-title">Context Window</span>
           <button class="popup-close" @click="expanded = false">
@@ -109,7 +109,6 @@ const props = defineProps<{
 
 const expanded = ref(false);
 const popupEl = ref<HTMLElement | null>(null);
-const ringBtnEl = ref<HTMLElement | null>(null);
 const popupStyle = ref<Record<string, string>>({});
 
 // Ring dimensions
@@ -152,7 +151,6 @@ function categoryPct(value: number): string {
 
 // Position the popup above the ring button
 function positionPopup() {
-  const indicator = popupEl.value?.closest?.('body');
   // Find the ring button via the component's root element
   const root = document.querySelector('.token-usage-indicator');
   const btn = root?.querySelector('.token-ring-btn');

@@ -79,7 +79,8 @@ export class AgentExploreExecutor {
     isSubagent = false,
     primaryWorkspaceHint?: vscode.WorkspaceFolder,
     subagentTitle?: string,
-    subagentContextHint?: string
+    subagentContextHint?: string,
+    subagentDescription?: string
   ): Promise<ExploreResult> {
     const allFolders = vscode.workspace.workspaceFolders || [];
     const primaryWorkspace = primaryWorkspaceHint || allFolders[0];
@@ -101,22 +102,19 @@ export class AgentExploreExecutor {
       }
     }
 
-    // Sub-agent mode: suppress all text streaming, thinking, and final message
-    // emissions. Only tool UI (progress groups, tool actions) passes through.
-    // This follows Claude Code's pattern: "The result returned by the agent
-    // is not visible to the user."
-    const subLabel = subagentTitle ? `🤖 ${subagentTitle}` : '🤖 Sub-agent';
+    // Sub-agent mode: suppress text streaming, thinking, final message, AND
+    // per-iteration progress group events. The sub-agent gets ONE wrapper
+    // progress group (emitted before/after the loop) containing all tool
+    // actions and thinking. Internal startProgressGroup/finishProgressGroup
+    // are suppressed so actions funnel into the wrapper group.
+    const subLabel = subagentTitle ? `Sub-agent: ${subagentTitle}` : 'Sub-agent';
     const emit = isSubagent
       ? (msg: any) => {
           const TOOL_UI_TYPES = new Set([
-            'startProgressGroup', 'showToolAction', 'finishProgressGroup',
+            'showToolAction',
             'showError', 'showWarningBanner', 'subagentThinking',
           ]);
           if (TOOL_UI_TYPES.has(msg.type)) {
-            // Prefix progress group titles with sub-agent label for visual nesting
-            if (msg.type === 'startProgressGroup' && msg.title) {
-              msg = { ...msg, title: `${subLabel}: ${msg.title}` };
-            }
             this.emitter.postMessage(msg);
           }
         }
@@ -168,11 +166,26 @@ export class AgentExploreExecutor {
       });
     }
 
+    // Sub-agent wrapper group: single group containing all sub-agent actions
+    if (isSubagent) {
+      await this.persistUiEvent(sessionId, 'startProgressGroup', { title: subLabel, isSubagent: true });
+      this.emitter.postMessage({ type: 'startProgressGroup', title: subLabel, isSubagent: true, sessionId });
+
+      // Emit description as the first action inside the group so it isn't empty
+      // while the sub-agent is starting up. Transitions to ✓ when group finishes.
+      if (subagentDescription) {
+        const descPayload = { status: 'running', icon: '📋', text: subagentDescription };
+        await this.persistUiEvent(sessionId, 'showToolAction', descPayload);
+        emit({ type: 'showToolAction', ...descPayload, sessionId });
+      }
+    }
+
     // Per-mode iteration caps (lower than agent mode)
     const modeCaps: Record<string, number> = { review: 15, 'deep-explore': 20, 'deep-explore-write': 20, plan: 10, chat: 10, explore: 10 };
     const maxIterations = Math.min(config.maxIterations, modeCaps[mode] || 10);
     let iteration = 0;
     let accumulatedExplanation = '';
+    let accumulatedSubagentThinking = '';
     let hasPersistedIterationText = false;
     let consecutiveNoToolIterations = 0;
     let lastPromptTokens: number | undefined;
@@ -309,7 +322,7 @@ export class AgentExploreExecutor {
         // --- Recover from Ollama tool-parse errors (smart/curly quotes) ---
         // Must happen BEFORE text processing — otherwise the error text leaks
         // into the UI as regular assistant chat text.
-        let recoveredToolCalls: Array<{ name: string; args: any }> = [];
+        const recoveredToolCalls: Array<{ name: string; args: any }> = [];
         if (toolParseErrors.length > 0 && useNativeTools) {
           this.outputChannel.appendLine(`[${mode}][Iteration ${iteration}] Ollama tool-parse error(s) detected — attempting recovery`);
           for (const errText of toolParseErrors) {
@@ -401,6 +414,11 @@ export class AgentExploreExecutor {
           // webview can show it inside the sub-agent's progress group.
           const displayThinking = thinkingContent.replace(/\[TASK_COMPLETE\]/gi, '').trim();
           if (displayThinking) {
+            // Accumulate thinking so we can return it to the parent if the
+            // model never produces text output (common with thinking models).
+            if (accumulatedSubagentThinking) accumulatedSubagentThinking += '\n\n';
+            accumulatedSubagentThinking += displayThinking;
+
             const thinkingEndTime = streamResult.lastThinkingTimestamp || Date.now();
             const durationSeconds = Math.round((thinkingEndTime - thinkingStartTime) / 1000);
             const thinkingPayload = { content: displayThinking, durationSeconds };
@@ -427,8 +445,8 @@ export class AgentExploreExecutor {
         }
 
         // Check for completion — also check thinkingContent for thinking models
-        const completionSignal = response + ' ' + thinkingContent;
-        if (completionSignal.includes('[TASK_COMPLETE]') || completionSignal.toLowerCase().includes('task is complete')) {
+        const completionSignal = (response + ' ' + thinkingContent).toLowerCase();
+        if (completionSignal.includes('[task_complete]') || completionSignal.includes('task is complete') || completionSignal.includes('[end_of_exploration]')) {
           break;
         }
 
@@ -499,8 +517,11 @@ export class AgentExploreExecutor {
         const toolNames = filteredToolCalls.map(tc => tc.name).join(', ');
         phase = `executing tools: ${toolNames}`;
         const groupTitle = getProgressGroupTitle(filteredToolCalls);
-        emit({ type: 'startProgressGroup', title: groupTitle, sessionId });
-        await this.persistUiEvent(sessionId, 'startProgressGroup', { title: groupTitle });
+        // Sub-agents: skip internal per-iteration groups — actions go into the wrapper group
+        if (!isSubagent) {
+          emit({ type: 'startProgressGroup', title: groupTitle, sessionId });
+          await this.persistUiEvent(sessionId, 'startProgressGroup', { title: groupTitle });
+        }
 
         // NO thinking field in history — see Ollama issue #10448.
         // CRITICAL: Prefer the compact tool summary over the model's verbose
@@ -562,6 +583,11 @@ export class AgentExploreExecutor {
 
           try {
             const result = await this.toolRegistry.execute(toolCall.name, toolCall.args, context);
+            // ToolRegistry catches errors internally and returns { output: '', error: msg }
+            // instead of throwing. Re-throw so our catch block handles it properly.
+            if (result.error) {
+              throw new Error(result.error);
+            }
             const output = result.output || '';
 
             const { actionText: successText, actionDetail: successDetail, filePath: successFilePath, startLine: successStartLine } =
@@ -571,7 +597,10 @@ export class AgentExploreExecutor {
               ...(successFilePath ? { filePath: successFilePath } : {}),
               ...(successStartLine != null ? { startLine: successStartLine } : {})
             };
-            emit({ type: 'showToolAction', ...successPayload, sessionId });
+            // Sub-agent creates its own wrapper progress group — skip redundant success action
+            if (toolCall.name !== 'run_subagent') {
+              emit({ type: 'showToolAction', ...successPayload, sessionId });
+            }
             await this.persistUiEvent(sessionId, 'showToolAction', successPayload);
             return { toolCall, idx, output, error: undefined as string | undefined };
           } catch (error: any) {
@@ -592,7 +621,10 @@ export class AgentExploreExecutor {
         for (const { toolCall, idx } of sequentialCalls) {
           if (token.isCancellationRequested) break;
           const { actionText, actionDetail, actionIcon } = toolMeta[idx];
-          emit({ type: 'showToolAction', status: 'running', icon: actionIcon, text: actionText, detail: actionDetail, sessionId });
+          // Sub-agent creates its own wrapper progress group — skip redundant running action
+          if (toolCall.name !== 'run_subagent') {
+            emit({ type: 'showToolAction', status: 'running', icon: actionIcon, text: actionText, detail: actionDetail, sessionId });
+          }
           seqResults.push(await executeSingle(toolCall, idx));
         }
 
@@ -622,8 +654,11 @@ export class AgentExploreExecutor {
           }
         }
 
-        emit({ type: 'finishProgressGroup', sessionId });
-        await this.persistUiEvent(sessionId, 'finishProgressGroup', {});
+        // Sub-agents: skip internal per-iteration group close
+        if (!isSubagent) {
+          emit({ type: 'finishProgressGroup', sessionId });
+          await this.persistUiEvent(sessionId, 'finishProgressGroup', {});
+        }
 
         // Feed results back. NO task reminder — the full task is in messages[1].
         // Adding a truncated preview caused models to fixate on the incomplete
@@ -653,8 +688,31 @@ export class AgentExploreExecutor {
       }
     }
 
-    // Build final result
-    const summary = accumulatedExplanation || 'Exploration completed.';
+    // Close sub-agent wrapper group
+    if (isSubagent) {
+      await this.persistUiEvent(sessionId, 'finishProgressGroup', {});
+      this.emitter.postMessage({ type: 'finishProgressGroup', sessionId });
+    }
+
+    // Build final result — for sub-agents, fall back to thinking content
+    // (thinking models put analysis in thinking field, not response) and
+    // then to a tool results summary so the parent gets useful data.
+    let summary: string;
+    if (accumulatedExplanation) {
+      summary = accumulatedExplanation;
+    } else if (isSubagent && accumulatedSubagentThinking) {
+      // Thinking models: analysis is in thinking field. Cap at 4K chars
+      // to prevent token flooding in the parent's context.
+      const maxChars = 4000;
+      summary = accumulatedSubagentThinking.length > maxChars
+        ? accumulatedSubagentThinking.substring(0, maxChars) + `\n\n[Thinking truncated — ${accumulatedSubagentThinking.length} chars total]`
+        : accumulatedSubagentThinking;
+    } else if (isSubagent) {
+      // No text and no thinking — build summary from tool results
+      summary = this.buildToolResultsSummary(messages);
+    } else {
+      summary = 'Exploration completed.';
+    }
 
     // Sub-agents: return summary to caller without posting finalMessage or
     // persisting an assistant message (the parent agent handles user-facing output).
@@ -722,7 +780,9 @@ export class AgentExploreExecutor {
     mode: 'explore' | 'review' | 'deep-explore',
     capabilities?: ModelCapabilities,
     contextHint?: string,
-    title?: string
+    title?: string,
+    primaryWorkspaceHint?: vscode.WorkspaceFolder,
+    description?: string
   ): Promise<string> {
     const modeCaps: Record<string, number> = { review: 15, 'deep-explore': 20, explore: 10 };
     const config: ExecutorConfig = {
@@ -735,13 +795,44 @@ export class AgentExploreExecutor {
     // thinking, finalMessage, iterationBoundary, and DB assistant message persistence.
     // The title is used to prefix sub-agent progress groups in the UI.
     // contextHint is injected into the system prompt for focused exploration.
-    const result = await this.execute(task, config, token, sessionId, model, mode, capabilities, undefined, /* isSubagent */ true, undefined, title, contextHint);
+    const result = await this.execute(task, config, token, sessionId, model, mode, capabilities, undefined, /* isSubagent */ true, primaryWorkspaceHint, title, contextHint, description);
     return result.summary || 'Sub-agent completed with no findings.';
   }
 
   // -------------------------------------------------------------------------
   // Private helpers
   // -------------------------------------------------------------------------
+
+  /**
+   * Build a brief summary from tool results in the conversation messages.
+   * Used as a last resort when the sub-agent produces no text or thinking
+   * output (e.g., non-thinking models that output only tool calls).
+   */
+  private buildToolResultsSummary(messages: any[]): string {
+    const toolEntries: string[] = [];
+    for (const m of messages) {
+      if (m.role !== 'tool' || !m.tool_name || m.tool_name === '__ui__') continue;
+      const content = (m.content || '').trim();
+      if (!content) continue;
+
+      const name = m.tool_name;
+      // Extract a one-line summary from the tool output
+      const firstLine = content.split('\n')[0].substring(0, 120);
+      toolEntries.push(`- ${name}: ${firstLine}`);
+
+      // Include the full output for read_file (truncated) since it's the
+      // most valuable for the parent agent
+      if (name === 'read_file' && content.length > 150) {
+        toolEntries[toolEntries.length - 1] += ` (${content.length} chars)`;
+      }
+    }
+    if (toolEntries.length === 0) return 'Exploration completed.';
+    // Cap at 3K chars to keep parent context manageable
+    const joined = `Tool results summary:\n${toolEntries.join('\n')}`;
+    return joined.length > 3000
+      ? joined.substring(0, 3000) + '\n[Summary truncated]'
+      : joined;
+  }
 
   private buildSystemPrompt(
     mode: ExploreMode,

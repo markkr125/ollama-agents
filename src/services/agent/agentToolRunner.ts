@@ -111,6 +111,9 @@ export class AgentToolRunner {
       const isTerminalCommand = toolCall.name === 'run_terminal_command' || toolCall.name === 'run_command';
       const isFileEdit = toolCall.name === 'write_file' || toolCall.name === 'create_file';
       const isReadFile = toolCall.name === 'read_file';
+      // Sub-agent creates its own dedicated wrapper progress group — skip
+      // redundant running/success showToolAction events from the parent.
+      const isSubagentCall = toolCall.name === 'run_subagent';
 
       // --- Tool result cache: return cached output for identical read-only calls ---
       const cacheKey = `${toolCall.name}:${JSON.stringify(toolCall.args)}`;
@@ -169,8 +172,9 @@ export class AgentToolRunner {
       }
 
       // Show "running" status for generic tools (terminal handler shows its own;
-      // file edit handler emits its own with correct Creating/Editing verb)
-      if (!isTerminalCommand && !isFileEdit) {
+      // file edit handler emits its own with correct Creating/Editing verb;
+      // sub-agent creates its own wrapper progress group)
+      if (!isTerminalCommand && !isFileEdit && !isSubagentCall) {
         this.emitter.postMessage({
           type: 'showToolAction',
           status: 'running',
@@ -296,8 +300,9 @@ export class AgentToolRunner {
             ...(successFilePath && currentCheckpointId ? { checkpointId: currentCheckpointId } : {}),
             ...(successStartLine != null ? { startLine: successStartLine } : {})
           };
-          // Terminal commands already show result in the approval card
-          if (!isTerminalCommand) {
+          // Terminal commands already show result in the approval card;
+          // sub-agent creates its own wrapper progress group
+          if (!isTerminalCommand && !isSubagentCall) {
             this.emitter.postMessage({ type: 'showToolAction', ...actionPayload, sessionId });
             await this.persistUiEvent(sessionId, 'showToolAction', actionPayload);
           }

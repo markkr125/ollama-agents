@@ -95,7 +95,9 @@
                     v-for="opt in contextOptions(model)"
                     :key="opt.value"
                     :value="opt.value"
-                  >{{ opt.label }}</option>
+                  >
+                    {{ opt.label }}
+                  </option>
                 </select>
               </td>
             </tr>

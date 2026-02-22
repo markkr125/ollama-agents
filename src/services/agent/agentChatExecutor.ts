@@ -19,13 +19,13 @@ import { PendingEditDecorationProvider } from '../pendingEditDecorationProvider'
 import { TerminalManager } from '../terminalManager';
 import { AgentContextCompactor, estimateTokensByCategory } from './agentContextCompactor';
 import {
-  buildLoopContinuationMessage,
-  buildToolCallSummary,
-  checkNoToolCompletion,
-  computeDynamicNumCtx,
-  formatTextToolResults,
-  isCompletionSignaled,
-  type AgentLoopEvent
+    buildLoopContinuationMessage,
+    buildToolCallSummary,
+    checkNoToolCompletion,
+    computeDynamicNumCtx,
+    formatTextToolResults,
+    isCompletionSignaled,
+    type AgentLoopEvent
 } from './agentControlPlane';
 import { AgentExploreExecutor } from './agentExploreExecutor';
 import { AgentFileEditHandler } from './agentFileEditHandler';
@@ -287,13 +287,15 @@ export class AgentChatExecutor {
       sessionId,
       terminalManager: this.terminalManager,
       runSubagent: this._exploreExecutor
-        ? async (task: string, mode: 'explore' | 'review' | 'deep-explore', contextHint?: string, title?: string) => {
+        ? async (task: string, mode: 'explore' | 'review' | 'deep-explore', contextHint?: string, title?: string, description?: string) => {
             // Use resolved explorer model (3-tier: session → global → agent model)
             const explorerModel = config.explorerModel || model;
             const explorerCaps = explorerModel !== model
               ? await this.resolveExplorerCapabilities(explorerModel)
               : capabilities;
-            return this._exploreExecutor!.executeSubagent(task, token, sessionId, explorerModel, mode, explorerCaps, contextHint, title);
+            // Forward the detected primary workspace so sub-agents know which
+            // folder to scope their exploration to (fixes multi-root workspaces).
+            return this._exploreExecutor!.executeSubagent(task, token, sessionId, explorerModel, mode, explorerCaps, contextHint, title, agentSession.workspace, description);
           }
         : undefined
     };
@@ -645,7 +647,7 @@ export class AgentChatExecutor {
         // --- Recover from Ollama tool-parse errors (smart/curly quotes) ---
         // Must happen BEFORE text processing — otherwise the error text leaks
         // into the UI as regular assistant chat text.
-        let recoveredToolCalls: Array<{ name: string; args: any }> = [];
+        const recoveredToolCalls: Array<{ name: string; args: any }> = [];
         if (toolParseErrors.length > 0 && useNativeTools) {
           this.outputChannel.appendLine(`[Iteration ${iteration}] Ollama tool-parse error(s) detected — attempting recovery`);
           for (const errText of toolParseErrors) {
@@ -982,9 +984,11 @@ export class AgentChatExecutor {
         // --- 7. Execute tool batch ---
         const groupTitle = getProgressGroupTitle(toolCalls);
         const isTerminalOnly = toolCalls.every(t => t.name === 'run_terminal_command' || t.name === 'run_command');
+        const isSubagentOnly = toolCalls.every(t => t.name === 'run_subagent');
 
-        // Skip progress group wrapper for terminal-only batches — the approval card is sufficient
-        if (!isTerminalOnly) {
+        // Skip progress group wrapper for terminal-only batches (approval card is sufficient)
+        // and subagent-only batches (sub-agent creates its own dedicated wrapper group)
+        if (!isTerminalOnly && !isSubagentOnly) {
           this.emitter.postMessage({ type: 'startProgressGroup', title: groupTitle, sessionId });
           await this.persistUiEvent(sessionId, 'startProgressGroup', { title: groupTitle });
         }
@@ -1073,10 +1077,15 @@ export class AgentChatExecutor {
         );
         sessionMemory.addIterationSummary(iterSummary);
 
-        if (!isTerminalOnly) {
+        if (!isTerminalOnly && !isSubagentOnly) {
           this.emitter.postMessage({ type: 'finishProgressGroup', sessionId });
           await this.persistUiEvent(sessionId, 'finishProgressGroup', {});
         }
+
+        // Show a "Working..." spinner immediately after tools complete.
+        // Covers the gap between finishProgressGroup and the next iteration's
+        // streamIteration() → showThinking (model loading + first chunk delay).
+        this.emitter.postMessage({ type: 'showThinking', message: 'Working...', sessionId });
 
         // Feed tool results back into conversation history.
         // Native mode: use proper role:'tool' messages (Ollama API standard),

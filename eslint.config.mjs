@@ -14,6 +14,7 @@ export default tseslint.config(
       'node_modules/**',
       '.vscode-test/**',
       'scripts/**',
+      'agents-refrences/**',
       '**/*.d.ts',
       'webpack.config.js',
     ],

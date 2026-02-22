@@ -1193,7 +1193,7 @@ describe('buildTimelineFromMessages - subagentThinking event', () => {
       { id: 'a1', role: 'assistant', content: 'Working on it' },
       makeUiEvent('ui1', 'startProgressGroup', { title: 'Running sub-agent' }),
       makeUiEvent('ui2', 'showToolAction', { status: 'success', icon: '🔍', text: 'Explored files' }),
-      makeUiEvent('ui3', 'subagentThinking', { content: 'I analyzed the structure...' }),
+      makeUiEvent('ui3', 'subagentThinking', { content: 'I analyzed the structure...', durationSeconds: 5 }),
       makeUiEvent('ui4', 'finishProgressGroup', {})
     ];
     const timeline = builder.buildTimelineFromMessages(messages);
@@ -1205,11 +1205,15 @@ describe('buildTimelineFromMessages - subagentThinking event', () => {
 
     const group = toolsBlock.tools[0];
     expect(group.type).toBe('progress');
-    expect(group.thinkingContent).toBe('I analyzed the structure...');
-    expect(group.thinkingCollapsed).toBe(true);
+    // Thinking is now an ordered action entry in the actions array
+    const thinkingAction = group.actions.find((a: any) => a.isThinking);
+    expect(thinkingAction).toBeDefined();
+    expect(thinkingAction.thinkingContent).toBe('I analyzed the structure...');
+    expect(thinkingAction.durationSeconds).toBe(5);
+    expect(thinkingAction.text).toBe('Thought for 5s');
   });
 
-  test('subagentThinking with empty content still sets fields', async () => {
+  test('subagentThinking with empty content still creates entry', async () => {
     const builder = await import('../../../src/webview/scripts/core/timelineBuilder');
     const messages = [
       { id: 'a1', role: 'assistant', content: '' },
@@ -1221,8 +1225,10 @@ describe('buildTimelineFromMessages - subagentThinking event', () => {
     const thread = timeline[0] as any;
     const toolsBlock = thread.blocks.find((b: any) => b.type === 'tools');
     const group = toolsBlock.tools[0];
-    expect(group.thinkingContent).toBe('');
-    expect(group.thinkingCollapsed).toBe(true);
+    // Empty thinking is still pushed as an action entry
+    const thinkingAction = group.actions.find((a: any) => a.isThinking);
+    expect(thinkingAction).toBeDefined();
+    expect(thinkingAction.thinkingContent).toBe('');
   });
 
   test('subagentThinking without prior progress group does not crash', async () => {
@@ -1234,5 +1240,75 @@ describe('buildTimelineFromMessages - subagentThinking event', () => {
     // Should not throw
     const timeline = builder.buildTimelineFromMessages(messages);
     expect(timeline.length).toBe(1);
+  });
+});
+
+describe('buildTimelineFromMessages - sub-agent wrapper group', () => {
+  const makeUiEvent = (id: string, eventType: string, payload: any) => ({
+    id,
+    role: 'tool',
+    toolName: '__ui__',
+    toolOutput: JSON.stringify({ eventType, payload })
+  });
+
+  test('sub-agent wrapper group contains all sub-agent actions and thinking', async () => {
+    // Simulates the persisted event sequence from a sub-agent run:
+    // The sub-agent creates its own dedicated wrapper progress group.
+    // No parent orchestrator group or run_subagent showToolAction — those are suppressed.
+    const builder = await import('../../../src/webview/scripts/core/timelineBuilder');
+    const messages = [
+      { id: 'u1', role: 'user', content: 'analyze codebase' },
+      { id: 'a1', role: 'assistant', content: 'Delegating...' },
+      // Sub-agent wrapper group (dedicated action group with all sub-agent actions)
+      makeUiEvent('ui3', 'startProgressGroup', { title: 'Sub-agent: Explore auth' }),
+      makeUiEvent('ui4', 'showToolAction', { status: 'running', icon: '🔍', text: 'Search for "auth"' }),
+      makeUiEvent('ui5', 'showToolAction', { status: 'success', icon: '🔍', text: 'Found 5 matches' }),
+      makeUiEvent('ui6', 'showToolAction', { status: 'running', icon: '📄', text: 'Reading auth.ts' }),
+      makeUiEvent('ui7', 'showToolAction', { status: 'success', icon: '📄', text: 'Read auth.ts', detail: 'lines 1-50' }),
+      makeUiEvent('ui8', 'subagentThinking', { content: 'The auth module uses JWT...', durationSeconds: 3 }),
+      makeUiEvent('ui9', 'finishProgressGroup', {}),
+    ];
+    const timeline = builder.buildTimelineFromMessages(messages);
+
+    const thread = timeline[1] as any;
+    expect(thread.type).toBe('assistantThread');
+    const toolsBlock = thread.blocks.find((b: any) => b.type === 'tools');
+    expect(toolsBlock).toBeDefined();
+
+    // Should have 1 group: the sub-agent's dedicated wrapper group
+    const groups = toolsBlock.tools.filter((t: any) => t.type === 'progress');
+    expect(groups.length).toBe(1);
+
+    // Sub-agent wrapper group
+    const subagentGroup = groups[0];
+    expect(subagentGroup.title).toBe('Sub-agent: Explore auth');
+    expect(subagentGroup.status).toBe('done');
+    expect(subagentGroup.collapsed).toBe(true);
+    // All sub-agent tool actions should be inside this ONE group
+    // 2 tool success actions + 1 thinking entry = 3 total
+    expect(subagentGroup.actions.length).toBe(3);
+    // Thinking is an ordered action entry in the actions array
+    const thinkingAction = subagentGroup.actions.find((a: any) => a.isThinking);
+    expect(thinkingAction).toBeDefined();
+    expect(thinkingAction.thinkingContent).toBe('The auth module uses JWT...');
+    expect(thinkingAction.durationSeconds).toBe(3);
+  });
+
+  test('history restoration preserves sub-agent title (no "Sub-agent completed" regression)', async () => {
+    // This is the critical regression test: the sub-agent wrapper group must
+    // restore with its original title, not "Sub-agent completed"
+    const builder = await import('../../../src/webview/scripts/core/timelineBuilder');
+    const messages = [
+      { id: 'u1', role: 'user', content: 'analyze code' },
+      { id: 'a1', role: 'assistant', content: '' },
+      makeUiEvent('ui1', 'startProgressGroup', { title: 'Sub-agent: Explore search controller' }),
+      makeUiEvent('ui2', 'showToolAction', { status: 'success', icon: '🔍', text: 'Found definitions' }),
+      makeUiEvent('ui3', 'finishProgressGroup', {})
+    ];
+    const timeline = builder.buildTimelineFromMessages(messages);
+    const thread = timeline[1] as any;
+    const toolsBlock = thread.blocks.find((b: any) => b.type === 'tools');
+    const group = toolsBlock.tools[0];
+    expect(group.title).toBe('Sub-agent: Explore search controller');
   });
 });

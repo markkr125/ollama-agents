@@ -34,7 +34,7 @@
           <span class="stat-add">+{{ file.additions }}</span>
           <span class="stat-del">-{{ file.deletions }}</span>
         </span>
-          <span class="file-actions" @click.stop>
+        <span class="file-actions" @click.stop>
           <button class="fc-file-btn fc-file-btn--keep" title="Keep this file" @click="handleKeepFile(file.path, file.checkpointId)">✓</button>
           <button class="fc-file-btn fc-file-btn--undo" title="Undo this file" @click="handleUndoFile(file.path, file.checkpointId)">⟲</button>
           <button class="fc-file-btn fc-file-btn--diff" title="View diff" @click="handleOpenReview(file.path, file.checkpointId)">🗎</button>

@@ -51,8 +51,9 @@ export interface ToolContext {
    * @param mode - Execution mode (explore/review/deep-explore)
    * @param contextHint - Optional hint to focus the sub-agent's exploration
    * @param title - Optional short label for UI display
+   * @param description - Optional one-sentence description shown alongside the title
    */
-  runSubagent?: (task: string, mode: 'explore' | 'review' | 'deep-explore', contextHint?: string, title?: string) => Promise<string>;
+  runSubagent?: (task: string, mode: 'explore' | 'review' | 'deep-explore', contextHint?: string, title?: string, description?: string) => Promise<string>;
 }
 
 /**

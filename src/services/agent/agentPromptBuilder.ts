@@ -279,7 +279,14 @@ SUB-AGENT BEST PRACTICES:
 - Be specific in the task description — what to look for, what to return
 - Sub-agents are read-only — they CANNOT write files or run commands
 - Sub-agent results are NOT shown to the user — YOU must summarize or act on their findings
-- Prefer multiple focused sub-agents over one broad one`;
+- Prefer multiple focused sub-agents over one broad one
+
+VALIDATE SUB-AGENT OUTPUT:
+- Sub-agents (especially smaller models) can hallucinate. Cross-check their output:
+  - Do file paths they mention actually exist? If unsure, verify with another sub-agent.
+  - Do class/function names match the codebase? Watch for invented names.
+  - If two sub-agents give conflicting facts (e.g., different frameworks, different APIs), at least one is wrong — launch a focused verification sub-agent.
+- NEVER pass hallucinated content to write_file. When in doubt, verify before writing.`;
   }
 
   private codeNavigationStrategy(): string {
@@ -320,7 +327,12 @@ For large codebases, use run_subagent to delegate exploration of independent bra
 
   private userProvidedContext(): string {
     return `USER-PROVIDED CONTEXT:
-The user may attach code from their editor. It appears in blocks like [file.ts:L10-L50]. This code is already available — do NOT re-read those lines with read_file.
+The user may attach code from their editor. It appears in blocks labeled like "User's selected code from file.ts:L10-L50".
+This code is ALREADY IN YOUR CONVERSATION — you have it right now. Do NOT:
+- Call read_file to re-read lines that are already provided above.
+- Launch sub-agents to re-read files whose content is already in this conversation.
+- Ignore the attached code and start searching from scratch.
+INSTEAD: Read the attached code first. Only use tools to explore code NOT already provided.
 A "Code structure" section may follow, listing symbols in the selection. Use find_definition on each function call to trace it to its source. Use get_call_hierarchy for deeper tracing.`;
   }
 
@@ -418,6 +430,17 @@ STRICT CONSTRAINTS:
 - NEVER use redirect operators (>, >>), heredocs, or pipe-to-file.
 - You are here to READ and ANALYZE only.${contextSection}
 
+ANTI-HALLUCINATION RULE (CRITICAL):
+- NEVER generate, fabricate, or guess file contents. You MUST call read_file to see what a file contains.
+- If you have not read a file with read_file, you do NOT know its contents. Do not describe code you have not seen.
+- NEVER invent class names, function signatures, import paths, or API patterns. Only report what tools return.
+- If a tool call returns an error or empty result, say so. Do NOT fabricate a plausible result.
+
+NO-NARRATION RULE:
+- NEVER say "I will now read..." or "Let me search for..." and then produce NO tool calls.
+- Every response MUST contain EITHER tool calls OR [TASK_COMPLETE]. No exceptions.
+- Do not explain what you plan to do — just do it by calling tools.
+
 OUTPUT BUDGET:
 Keep your final response under 1500 words. Focus on facts, code references, and concrete findings. Omit general advice or disclaimers.`,
       this.workspaceInfo(workspaceFolders, primaryWorkspace),
@@ -429,8 +452,8 @@ Keep your final response under 1500 words. Focus on facts, code references, and 
 - Use find_references, get_call_hierarchy, find_implementations for cross-cutting analysis.
 - Return file paths as workspace-relative paths.`,
       `COMPLETION:
-When done, respond with [TASK_COMPLETE].`,
-      this.searchTips(),
+Your LAST line must be exactly: [TASK_COMPLETE]
+Do not use variants like [END_OF_EXPLORATION], [task_complete], or "Task is complete". Only [TASK_COMPLETE] is recognized.`,
     ];
 
     if (!useNativeTools) {

@@ -96,7 +96,7 @@ suite('EditorContextTracker', () => {
 
   test('includes activeSelection when editor has non-empty selection', async () => {
     // Create a real file on disk so it has scheme 'file'
-    const uri = vscode.Uri.parse('untitled:test-selection.ts');
+    const _uri = vscode.Uri.parse('untitled:test-selection.ts');
     // Use a workspace file instead
     const tmpDir = vscode.workspace.workspaceFolders?.[0]?.uri;
     if (!tmpDir) {
@@ -165,7 +165,7 @@ suite('EditorContextTracker', () => {
   });
 
   test('dispose cleans up and stops posting messages', async () => {
-    const { emitter, messages } = createStubEmitter();
+    const { emitter, messages: _messages } = createStubEmitter();
     const tracker = new EditorContextTracker(emitter);
 
     // Should not throw

@@ -39,13 +39,18 @@ export function resolveMultiRootPath(
 
   // Single-root fast path
   if (!allFolders || allFolders.length <= 1) {
+    const folderName = primaryWorkspace.name;
+    // Exact folder name match — resolve to the workspace root, not root/root.
+    // LLMs sometimes pass just the folder name (e.g. list_files(path="myproject")).
+    if (relativePath === folderName) {
+      return primaryWorkspace.uri.fsPath;
+    }
     // Strip workspace folder name prefix if present.
     // vscode.workspace.asRelativePath(path, true) prepends the folder name
     // (e.g. "demo-project/rss-fetch.ts" for a workspace at …/demo-project/).
     // Without stripping, path.join would double it: …/demo-project/demo-project/rss-fetch.ts
     // Only strip when the prefixed path doesn't exist but the stripped one does,
     // to avoid breaking a real subdirectory that shares the folder name.
-    const folderName = primaryWorkspace.name;
     if (relativePath.startsWith(folderName + '/') || relativePath.startsWith(folderName + path.sep)) {
       const withPrefix = path.join(primaryWorkspace.uri.fsPath, relativePath);
       const stripped = path.join(primaryWorkspace.uri.fsPath, relativePath.slice(folderName.length + 1));
@@ -54,6 +59,18 @@ export function resolveMultiRootPath(
       }
     }
     return path.join(primaryWorkspace.uri.fsPath, relativePath);
+  }
+
+  // If the entire relativePath matches a workspace folder name (no path separators),
+  // resolve directly to that folder's root. This prevents list_files("backend")
+  // from resolving to primaryWorkspace/backend (doubled) or accidentally matching
+  // a subdirectory in another workspace folder.
+  if (!relativePath.includes('/') && !relativePath.includes(path.sep)) {
+    for (const folder of allFolders) {
+      if (folder.name === relativePath) {
+        return folder.uri.fsPath;
+      }
+    }
   }
 
   // Try primary workspace first

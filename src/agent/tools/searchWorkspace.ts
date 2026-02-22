@@ -61,7 +61,7 @@ async function searchWithRipgrep(
   return new Promise((resolve) => {
     const args = [
       '--json',
-      '--max-count', '5',          // max matches per file
+      '--max-count', '3',          // max matches per file
       '--max-columns', '300',       // truncate long lines
       '--color', 'never',
       '--no-heading',
@@ -205,7 +205,7 @@ async function searchManual(
 // Format matches for LLM consumption
 // ---------------------------------------------------------------------------
 
-function formatMatches(matches: SearchMatch[], query: string, rootPaths: string[]): string {
+function formatMatches(matches: SearchMatch[], query: string, rootPaths: string[], maxResults: number): string {
   if (matches.length === 0) {
     const searchedIn = rootPaths.map(p => vscode.workspace.asRelativePath(p, true)).join(', ');
     return `No matches for "${query}" in ${rootPaths.length} workspace folder${rootPaths.length !== 1 ? 's' : ''}: ${searchedIn}`;
@@ -220,23 +220,53 @@ function formatMatches(matches: SearchMatch[], query: string, rootPaths: string[
   }
 
   const parts: string[] = [];
-  parts.push(`Found ${matches.length} match${matches.length !== 1 ? 'es' : ''} across ${byFile.size} file${byFile.size !== 1 ? 's' : ''}:\n`);
+  const truncated = matches.length >= maxResults;
+  const header = `Found ${matches.length}${truncated ? '+' : ''} match${matches.length !== 1 ? 'es' : ''} across ${byFile.size} file${byFile.size !== 1 ? 's' : ''}`;
 
-  for (const [file, fileMatches] of byFile) {
-    parts.push(`── ${file} ──`);
-    for (const m of fileMatches) {
-      if (m.contextBefore.length > 0) {
-        for (let i = 0; i < m.contextBefore.length; i++) {
-          parts.push(`  ${m.line - m.contextBefore.length + i}: ${m.contextBefore[i]}`);
+  // When results are large (>30 matches or >15 files), use compact format:
+  // just file paths + match counts, with full context only for the first few files.
+  const COMPACT_THRESHOLD = 30;
+  const DETAILED_FILES = 8;
+  const useCompactMode = matches.length > COMPACT_THRESHOLD || byFile.size > 15;
+
+  if (useCompactMode) {
+    parts.push(`${header}${truncated ? ' (truncated)' : ''}:\n`);
+    // Show full context for the first DETAILED_FILES files
+    let detailedCount = 0;
+    for (const [file, fileMatches] of byFile) {
+      if (detailedCount < DETAILED_FILES) {
+        parts.push(`── ${file} ──`);
+        for (const m of fileMatches) {
+          parts.push(`→ ${m.line}: ${m.text}`);
         }
+        parts.push('');
+        detailedCount++;
+      } else {
+        // Compact: just file path + match count
+        parts.push(`  ${file}\t${fileMatches.length} match${fileMatches.length > 1 ? 'es' : ''}`);
       }
-      parts.push(`→ ${m.line}: ${m.text}`);
-      if (m.contextAfter.length > 0) {
-        for (let i = 0; i < m.contextAfter.length; i++) {
-          parts.push(`  ${m.line + 1 + i}: ${m.contextAfter[i]}`);
+    }
+    if (truncated) {
+      parts.push('\nResults were truncated. Use a more specific query, filePattern, or directory to narrow results.');
+    }
+  } else {
+    parts.push(`${header}:\n`);
+    for (const [file, fileMatches] of byFile) {
+      parts.push(`── ${file} ──`);
+      for (const m of fileMatches) {
+        if (m.contextBefore.length > 0) {
+          for (let i = 0; i < m.contextBefore.length; i++) {
+            parts.push(`  ${m.line - m.contextBefore.length + i}: ${m.contextBefore[i]}`);
+          }
         }
+        parts.push(`→ ${m.line}: ${m.text}`);
+        if (m.contextAfter.length > 0) {
+          for (let i = 0; i < m.contextAfter.length; i++) {
+            parts.push(`  ${m.line + 1 + i}: ${m.contextAfter[i]}`);
+          }
+        }
+        parts.push('');
       }
-      parts.push('');
     }
   }
 
@@ -268,7 +298,7 @@ export const searchWorkspaceTool: Tool = {
       throw new Error('Missing required argument: query');
     }
 
-    const maxResults = params.maxResults || 30;
+    const maxResults = Math.min(params.maxResults || 30, 50);
     const contextLines = params.contextLines ?? 2;
     const filePattern = params.filePattern;
     const isRegex = params.isRegex ?? false;
@@ -324,6 +354,6 @@ export const searchWorkspaceTool: Tool = {
       allMatches = await searchManual(rootPaths, query, { filePattern, maxResults, contextLines });
     }
 
-    return formatMatches(allMatches, query, rootPaths);
+    return formatMatches(allMatches, query, rootPaths, maxResults);
   }
 };

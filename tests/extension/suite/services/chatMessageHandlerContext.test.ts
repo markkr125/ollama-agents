@@ -538,10 +538,10 @@ suite('ChatMessageHandler – /review slash command', () => {
     state.currentMode = 'agent';
     state.currentModel = 'test-model';
 
-    let capturedMode = '';
+    let _capturedMode = '';
     const exploreExecutor = {
       execute: async (_prompt: string, _config: any, _opts: any) => {
-        capturedMode = _opts?.mode || _config?.mode || '';
+        _capturedMode = _opts?.mode || _config?.mode || '';
         return { summary: 'Review done', assistantMessage: {} };
       }
     };
@@ -565,13 +565,13 @@ suite('ChatMessageHandler – /review slash command', () => {
     await handler.handle({ type: 'sendMessage', text: '/review' });
     // The /review command should route to the explore executor (review mode)
     // rather than the agent executor
-    const messages = (emitter as any).messages || [];
+    const _messages = (emitter as any).messages || [];
     // We can't easily check the mode parameter since execute() is called differently,
     // but the handler should have invoked the explore executor
   });
 
   test('/security-review is also detected as a review command', async () => {
-    const { emitter, messages } = createStubEmitter();
+    const { emitter, messages: _messages2 } = createStubEmitter();
     const state = createStubViewState();
     state.currentMode = 'agent';
     state.currentModel = 'test-model';

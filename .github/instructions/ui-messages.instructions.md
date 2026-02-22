@@ -13,7 +13,7 @@ description: "Backend-to-frontend and frontend-to-backend message protocol for t
 | `settingsUpdate` | `{settings, hasToken}` | Push updated settings to webview |
 | `showThinking` | `{message, sessionId}` | Show loading state for a session |
 | `hideThinking` | `{sessionId}` | Hide loading state for a session |
-| `startProgressGroup` | `{title, sessionId}` | Start collapsible group |
+| `startProgressGroup` | `{title, detail?, sessionId}` | Start collapsible group |
 | `showToolAction` | `{status, icon, text, detail, filePath?, checkpointId?, startLine?, sessionId}` | Add/update action in group |
 | `finishProgressGroup` | `{sessionId}` | Mark group complete |
 | `subagentThinking` | `{content, durationSeconds?, sessionId}` | Attach sub-agent reasoning to last progress group as collapsible `<details>` |

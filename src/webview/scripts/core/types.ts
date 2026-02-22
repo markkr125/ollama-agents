@@ -112,17 +112,27 @@ export type ActionItem = {
   filePath?: string;
   checkpointId?: string;
   startLine?: number;
+  /** When true, render as a collapsible thinking block instead of a normal action. */
+  isThinking?: boolean;
+  /** Thinking text content (only when isThinking=true). */
+  thinkingContent?: string;
+  /** Thinking duration in seconds (only when isThinking=true). */
+  durationSeconds?: number;
 };
 
 export type ProgressItem = {
   id: string;
   type: 'progress';
   title: string;
+  detail?: string;
   status: 'running' | 'done' | 'error';
   collapsed: boolean;
+  isSubagent?: boolean;
   actions: ActionItem[];
   lastActionStatus?: ActionItem['status'];
+  /** @deprecated Use ActionItem.isThinking entries in actions[] instead. */
   thinkingContent?: string;
+  /** @deprecated Use ActionItem.isThinking entries in actions[] instead. */
   thinkingCollapsed?: boolean;
 };
 
@@ -232,6 +242,7 @@ export type StartProgressGroupMessage = {
   type: 'startProgressGroup';
   sessionId?: string;
   title?: string;
+  detail?: string;
 };
 
 export type ShowToolActionMessage = {

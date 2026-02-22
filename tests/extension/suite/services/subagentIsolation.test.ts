@@ -6,9 +6,13 @@ import * as assert from 'assert';
  * into the parent timeline.
  *
  * This is the core safety contract: when `isSubagent=true`, only tool UI
- * events (progress groups, tool actions, errors, warnings) pass through.
+ * events (tool actions, errors, warnings, subagentThinking) pass through.
  * Text-level events (streamChunk, thinkingBlock, finalMessage, etc.) are
  * suppressed so the parent's timeline is unaffected.
+ *
+ * Per-iteration startProgressGroup/finishProgressGroup are also suppressed
+ * because the sub-agent uses a single wrapper progress group (emitted before
+ * and after the loop via this.emitter.postMessage, NOT via the filtered emit).
  *
  * We replicate the filtered emitter function from agentExploreExecutor.ts
  * to test it in isolation without needing VS Code, OllamaClient, etc.
@@ -17,21 +21,17 @@ import * as assert from 'assert';
 // ── Replicate the filtered emitter logic from agentExploreExecutor.ts ──
 // This mirrors the `emit` function created when `isSubagent=true`.
 const TOOL_UI_TYPES = new Set([
-  'startProgressGroup', 'showToolAction', 'finishProgressGroup',
-  'showError', 'showWarningBanner',
+  'showToolAction',
+  'showError', 'showWarningBanner', 'subagentThinking',
 ]);
 
-function createFilteredEmitter(subLabel: string): {
+function createFilteredEmitter(_subLabel: string): {
   emitted: any[];
   emit: (msg: any) => void;
 } {
   const emitted: any[] = [];
   const emit = (msg: any) => {
     if (TOOL_UI_TYPES.has(msg.type)) {
-      // Prefix progress group titles with sub-agent label for visual nesting
-      if (msg.type === 'startProgressGroup' && msg.title) {
-        msg = { ...msg, title: `${subLabel}: ${msg.title}` };
-      }
       emitted.push(msg);
     }
     // All other types are suppressed (not pushed)
@@ -51,6 +51,8 @@ suite('Sub-agent isolation — filtered emitter', () => {
     'tokenUsage',
     'iterationBoundary',
     'hideThinking',
+    'startProgressGroup',
+    'finishProgressGroup',
   ];
 
   for (const type of SUPPRESSED_TYPES) {
@@ -64,11 +66,10 @@ suite('Sub-agent isolation — filtered emitter', () => {
   // ── Pass-through event types ────────────────────────────────────
 
   const PASSTHROUGH_TYPES = [
-    'startProgressGroup',
     'showToolAction',
-    'finishProgressGroup',
     'showError',
     'showWarningBanner',
+    'subagentThinking',
   ];
 
   for (const type of PASSTHROUGH_TYPES) {
@@ -80,36 +81,35 @@ suite('Sub-agent isolation — filtered emitter', () => {
     });
   }
 
-  // ── Progress group title prefixing ──────────────────────────────
+  // ── Per-iteration progress group suppression ─────────────────────
 
-  test('prefixes startProgressGroup title with sub-agent label', () => {
+  test('suppresses startProgressGroup from internal tool batches', () => {
     const { emitted, emit } = createFilteredEmitter('🤖 Sub-agent');
     emit({ type: 'startProgressGroup', title: 'Reading files', groupId: 'g1' });
+    assert.strictEqual(emitted.length, 0, 'Internal startProgressGroup should be suppressed');
+  });
+
+  test('suppresses finishProgressGroup from internal tool batches', () => {
+    const { emitted, emit } = createFilteredEmitter('🤖 Sub-agent');
+    emit({ type: 'finishProgressGroup', groupId: 'g1' });
+    assert.strictEqual(emitted.length, 0, 'Internal finishProgressGroup should be suppressed');
+  });
+
+  test('subagentThinking passes through to parent emitter', () => {
+    const { emitted, emit } = createFilteredEmitter('🤖 Sub-agent');
+    emit({ type: 'subagentThinking', content: 'I am analyzing...', durationSeconds: 5 });
     assert.strictEqual(emitted.length, 1);
-    assert.strictEqual(emitted[0].title, '🤖 Sub-agent: Reading files');
-    assert.strictEqual(emitted[0].groupId, 'g1', 'groupId should be preserved');
+    assert.strictEqual(emitted[0].content, 'I am analyzing...');
+    assert.strictEqual(emitted[0].durationSeconds, 5);
   });
 
-  test('uses custom subagentTitle in prefix', () => {
-    const { emitted, emit } = createFilteredEmitter('🤖 Exploring auth');
-    emit({ type: 'startProgressGroup', title: 'Searching codebase', groupId: 'g2' });
-    assert.strictEqual(emitted[0].title, '🤖 Exploring auth: Searching codebase');
-  });
+  // ── showToolAction passes through unchanged ─────────────────────
 
-  test('does NOT prefix non-startProgressGroup tool UI types', () => {
+  test('does NOT modify showToolAction text', () => {
     const { emitted, emit } = createFilteredEmitter('🤖 Sub-agent');
     emit({ type: 'showToolAction', text: 'Reading src/index.ts', icon: 'file' });
     assert.strictEqual(emitted.length, 1);
-    assert.strictEqual(emitted[0].text, 'Reading src/index.ts', 'showToolAction text should NOT be prefixed');
-  });
-
-  // ── Original message immutability ───────────────────────────────
-
-  test('does NOT mutate the original startProgressGroup message', () => {
-    const { emit } = createFilteredEmitter('🤖 Sub-agent');
-    const original = { type: 'startProgressGroup', title: 'Reading files', groupId: 'g3' };
-    emit(original);
-    assert.strictEqual(original.title, 'Reading files', 'Original message should not be mutated');
+    assert.strictEqual(emitted[0].text, 'Reading src/index.ts', 'showToolAction text should pass through unchanged');
   });
 
   // ── Mixed event sequences ───────────────────────────────────────
@@ -118,32 +118,34 @@ suite('Sub-agent isolation — filtered emitter', () => {
     const { emitted, emit } = createFilteredEmitter('🤖 Sub-agent');
 
     // Simulate a real sub-agent execution sequence
+    // NOTE: startProgressGroup/finishProgressGroup are now suppressed because
+    // the sub-agent uses a single wrapper group emitted via this.emitter.postMessage
+    // (not via the filtered emit function).
     emit({ type: 'streamChunk', content: 'Analyzing...' });           // suppressed
     emit({ type: 'thinkingBlock', content: 'Let me think...' });      // suppressed
-    emit({ type: 'startProgressGroup', title: 'Reading', groupId: '1' }); // pass
+    emit({ type: 'startProgressGroup', title: 'Reading', groupId: '1' }); // suppressed (internal)
     emit({ type: 'showToolAction', text: 'read_file', status: 'running' }); // pass
     emit({ type: 'showToolAction', text: 'read_file', status: 'success' }); // pass
-    emit({ type: 'finishProgressGroup', groupId: '1' });              // pass
+    emit({ type: 'subagentThinking', content: 'Reasoning...', durationSeconds: 3 }); // pass
+    emit({ type: 'finishProgressGroup', groupId: '1' });              // suppressed (internal)
     emit({ type: 'collapseThinking' });                               // suppressed
     emit({ type: 'tokenUsage', tokens: 1000 });                      // suppressed
     emit({ type: 'finalMessage', content: 'Done.' });                 // suppressed
     emit({ type: 'showError', message: 'Tool failed' });              // pass
 
-    assert.strictEqual(emitted.length, 5, 'Should emit exactly 5 tool UI events');
+    assert.strictEqual(emitted.length, 4, 'Should emit exactly 4 tool UI events');
     assert.deepStrictEqual(
       emitted.map(e => e.type),
-      ['startProgressGroup', 'showToolAction', 'showToolAction', 'finishProgressGroup', 'showError']
+      ['showToolAction', 'showToolAction', 'subagentThinking', 'showError']
     );
   });
 
-  // ── startProgressGroup without title ────────────────────────────
+  // ── All internal progress group events are suppressed ────────────
 
-  test('startProgressGroup without title still passes through', () => {
+  test('startProgressGroup without title is also suppressed', () => {
     const { emitted, emit } = createFilteredEmitter('🤖 Sub-agent');
     emit({ type: 'startProgressGroup', groupId: 'g5' });
-    assert.strictEqual(emitted.length, 1);
-    // Title is falsy, so no prefixing occurs
-    assert.strictEqual(emitted[0].title, undefined);
+    assert.strictEqual(emitted.length, 0, 'Internal startProgressGroup should always be suppressed');
   });
 
   // ── Unknown event types are suppressed (not in TOOL_UI_TYPES) ──

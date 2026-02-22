@@ -1,8 +1,8 @@
 import * as assert from 'assert';
 import {
-  getProgressGroupTitle,
-  getToolActionInfo,
-  getToolSuccessInfo
+    getProgressGroupTitle,
+    getToolActionInfo,
+    getToolSuccessInfo
 } from '../../../../src/views/toolUIFormatter';
 
 suite('toolUIFormatter', () => {
@@ -455,9 +455,15 @@ suite('toolUIFormatter', () => {
       assert.strictEqual(info.actionText, 'No type hierarchy available');
     });
 
-    test('run_subagent success shows completed message', () => {
+    test('run_subagent success preserves title from args', () => {
+      const info = getToolSuccessInfo('run_subagent', { task: 'Find bugs', title: 'Analyze bugs', mode: 'review' }, 'Found 3 potential issues');
+      assert.strictEqual(info.actionText, 'Analyze bugs');
+      assert.ok(info.actionDetail.includes('Found 3 potential issues'));
+    });
+
+    test('run_subagent success without title falls back to Sub-agent', () => {
       const info = getToolSuccessInfo('run_subagent', { task: 'Find bugs', mode: 'review' }, 'Found 3 potential issues');
-      assert.ok(info.actionText.includes('completed'));
+      assert.strictEqual(info.actionText, 'Sub-agent');
     });
   });
 

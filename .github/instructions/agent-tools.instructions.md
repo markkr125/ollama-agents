@@ -245,14 +245,16 @@ When `execute()` is called with `isSubagent=true` (via `executeSubagent()`), the
 
 **Prompt enforcement:** `buildExplorePrompt()` tells the sub-agent it is read-only and its output goes to the calling agent (not the user). `toolUsagePolicy()` tells the parent agent that sub-agent results are returned only to it and the user doesn't see them — the parent must act on the findings itself.
 
-#### Sub-Agent UI Labels
+#### Sub-Agent UI Rendering
 
-When a sub-agent runs, its progress groups are prefixed with a label derived from the `title` parameter:
-- `startProgressGroup` events pass through the emit filter with `title` prefixed: `🤖 Sub-agent: <title> – <groupTitle>`
-- Other tool UI events (`showToolAction`, `finishProgressGroup`) pass through unchanged
-- This lets the user see which sub-agent is responsible for each set of tool actions
+When a sub-agent runs, it renders as a **dedicated collapsible progress group** (not a flat action):
+- The wrapper `startProgressGroup` is emitted by the explore executor (via `this.emitter.postMessage`, NOT the filtered `emit`) with title `Sub-agent: <title>`
+- The sub-agent's internal tool actions (`showToolAction`) pass through the filtered emitter and nest inside this wrapper group
+- Per-iteration `startProgressGroup`/`finishProgressGroup` from the sub-agent's internal tool batches are suppressed by the filter
+- The parent orchestrator suppresses its own `showToolAction` (running/success) for `run_subagent` calls — the wrapper group is the sole UI representation
+- When the batch contains only `run_subagent` calls, the parent also skips its own wrapping progress group ("Delegating subtask") to avoid redundant nesting
 
-The `title` is provided by the orchestrator via the `run_subagent` tool's `title` parameter (required). The `toolUIFormatter.ts` also uses `title` (falling back to `task`) for the progress action display text.
+The `title` is provided by the orchestrator via the `run_subagent` tool's `title` parameter (required). The optional `description` parameter provides a one-sentence detail shown in the progress group header after the title (muted, inline with " — " separator). The `toolUIFormatter.ts` also uses `title` (falling back to `task`) for the progress action display text.
 
 ### `AgentStreamProcessor` — LLM Streaming
 
@@ -689,7 +691,7 @@ All core agent types are centralised in `src/types/agent.ts`:
 *Sub-agent tool:*
 | Tool | Mechanism | Description |
 |------|-----------|-------------|
-| `run_subagent` | `context.runSubagent()` callback → `AgentExploreExecutor.executeSubagent()` | Launch an isolated read-only sub-agent for complex investigation tasks. Accepts `task` (string), `title` (string, required — 3-5 word summary shown as progress label), optional `context_hint` (string — focus hint prepended to task, e.g. "start from src/auth/"), and optional `mode` (`'explore'`, `'review'`, or `'deep-explore'`). Runs with `isSubagent=true` — suppresses streaming, thinking, token usage, and `finalMessage` to prevent polluting the parent's webview timeline. Only tool UI events (progress groups, tool actions) are visible to the user, prefixed with `🤖 Sub-agent: <title>`. Findings are returned as text to the parent agent only — the user does NOT see them. The parent must act on the findings itself. The sub-agent model is resolved via 3-tier fallback (session → global → agent model) — see Explorer Model Resolution. |
+| `run_subagent` | `context.runSubagent()` callback → `AgentExploreExecutor.executeSubagent()` | Launch an isolated read-only sub-agent for complex investigation tasks. Accepts `task` (string), `title` (string, required — 3-5 word summary shown as progress label), optional `description` (string — one-sentence description shown alongside the title in the progress group header), optional `context_hint` (string — focus hint prepended to task, e.g. "start from src/auth/"), and optional `mode` (`'explore'`, `'review'`, or `'deep-explore'`). Runs with `isSubagent=true` — suppresses streaming, thinking, token usage, and `finalMessage` to prevent polluting the parent's webview timeline. Renders as a dedicated collapsible progress group titled `Sub-agent: <title>` with optional detail text and the sub-agent's tool actions nested inside. Findings are returned as text to the parent agent only — the user does NOT see them. The parent must act on the findings itself. The sub-agent model is resolved via 3-tier fallback (session → global → agent model) — see Explorer Model Resolution. The parent's detected primary workspace is forwarded to the sub-agent so it correctly identifies which folder to scope exploration to in multi-root workspaces. |
 
 **Tool Call Format (in LLM responses):**
 ```xml
@@ -782,16 +784,18 @@ All built-in tools resolve file paths through `resolveWorkspacePath()` (single-r
  → /home/user/demo-project/demo-project/rss-fetch.ts  ← WRONG (ENOENT)
 ```
 
-`resolveMultiRootPath` handles this in its **single-root fast path**:
+**Resolution order** (checked sequentially):
 
-1. Checks if `relativePath` starts with `folderName + '/'`
-2. Constructs both the prefixed path (`folder/folderName/rest`) and the stripped path (`folder/rest`)
-3. Uses `fs.existsSync()` to disambiguate:
-   - If the prefixed path **doesn't exist** but the stripped path **does** → use stripped (it was a folder-name prefix)
-   - If the prefixed path **does exist** → keep it (there's a real subdirectory with that name)
-4. This guard prevents breaking projects that actually have a subdirectory named the same as the workspace folder
-
-**Multi-root path** has a separate handling: step 4 of the resolution order interprets the first path segment as a workspace folder **name** and strips it.
+1. **Absolute paths** → returned as-is
+2. **Single-root fast path** (≤1 workspace folder):
+   a. If `relativePath` exactly equals the folder name → return folder root (prevents doubling for `list_files(path="myproject")`)
+   b. If `relativePath` starts with `folderName + '/'` → strip prefix with `fs.existsSync` guard (keeps real subdirectories)
+   c. Fall back to `path.join(primary, relativePath)`
+3. **Multi-root — bare folder name** (no path separators): If `relativePath` matches any workspace folder name → return that folder's root directly. This is checked BEFORE trying `path.join` to prevent matching a same-named subdirectory in another workspace folder.
+4. **Multi-root — primary workspace**: Try `path.join(primary, relativePath)` — use if exists
+5. **Multi-root — other folders**: Try each additional folder — use if exists
+6. **Multi-root — folder-name prefix**: If first path segment matches a folder name and `rest` exists under that folder → strip prefix
+7. **Fallback**: `path.join(primary, relativePath)` (safe for writes)
 
 ### `search_workspace` — Regex Support, Directory Scoping & Output Format
 

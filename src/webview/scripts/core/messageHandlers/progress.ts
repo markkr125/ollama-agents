@@ -1,6 +1,6 @@
 import { scrollToBottom } from '../actions/index';
 import { activeThinkingGroup, currentProgressIndex, currentSessionId, progressIndexStack } from '../state';
-import type { ActionItem, AssistantThreadToolsBlock, ProgressItem, ShowToolActionMessage, StartProgressGroupMessage, SubagentThinkingMessage } from '../types';
+import type { ActionItem, AssistantThreadThinkingGroupBlock, AssistantThreadToolsBlock, ProgressItem, ShowToolActionMessage, StartProgressGroupMessage, SubagentThinkingMessage } from '../types';
 import { closeActiveThinkingGroup } from './streaming';
 import { ensureAssistantThread, getOrCreateToolsBlock } from './threadUtils';
 
@@ -35,6 +35,54 @@ const resolveToolsBlock = (): AssistantThreadToolsBlock => {
   return getOrCreateToolsBlock(thread);
 };
 
+/**
+ * Find the last running progress group across ALL tools blocks in the thread —
+ * including those buried inside closed thinkingGroup sections.
+ *
+ * This is critical for sub-agent events: the wrapper group may have been
+ * created inside a thinkingGroup's tools section, but by the time
+ * showToolAction/finishProgressGroup/subagentThinking arrive, the parent
+ * model may have streamed text which closes the thinkingGroup.
+ * resolveToolsBlock() then returns the thread-level tools block and can't
+ * find the wrapper group.  This helper searches everywhere.
+ */
+const findLastRunningProgressGroup = (): ProgressItem | null => {
+  const thread = ensureAssistantThread();
+
+  // 1. Try current resolveToolsBlock first (fast path)
+  const currentBlock = resolveToolsBlock();
+  for (let i = currentBlock.tools.length - 1; i >= 0; i--) {
+    if (currentBlock.tools[i].type === 'progress' && (currentBlock.tools[i] as ProgressItem).status === 'running') {
+      return currentBlock.tools[i] as ProgressItem;
+    }
+  }
+
+  // 2. Search all thread blocks backwards — check thinkingGroup sections
+  for (let b = thread.blocks.length - 1; b >= 0; b--) {
+    const block = thread.blocks[b];
+    if (block.type === 'thinkingGroup') {
+      for (const section of (block as AssistantThreadThinkingGroupBlock).sections) {
+        if (section.type === 'tools') {
+          for (let i = section.tools.length - 1; i >= 0; i--) {
+            if (section.tools[i].type === 'progress' && (section.tools[i] as ProgressItem).status === 'running') {
+              return section.tools[i] as ProgressItem;
+            }
+          }
+        }
+      }
+    } else if (block.type === 'tools') {
+      for (let i = (block as AssistantThreadToolsBlock).tools.length - 1; i >= 0; i--) {
+        const tool = (block as AssistantThreadToolsBlock).tools[i];
+        if (tool.type === 'progress' && (tool as ProgressItem).status === 'running') {
+          return tool as ProgressItem;
+        }
+      }
+    }
+  }
+
+  return null;
+};
+
 export const handleStartProgressGroup = (msg: StartProgressGroupMessage) => {
   if (msg.sessionId && msg.sessionId !== currentSessionId.value) {
     return;
@@ -56,8 +104,10 @@ export const handleStartProgressGroup = (msg: StartProgressGroupMessage) => {
     id: `progress_${Date.now()}`,
     type: 'progress',
     title: msg.title || 'Working on task',
+    detail: msg.detail || undefined,
     status: 'running',
     collapsed: false,
+    isSubagent: !!(msg as any).isSubagent,
     actions: [],
     lastActionStatus: undefined
   };
@@ -72,7 +122,8 @@ export const handleShowToolAction = (msg: ShowToolActionMessage) => {
   ensureAssistantThread();
   const toolsBlock = resolveToolsBlock();
 
-  // Find last progress group in current tools block (more reliable than global index)
+  // Find last progress group — first in current tools block, then across all
+  // thread blocks (handles case where group lives inside a closed thinkingGroup)
   let group: ProgressItem | null = null;
   for (let i = toolsBlock.tools.length - 1; i >= 0; i--) {
     if (toolsBlock.tools[i].type === 'progress') {
@@ -80,6 +131,11 @@ export const handleShowToolAction = (msg: ShowToolActionMessage) => {
       currentProgressIndex.value = i;
       break;
     }
+  }
+
+  // Fallback: search thinkingGroup sections for a running group
+  if (!group) {
+    group = findLastRunningProgressGroup();
   }
 
   if (!group) {
@@ -150,17 +206,65 @@ export const handleFinishProgressGroup = (msg: any) => {
     return;
   }
   ensureAssistantThread();
+
+  // Resolve the tools block that should contain the group being finished.
+  // IMPORTANT: when a thinkingGroup was active at startProgressGroup time but
+  // has since been closed (e.g. by streamChunk text), resolveToolsBlock() now
+  // returns the thread-level tools block — a DIFFERENT container.  Walk both
+  // the current tools block AND all thinkingGroup sections to find the group.
   const toolsBlock = resolveToolsBlock();
+  let group: ProgressItem | null = null;
+
   if (currentProgressIndex.value !== null) {
-    const group = toolsBlock.tools[currentProgressIndex.value] as ProgressItem;
+    const candidate = toolsBlock.tools[currentProgressIndex.value];
+    if (candidate && candidate.type === 'progress') {
+      group = candidate as ProgressItem;
+    }
+  }
+
+  // Fallback: search current toolsBlock backwards for the last progress group
+  if (!group) {
+    for (let i = toolsBlock.tools.length - 1; i >= 0; i--) {
+      if (toolsBlock.tools[i].type === 'progress' && (toolsBlock.tools[i] as ProgressItem).status === 'running') {
+        group = toolsBlock.tools[i] as ProgressItem;
+        break;
+      }
+    }
+  }
+
+  // Fallback: search thinkingGroup sections (group may live inside a closed thinking group)
+  if (!group) {
+    const thread = ensureAssistantThread();
+    for (let b = thread.blocks.length - 1; b >= 0; b--) {
+      const block = thread.blocks[b];
+      if (block.type === 'thinkingGroup') {
+        for (const section of (block as any).sections) {
+          if (section.type === 'tools') {
+            for (let i = section.tools.length - 1; i >= 0; i--) {
+              if (section.tools[i].type === 'progress' && (section.tools[i] as ProgressItem).status === 'running') {
+                group = section.tools[i] as ProgressItem;
+                break;
+              }
+            }
+          }
+          if (group) break;
+        }
+      }
+      if (group) break;
+    }
+  }
+
+  if (group) {
     const hasError = group.actions.some(action => action.status === 'error');
     group.status = hasError ? 'error' : 'done';
-    group.collapsed = true;
-    group.actions = group.actions.map(action =>
-      action.status === 'running' || action.status === 'pending'
-        ? { ...action, status: 'success' }
-        : action
-    );
+    // Sub-agent groups stay expanded so thinking content remains visible
+    group.collapsed = !group.isSubagent;
+    // Mutate actions in place to preserve Vue reactivity on deeply nested arrays
+    for (let i = 0; i < group.actions.length; i++) {
+      if (group.actions[i].status === 'running' || group.actions[i].status === 'pending') {
+        group.actions[i] = { ...group.actions[i], status: 'success' };
+      }
+    }
     const lastAction = group.actions[group.actions.length - 1];
     group.lastActionStatus = lastAction?.status || 'success';
   }
@@ -203,23 +307,41 @@ export const handleShowError = (msg: any) => {
 };
 
 /**
- * Handle sub-agent thinking content. Attaches thinking to the last
- * sub-agent progress group so it can be shown as a collapsible <details>.
+ * Handle sub-agent thinking content. Inserts thinking as an ordered
+ * ActionItem in the progress group so it renders inline with tool actions
+ * (before/after them depending on when it arrived).
  */
 export const handleSubagentThinking = (msg: SubagentThinkingMessage) => {
   if (msg.sessionId && msg.sessionId !== currentSessionId.value) {
     return;
   }
   ensureAssistantThread();
-  const toolsBlock = resolveToolsBlock();
 
-  // Find the last progress group (should be a sub-agent group)
+  // Find the last progress group — search current tools block first,
+  // then fall back to searching all blocks (handles closed thinkingGroups)
+  const toolsBlock = resolveToolsBlock();
+  let group: ProgressItem | null = null;
   for (let i = toolsBlock.tools.length - 1; i >= 0; i--) {
     if (toolsBlock.tools[i].type === 'progress') {
-      const group = toolsBlock.tools[i] as ProgressItem;
-      group.thinkingContent = msg.content || '';
-      group.thinkingCollapsed = true;
+      group = toolsBlock.tools[i] as ProgressItem;
       break;
     }
+  }
+  if (!group) {
+    group = findLastRunningProgressGroup();
+  }
+
+  if (group) {
+    // Push as an ordered action item — renders inline at this position
+    group.actions.push({
+      id: `thinking_${Date.now()}_${Math.random()}`,
+      status: 'success',
+      icon: '💭',
+      text: msg.durationSeconds ? `Thought for ${msg.durationSeconds}s` : 'Thought',
+      detail: null,
+      isThinking: true,
+      thinkingContent: msg.content || '',
+      durationSeconds: msg.durationSeconds
+    });
   }
 };

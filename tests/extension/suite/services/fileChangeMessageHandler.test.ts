@@ -1,6 +1,6 @@
 import * as assert from 'assert';
-import { FileChangeMessageHandler } from '../../../../src/views/messageHandlers/fileChangeMessageHandler';
 import { WebviewMessageEmitter } from '../../../../src/views/chatTypes';
+import { FileChangeMessageHandler } from '../../../../src/views/messageHandlers/fileChangeMessageHandler';
 
 /**
  * Tests for FileChangeMessageHandler — specifically the try/catch robustness
@@ -241,7 +241,7 @@ suite('FileChangeMessageHandler', () => {
 
       let callCount = 0;
       const { executor } = createStubAgentExecutor({
-        computeFilesDiffStats: async (checkpointId: string) => {
+        computeFilesDiffStats: async (_checkpointId: string) => {
           callCount++;
           // Simulate increasing stats on each call (file re-edited)
           return [{ path: 'a.ts', additions: callCount * 10, deletions: callCount, action: 'modified' }];

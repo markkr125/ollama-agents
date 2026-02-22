@@ -1,6 +1,7 @@
 node_modules
 out
 dist
+agents-references
 *.vsix
 .vscode/*
 !.vscode/tasks.json

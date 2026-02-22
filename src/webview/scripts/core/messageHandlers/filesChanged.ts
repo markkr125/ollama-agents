@@ -201,7 +201,7 @@ export function removeBlock(): void {
 }
 
 /** Remove a checkpointId from the block if no files reference it. */
-function cleanupCheckpointId(block: AssistantThreadFilesChangedBlock, checkpointId: string): void {
+function _cleanupCheckpointId(block: AssistantThreadFilesChangedBlock, checkpointId: string): void {
   if (!block.files.some(f => f.checkpointId === checkpointId)) {
     block.checkpointIds = block.checkpointIds.filter(id => id !== checkpointId);
   }

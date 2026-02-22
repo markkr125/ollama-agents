@@ -1113,8 +1113,12 @@ describe('subagentThinking handler', () => {
     const thread = state.timeline.value[0] as any;
     const toolsBlock = thread.blocks.find((b: any) => b.type === 'tools');
     const group = toolsBlock.tools[0];
-    expect(group.thinkingContent).toBe('I analyzed the code structure and found...');
-    expect(group.thinkingCollapsed).toBe(true);
+    // Thinking is now an ordered action entry inside actions[]
+    const thinkingAction = group.actions.find((a: any) => a.isThinking);
+    expect(thinkingAction).toBeDefined();
+    expect(thinkingAction.thinkingContent).toBe('I analyzed the code structure and found...');
+    expect(thinkingAction.durationSeconds).toBe(5);
+    expect(thinkingAction.text).toBe('Thought for 5s');
   });
 
   test('handleSubagentThinking with empty content still attaches', async () => {
@@ -1136,8 +1140,10 @@ describe('subagentThinking handler', () => {
     const thread = state.timeline.value[0] as any;
     const toolsBlock = thread.blocks.find((b: any) => b.type === 'tools');
     const group = toolsBlock.tools[0];
-    expect(group.thinkingContent).toBe('');
-    expect(group.thinkingCollapsed).toBe(true);
+    // Empty thinking is still pushed as an action entry
+    const thinkingAction = group.actions.find((a: any) => a.isThinking);
+    expect(thinkingAction).toBeDefined();
+    expect(thinkingAction.thinkingContent).toBe('');
   });
 
   test('handleSubagentThinking with wrong sessionId is ignored', async () => {

@@ -117,6 +117,13 @@ suite('resolveMultiRootPath', () => {
     assert.strictEqual(result, path.join(primaryDir, 'src/app.ts'));
   });
 
+  test('resolves bare folder name to workspace root in single-root mode', () => {
+    // LLMs sometimes call list_files(path="myproject") — should resolve to root,
+    // not root/myproject (doubled path)
+    const result = resolveMultiRootPath('frontend', primary);
+    assert.strictEqual(result, primaryDir);
+  });
+
   test('does not strip folder-name prefix when it is a real subdirectory', () => {
     // If "frontend/" is actually a subdirectory inside primary, don't strip
     const subdir = path.join(primaryDir, 'frontend', 'nested');
@@ -176,6 +183,30 @@ suite('resolveMultiRootPath', () => {
     const result = resolveMultiRootPath('backend/src/app.ts', primary, allFolders);
     // Should fall back to primary workspace (new file path)
     assert.strictEqual(result, path.join(primaryDir, 'backend/src/app.ts'));
+  });
+
+  // ─── Bare folder name resolution (single segment) ──────────────
+
+  test('resolves bare folder name to workspace folder root', () => {
+    // LLMs call list_files(path="backend") — should resolve to backend root,
+    // not primaryWorkspace/backend (doubled path)
+    const result = resolveMultiRootPath('backend', primary, allFolders);
+    assert.strictEqual(result, secondaryDir);
+  });
+
+  test('resolves bare folder name for non-primary folder', () => {
+    const result = resolveMultiRootPath('shared', primary, allFolders);
+    assert.strictEqual(result, tertiaryDir);
+  });
+
+  test('resolves bare primary folder name to primary root', () => {
+    const result = resolveMultiRootPath('frontend', primary, allFolders);
+    assert.strictEqual(result, primaryDir);
+  });
+
+  test('bare name that does not match any folder falls back to primary', () => {
+    const result = resolveMultiRootPath('nonexistent', primary, allFolders);
+    assert.strictEqual(result, path.join(primaryDir, 'nonexistent'));
   });
 
   // ─── Fallback for new files ─────────────────────────────────────

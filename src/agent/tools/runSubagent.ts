@@ -43,6 +43,11 @@ export const runSubagentTool: Tool = {
         description: 'Optional hint to focus the sub-agent — e.g. "start from src/auth/" or "look at the database schema". ' +
           'Prepended to the sub-agent system prompt to reduce unnecessary exploration.'
       },
+      description: {
+        type: 'string',
+        description: 'A brief one-sentence description of what the sub-agent will investigate. ' +
+          'Shown to the user alongside the title. Example: "Trace the SearchObject class hierarchy and its data flow"'
+      },
       mode: {
         type: 'string',
         enum: ['explore', 'review', 'deep-explore'],
@@ -58,6 +63,7 @@ export const runSubagentTool: Tool = {
       return 'Error: "task" parameter is required and must be a string.';
     }
     const title = params.title && typeof params.title === 'string' ? params.title : undefined;
+    const description = params.description && typeof params.description === 'string' ? params.description : undefined;
     const contextHint = params.context_hint && typeof params.context_hint === 'string' ? params.context_hint : undefined;
     const validModes = ['explore', 'review', 'deep-explore'] as const;
     const mode = (validModes.includes(params.mode) ? params.mode : 'explore') as 'explore' | 'review' | 'deep-explore';
@@ -71,7 +77,7 @@ export const runSubagentTool: Tool = {
 
     try {
       context.outputChannel.appendLine(`[run_subagent] Launching sub-agent: ${title || mode} — ${task.substring(0, 100)}`);
-      const result = await context.runSubagent(effectiveTask, mode, contextHint, title);
+      const result = await context.runSubagent(effectiveTask, mode, contextHint, title, description);
       return result || '(Sub-agent returned no findings.)';
     } catch (error: any) {
       return `Sub-agent error: ${error.message || 'Unknown error'}`;

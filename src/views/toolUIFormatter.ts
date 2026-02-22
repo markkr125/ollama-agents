@@ -269,9 +269,10 @@ export function getToolSuccessInfo(
       };
     }
     case 'run_subagent': {
+      const title = args?.title || 'Sub-agent';
       const summary = (output || '').split('\n')[0]?.substring(0, 80) || 'Completed';
       return {
-        actionText: 'Sub-agent completed',
+        actionText: title,
         actionDetail: summary
       };
     }

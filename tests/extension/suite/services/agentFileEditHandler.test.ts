@@ -1,7 +1,7 @@
 import * as assert from 'assert';
-import * as path from 'path';
-import * as os from 'os';
 import * as fs from 'fs/promises';
+import * as os from 'os';
+import * as path from 'path';
 import * as vscode from 'vscode';
 import { AgentFileEditHandler } from '../../../../src/services/agent/agentFileEditHandler';
 import { WebviewMessageEmitter } from '../../../../src/views/chatTypes';
@@ -182,7 +182,7 @@ suite('AgentFileEditHandler', () => {
 
     test('existing file: emits exactly ONE showToolAction(running) with "Editing" verb', async () => {
       const { emitter, messages } = createStubEmitter();
-      const { persist, calls } = createStubPersist();
+      const { persist, calls: _calls } = createStubPersist();
 
       // Create existing file first
       const filePath = path.join(tempDir, 'src');
@@ -222,7 +222,7 @@ suite('AgentFileEditHandler', () => {
 
     test('sensitive file with auto-approve: still only ONE showToolAction(running)', async () => {
       const { emitter, messages } = createStubEmitter();
-      const { persist, calls } = createStubPersist();
+      const { persist, calls: _calls2 } = createStubPersist();
 
       const handler = new AgentFileEditHandler(
         stubToolRegistry(),
@@ -254,7 +254,7 @@ suite('AgentFileEditHandler', () => {
 
     test('sensitive file with manual approve: only ONE running + ONE pending, no extra running', async () => {
       const { emitter, messages } = createStubEmitter();
-      const { persist, calls } = createStubPersist();
+      const { persist, calls: _calls3 } = createStubPersist();
 
       const handler = new AgentFileEditHandler(
         stubToolRegistry(),

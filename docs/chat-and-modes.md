@@ -141,7 +141,7 @@ The `run_subagent` tool allows the main Agent (orchestrator) to spawn a read-onl
 1. The agent identifies a research task that requires multiple tool calls
 2. It calls `run_subagent` with a `title` (shown in UI), `task` description, optional `context_hint` (focus hint), and `mode` (`explore`, `review`, or `deep-explore`)
 3. A lightweight explore/review/deep-explore executor runs the sub-task in **isolated mode**
-4. The sub-agent's progress groups are labeled with `🤖 Sub-agent: <title>` so the user can see which sub-agent is doing what
+4. The sub-agent renders as a dedicated collapsible progress group titled `Sub-agent: <title>` with its tool actions nested inside
 5. The sub-agent's findings are returned as text to the main agent — they are **not** shown to the user automatically
 6. The parent agent must act on the findings itself (e.g., write files, make edits)
 

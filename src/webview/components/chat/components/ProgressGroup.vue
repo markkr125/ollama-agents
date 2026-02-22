@@ -21,21 +21,6 @@
     </div>
   </div>
 
-  <!-- Flat rendering for sub-agent actions (no collapsible group) -->
-  <div v-else-if="isFlatSubagentGroup" class="flat-subagent-actions">
-    <div v-for="action in item.actions" :key="action.id" class="flat-subagent-action">
-      <span class="action-status" :class="actionStatusClass(action.status)">
-        <span v-if="action.status === 'running'" class="spinner"></span>
-        <span v-else-if="action.status === 'success'">✓</span>
-        <span v-else-if="action.status === 'error'">✗</span>
-        <span v-else>○</span>
-      </span>
-      <span class="subagent-icon">{{ action.icon }}</span>
-      <span class="subagent-text">{{ action.text }}</span>
-      <span v-if="action.detail" class="subagent-mode">{{ action.detail }}</span>
-    </div>
-  </div>
-
   <!-- Normal progress group rendering -->
   <div v-else class="progress-group" :class="{ collapsed: item.collapsed }">
     <div class="progress-header" @click="toggleProgress(item)">
@@ -46,49 +31,50 @@
         <span v-else-if="progressStatus(item) === 'error'">✗</span>
         <span v-else>○</span>
       </span>
-      <span class="progress-title">{{ item.title }}</span>
+      <span class="progress-title">{{ item.title }}<span v-if="item.detail" class="progress-detail"> — {{ item.detail }}</span></span>
     </div>
     <div class="progress-actions">
-      <div v-for="action in item.actions" :key="action.id" class="action-item" :class="{ 'has-listing': action.detail && hasListing(action.detail) }">
-        <span class="action-status" :class="actionStatusClass(action.status)">
-          <span v-if="action.status === 'running'" class="spinner"></span>
-          <span v-else-if="action.status === 'success'">✓</span>
-          <span v-else-if="action.status === 'error'">✗</span>
-          <span v-else>○</span>
-        </span>
-        <span class="file-icon">{{ action.icon }}</span>
-        <div class="action-text">
-          <span
-            class="filename"
-            :class="{ clickable: !!action.filePath }"
-            @click.stop="action.filePath && handleFileClick(action)"
-          >{{ action.text }}</span>
-          <template v-if="action.detail && hasListing(action.detail)">
-            <span class="detail"> {{ getDetailSummary(action.detail) }}</span>
-            <div class="action-listing tree-listing">
-              <div
-                v-for="(entry, i) in parseListing(action.detail)"
-                :key="i"
-                class="listing-row"
-                :class="[entry.type, { clickable: true }]"
-                :title="entry.fullPath"
-                @click.stop="handleListingClick(entry)"
-              >
-                <span class="tree-connector">{{ i === parseListing(action.detail).length - 1 ? '└' : '├' }}</span>
-                <span class="listing-icon">{{ entry.icon }}</span>
-                <span class="listing-name">{{ entry.name }}</span>
-                <span v-if="entry.size" class="listing-size">{{ entry.size }}</span>
+      <template v-for="action in item.actions" :key="action.id">
+        <!-- Sub-agent thinking: plain text content inline -->
+        <pre v-if="action.isThinking" class="subagent-thinking-text">{{ action.thinkingContent }}</pre>
+
+        <!-- Normal action item -->
+        <div v-else class="action-item" :class="{ 'has-listing': action.detail && hasListing(action.detail) }">
+          <span class="action-status" :class="actionStatusClass(action.status)">
+            <span v-if="action.status === 'running'" class="spinner"></span>
+            <span v-else-if="action.status === 'success'">&#x2713;</span>
+            <span v-else-if="action.status === 'error'">&#x2717;</span>
+            <span v-else>&#x25CB;</span>
+          </span>
+          <span class="file-icon">{{ action.icon }}</span>
+          <div class="action-text">
+            <span
+              class="filename"
+              :class="{ clickable: !!action.filePath }"
+              @click.stop="action.filePath && handleFileClick(action)"
+            >{{ action.text }}</span>
+            <template v-if="action.detail && hasListing(action.detail)">
+              <span class="detail"> {{ getDetailSummary(action.detail) }}</span>
+              <div class="action-listing tree-listing">
+                <div
+                  v-for="(entry, i) in parseListing(action.detail)"
+                  :key="i"
+                  class="listing-row"
+                  :class="[entry.type, { clickable: true }]"
+                  :title="entry.fullPath"
+                  @click.stop="handleListingClick(entry)"
+                >
+                  <span class="tree-connector">{{ i === parseListing(action.detail).length - 1 ? '└' : '├' }}</span>
+                  <span class="listing-icon">{{ entry.icon }}</span>
+                  <span class="listing-name">{{ entry.name }}</span>
+                  <span v-if="entry.size" class="listing-size">{{ entry.size }}</span>
+                </div>
               </div>
-            </div>
-          </template>
-          <span v-else-if="action.detail" class="detail" :class="{ 'diff-stats': action.filePath }"> {{ action.detail }}</span>
+            </template>
+            <span v-else-if="action.detail" class="detail" :class="{ 'diff-stats': action.filePath }"> {{ action.detail }}</span>
+          </div>
         </div>
-      </div>
-      <!-- Sub-agent thinking (collapsible) -->
-      <details v-if="item.thinkingContent" class="subagent-thinking" @toggle.stop>
-        <summary class="subagent-thinking-summary">Sub-agent reasoning</summary>
-        <pre class="subagent-thinking-content">{{ item.thinkingContent }}</pre>
-      </details>
+      </template>
     </div>
   </div>
 </template>
@@ -115,15 +101,6 @@ const isFlatFileGroup = computed(() => {
   if (props.item.actions.length === 0) return false;
   // Only file-write groups render flat (by group title)
   return /\b(writ|modif|creat)/i.test(props.item.title);
-});
-
-/**
- * True when the group contains only sub-agent actions.
- * Sub-agent actions render flat with full task text visible.
- */
-const isFlatSubagentGroup = computed(() => {
-  if (props.item.actions.length === 0) return false;
-  return /delegat|subtask|sub-?agent/i.test(props.item.title);
 });
 
 const getVerb = (action: ActionItem): string => {

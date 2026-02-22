@@ -246,8 +246,10 @@ class TimelineBuilder {
       id: payload?.groupId || `progress_${messageId}`,
       type: 'progress',
       title: payload?.title || 'Working on task',
+      detail: payload?.detail || undefined,
       status: 'running',
       collapsed: false,
+      isSubagent: !!payload?.isSubagent,
       actions: []
     };
     toolsBlock.tools.push(this.currentGroup);
@@ -314,17 +316,25 @@ class TimelineBuilder {
   }
 
   /**
-   * Attach sub-agent thinking content to the last progress group.
-   * Displayed as a collapsible <details> in ProgressGroup.vue.
+   * Insert sub-agent thinking content as an ordered ActionItem in the
+   * progress group, so it renders inline at the correct position.
    */
   private handleSubagentThinking(payload: any): void {
     const toolsBlock = this.resolveToolsBlock();
-    // Find the last progress group and attach thinking content
+    // Find the last progress group and insert thinking as an action
     for (let i = toolsBlock.tools.length - 1; i >= 0; i--) {
       if (toolsBlock.tools[i].type === 'progress') {
         const group = toolsBlock.tools[i] as ProgressItem;
-        group.thinkingContent = payload?.content || '';
-        group.thinkingCollapsed = true;
+        group.actions.push({
+          id: `thinking_${Date.now()}_${Math.random()}`,
+          status: 'success',
+          icon: '💭',
+          text: payload?.durationSeconds ? `Thought for ${payload.durationSeconds}s` : 'Thought',
+          detail: null,
+          isThinking: true,
+          thinkingContent: payload?.content || '',
+          durationSeconds: payload?.durationSeconds
+        });
         break;
       }
     }
@@ -338,7 +348,8 @@ class TimelineBuilder {
         : action
     );
     this.currentGroup.status = this.currentGroup.actions.some(a => a.status === 'error') ? 'error' : 'done';
-    this.currentGroup.collapsed = true;
+    // Sub-agent groups stay expanded so thinking content remains visible
+    this.currentGroup.collapsed = !this.currentGroup.isSubagent;
     // Restore parent group from the stack (supports nested sub-agent groups)
     this.currentGroup = this.groupStack.pop() || null;
   }

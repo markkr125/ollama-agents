@@ -166,10 +166,12 @@ export function formatTextToolResults(results: string[]): string {
 export function isCompletionSignaled(response: string, thinkingContent?: string): boolean {
   const completionSignal = `${response} ${thinkingContent || ''}`;
   const declaredState = parseControlState(completionSignal);
+  const lower = completionSignal.toLowerCase();
   return (
     declaredState === 'complete' ||
-    completionSignal.includes('[TASK_COMPLETE]') ||
-    completionSignal.toLowerCase().includes('task is complete')
+    lower.includes('[task_complete]') ||
+    lower.includes('task is complete') ||
+    lower.includes('[end_of_exploration]')
   );
 }
 
