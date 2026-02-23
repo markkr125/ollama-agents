@@ -23,7 +23,7 @@ How to add a new test to Ollama Copilot. Covers both test harnesses.
 | If the code under test… | Use | Location |
 |--------------------------|-----|----------|
 | Uses `vscode` API, extension activation, storage URIs, workspace folders | Extension host (Mocha) | `tests/extension/suite/` |
-| Is a backend service (database, HTTP client, session index, terminal) | Extension host (Mocha) | `tests/extension/suite/services/` |
+| Is a backend service (database, HTTP client, session index, terminal) | Extension host (Mocha) | `tests/extension/suite/database/` or `suite/views/` |
 | Is a pure utility (no `vscode` dependency) | Extension host (Mocha) | `tests/extension/suite/utils/` |
 | Lives in `src/webview/scripts/core/*` (state, actions, computed, handlers) | Webview (Vitest) | `tests/webview/core/` |
 | Is a Vue component | Webview (Vitest) | `tests/webview/components/` |
@@ -68,7 +68,8 @@ suite('myFunction', () => {
 |---------|-------------------------------|
 | `suite/*.test.ts` | `../../../src/` |
 | `suite/agent/*.test.ts` | `../../../../src/` |
-| `suite/services/*.test.ts` | `../../../../src/` |
+| `suite/database/*.test.ts` | `../../../../src/` |
+| `suite/views/*.test.ts` | `../../../../src/` |
 | `suite/utils/*.test.ts` | `../../../../src/` |
 | Mock server | `../../mocks/ollamaMockServer` |
 

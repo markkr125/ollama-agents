@@ -8,7 +8,7 @@
 > | `.github/instructions/ui-messages.instructions.md` | `src/views/**,src/webview/**` | Backend↔frontend message protocol (full type tables), chat view structure, streaming behavior |
 > | `.github/instructions/webview-ui.instructions.md` | `src/webview/**` | Assistant thread structure, CSS theming, diff2html, Vue patterns, session UX |
 > | `.github/instructions/testing.instructions.md` | `tests/**` | Test harnesses, coverage catalogs, webview test rules |
-> | `.github/instructions/agent-tools.instructions.md` | `src/agent/**,src/services/agent/**,src/utils/toolCallParser.ts` | Agent execution flow, tool registry, tool call parser, terminal execution, command safety, approval flow |
+> | `.github/instructions/agent-tools.instructions.md` | `src/agent/**,src/utils/toolCallParser.ts` | Agent execution flow, tool registry, tool call parser, terminal execution, command safety, approval flow |
 > | `.github/instructions/extension-architecture.instructions.md` | `src/extension.ts,src/config/**,src/services/**,src/types/**` | Type system (3 message interfaces), service init order, config patterns, OllamaClient API, terminal manager, model compatibility |
 > | `.github/instructions/documentation.instructions.md` | `docs/**,README.md` | Doc index maintenance, cross-link rules, TOC requirement, content rules, when to update |
 >
@@ -178,62 +178,76 @@ src/
 ├── extension.ts          # Entry point — ServiceContainer + phased init helpers
 ├── agent/                # Agent-related functionality
 │   ├── executor.ts       # Legacy executor (AgentExecutor — used by agentMode.ts only)
-│   ├── gitOperations.ts  # Git branch/commit operations
-│   ├── prWorkflow.ts     # PR creation workflow
-│   ├── sessionManager.ts # Manages agent sessions
-│   ├── sessionViewer.ts  # Tree view for sessions
 │   ├── taskTracker.ts    # Tracks planned tasks
 │   ├── toolRegistry.ts   # ToolRegistry class — registration, lookup, execution
+│   ├── git/              # Git operations
+│   │   ├── gitCli.ts          # Low-level git CLI wrapper
+│   │   ├── gitOperations.ts   # Git branch/commit operations
+│   │   └── prWorkflow.ts      # PR creation workflow
+│   ├── sessions/         # Agent session management
+│   │   ├── sessionManager.ts  # Manages agent sessions
+│   │   └── sessionViewer.ts   # Tree view for sessions
+│   ├── execution/        # Agent execution engine (decomposed — see agent-tools instructions)
+│   │   ├── titleGenerator.ts        # Fire-and-forget LLM session title generation with timeout
+│   │   ├── streamingFileWriter.ts   # Streaming file write helper
+│   │   ├── orchestration/           # Core loop + intent routing
+│   │   │   ├── agentChatExecutor.ts     # Thin orchestrator — wires sub-handlers, runs main loop
+│   │   │   ├── agentExploreExecutor.ts  # Read-only executor for explore/plan/review/deep-explore/chat modes
+│   │   │   └── agentDispatcher.ts       # Intent classifier — LLM + heuristic, routes to executor + prompt framing
+│   │   ├── streaming/              # LLM streaming + context management
+│   │   │   ├── agentStreamProcessor.ts  # Owns streaming: LLM chunk loop, throttled UI, thinking
+│   │   │   ├── agentControlPlane.ts     # Structured continuation messages — <agent_control> JSON packets
+│   │   │   ├── agentContextCompactor.ts # Conversation summarization — 7-section structured analysis
+│   │   │   └── agentSessionMemory.ts    # Structured notes across iterations with DB persistence
+│   │   ├── prompts/                # System prompt assembly
+│   │   │   ├── agentPromptBuilder.ts    # Modular system prompt assembly (native + XML + mode-specific)
+│   │   │   └── projectContext.ts        # Auto-discovers project files + git context at session start
+│   │   ├── toolExecution/          # Tool batch execution + lifecycle
+│   │   │   ├── agentToolRunner.ts       # Executes tool batches: progress groups, approvals, results
+│   │   │   ├── agentSummaryBuilder.ts   # Post-loop: summary generation, final message, filesChanged
+│   │   │   └── checkpointManager.ts     # Checkpoint/snapshot lifecycle
+│   │   └── approval/               # Approval flow + safety
+│   │       ├── agentTerminalHandler.ts  # Terminal command approval + execution
+│   │       ├── agentFileEditHandler.ts  # File edit approval + execution
+│   │       ├── approvalManager.ts       # Shared approval state tracking
+│   │       ├── commandSafety.ts         # Terminal command safety analysis
+│   │       ├── terminalApproval.ts      # Terminal approval decision logic
+│   │       └── diffRenderer.ts          # Diff rendering for file edit approval cards
 │   └── tools/            # Individual tool implementations (one file per tool)
 │       ├── index.ts           # Barrel export + builtInTools[]
-│       ├── pathUtils.ts       # resolveWorkspacePath / resolveMultiRootPath shared utility
-│       ├── symbolResolver.ts  # Shared position resolution for LSP tools
-│       ├── readFile.ts        # read_file tool
-│       ├── writeFile.ts       # write_file tool
 │       ├── searchWorkspace.ts # search_workspace tool (ripgrep-powered)
-│       ├── listFiles.ts       # list_files tool
 │       ├── runTerminalCommand.ts # run_terminal_command tool
-│       ├── getDiagnostics.ts  # get_diagnostics tool
-│       ├── getDocumentSymbols.ts  # get_document_symbols (LSP)
-│       ├── findDefinition.ts      # find_definition (LSP)
-│       ├── findReferences.ts      # find_references (LSP)
-│       ├── findSymbol.ts          # find_symbol (LSP)
-│       ├── getHoverInfo.ts        # get_hover_info (LSP)
-│       ├── getCallHierarchy.ts    # get_call_hierarchy (LSP)
-│       ├── findImplementations.ts # find_implementations (LSP)
-│       ├── getTypeHierarchy.ts    # get_type_hierarchy (LSP)
-│       └── runSubagent.ts         # run_subagent (sub-agent launcher)
+│       ├── runSubagent.ts         # run_subagent (sub-agent launcher)
+│       ├── filesystem/        # File system tools + path resolution
+│       │   ├── pathUtils.ts       # resolveWorkspacePath / resolveMultiRootPath shared utility
+│       │   ├── readFile.ts        # read_file tool
+│       │   ├── writeFile.ts       # write_file tool
+│       │   └── listFiles.ts       # list_files tool
+│       └── lsp/               # LSP-powered code intelligence tools
+│           ├── symbolResolver.ts      # Shared position resolution for LSP tools
+│           ├── getDiagnostics.ts      # get_diagnostics tool
+│           ├── getDocumentSymbols.ts  # get_document_symbols (LSP)
+│           ├── findDefinition.ts      # find_definition (LSP)
+│           ├── findReferences.ts      # find_references (LSP)
+│           ├── findSymbol.ts          # find_symbol (LSP)
+│           ├── getHoverInfo.ts        # get_hover_info (LSP)
+│           ├── getCallHierarchy.ts    # get_call_hierarchy (LSP)
+│           ├── findImplementations.ts # find_implementations (LSP)
+│           └── getTypeHierarchy.ts    # get_type_hierarchy (LSP)
+├── completion/           # Inline code completion
+│   ├── completionProvider.ts  # Inline completion provider
+│   ├── contextBuilder.ts      # Builds context for prompts
+│   └── fimTemplates.ts        # Fill-in-the-middle prompt templates
 ├── config/
 │   └── settings.ts       # Configuration helpers
 ├── modes/                # Different interaction modes
 │   ├── agentMode.ts      # Autonomous agent commands
 │   ├── editCommand.ts    # Edit-with-instructions VS Code command
 │   └── planMode.ts       # Multi-step planning (VS Code native chat)
-├── providers/
-│   └── completionProvider.ts  # Inline completion provider
 ├── services/             # Core services (organized into subfolders)
-│   ├── contextBuilder.ts      # Builds context for prompts
 │   ├── editManager.ts         # Manages edit operations
-│   ├── pendingEditDecorationProvider.ts # File explorer decoration (pending badge)
 │   ├── terminalManager.ts     # Terminal lifecycle + command execution
 │   ├── tokenManager.ts        # Bearer token management
-│   ├── agent/                 # Agent execution engine (decomposed — see agent-tools instructions)
-│   │   ├── agentChatExecutor.ts     # Thin orchestrator — wires sub-handlers, runs main loop
-│   │   ├── agentExploreExecutor.ts  # Read-only executor for explore/plan/review/deep-explore/chat modes
-│   │   ├── agentDispatcher.ts       # Intent classifier — LLM + heuristic, routes to executor + prompt framing
-│   │   ├── agentStreamProcessor.ts  # Owns streaming: LLM chunk loop, throttled UI, thinking
-│   │   ├── agentToolRunner.ts       # Executes tool batches: progress groups, approvals, results
-│   │   ├── agentSummaryBuilder.ts   # Post-loop: summary generation, final message, filesChanged
-│   │   ├── agentTerminalHandler.ts  # Terminal command approval + execution
-│   │   ├── agentFileEditHandler.ts  # File edit approval + execution
-│   │   ├── agentPromptBuilder.ts    # Modular system prompt assembly (native + XML + mode-specific)
-│   │   ├── agentContextCompactor.ts # Conversation summarization — 7-section structured analysis
-│   │   ├── agentSessionMemory.ts    # Structured notes across iterations with DB persistence
-│   │   ├── agentControlPlane.ts     # Structured continuation messages — <agent_control> JSON packets
-│   │   ├── projectContext.ts        # Auto-discovers project files + git context at session start
-│   │   ├── titleGenerator.ts        # Fire-and-forget LLM session title generation with timeout
-│   │   ├── approvalManager.ts       # Shared approval state tracking
-│   │   └── checkpointManager.ts     # Checkpoint/snapshot lifecycle
 │   ├── database/              # Persistence layer
 │   │   ├── databaseService.ts       # Thin facade — delegates CRUD to SQLite, search to LanceSearch
 │   │   ├── lanceSearchService.ts    # LanceDB init, FTS/vector/hybrid search, RRF reranking
@@ -246,14 +260,17 @@ src/
 │   ├── model/                 # Model management
 │   │   ├── ollamaClient.ts          # Ollama/OpenWebUI HTTP client
 │   │   ├── modelManager.ts          # Model listing/selection/caching
-│   │   └── modelCompatibility.ts    # Model capability detection
+│   │   ├── modelCompatibility.ts    # Model capability detection
+│   │   └── streamParser.ts          # NDJSON stream parsing
 │   └── review/                # Inline change review (decomposed)
-│       ├── pendingEditReviewService.ts # Thin facade: state + events + hunk keep/undo
-│       ├── reviewSessionBuilder.ts    # DB snapshots → ReviewSession construction
-│       ├── reviewNavigator.ts         # Pure stateless navigation math
-│       ├── reviewDecorationManager.ts # Editor decorations + file opening
-│       ├── reviewCodeLensProvider.ts  # CodeLens provider for Keep/Undo actions
-│       └── reviewTypes.ts            # Shared review type definitions
+│       ├── pendingEditReviewService.ts     # Thin facade: state + events + hunk keep/undo
+│       ├── reviewSessionBuilder.ts        # DB snapshots → ReviewSession construction
+│       ├── reviewNavigator.ts             # Pure stateless navigation math
+│       ├── reviewDecorationManager.ts     # Editor decorations + file opening
+│       ├── reviewCodeLensProvider.ts      # CodeLens provider for Keep/Undo actions
+│       ├── reviewTypes.ts                 # Shared review type definitions
+│       ├── originalContentProvider.ts     # Content provider for original file state
+│       └── pendingEditDecorationProvider.ts # File explorer decoration (pending badge)
 ├── views/
 │   ├── chatView.ts       # Webview lifecycle shell (thin — delegates to MessageRouter)
 │   ├── messageRouter.ts  # O(1) message type → IMessageHandler dispatch
@@ -281,27 +298,32 @@ src/
 │   │   ├── chat/               # Chat feature folder
 │   │   │   ├── ChatPage.vue         # Main page component (entry point)
 │   │   │   └── components/          # Chat sub-components
-│   │   │       ├── ChatInput.vue         # Copilot-style input (pill pickers, implicit chips, attach, tools)
-│   │   │       ├── CommandApproval.vue
-│   │   │       ├── DropdownMenu.vue      # Reusable floating dropdown (teleported, keyboard-nav)
-│   │   │       ├── FileEditApproval.vue
 │   │   │       ├── FilesChanged.vue
-│   │   │       ├── MarkdownBlock.vue
-│   │   │       ├── PillPicker.vue        # Compact pill button → opens DropdownMenu
-│   │   │       ├── ProgressGroup.vue
 │   │   │       ├── SessionControls.vue
-│   │   │       └── TokenUsageIndicator.vue  # Copilot-style token usage ring + popup
+│   │   │       ├── input/           # Input area sub-components
+│   │   │       │   ├── ChatInput.vue         # Copilot-style input (pill pickers, implicit chips, attach, tools)
+│   │   │       │   ├── DropdownMenu.vue      # Reusable floating dropdown (teleported, keyboard-nav)
+│   │   │       │   ├── PillPicker.vue        # Compact pill button → opens DropdownMenu
+│   │   │       │   └── TokenUsageIndicator.vue  # Copilot-style token usage ring + popup
+│   │   │       └── timeline/        # Timeline rendering sub-components
+│   │   │           ├── MarkdownBlock.vue
+│   │   │           ├── ProgressGroup.vue
+│   │   │           ├── CommandApproval.vue
+│   │   │           ├── FileEditApproval.vue
+│   │   │           └── ContextFilesDisplay.vue
 │   │   └── settings/           # Settings feature folder
 │   │       ├── SettingsPage.vue     # Main page component (entry point)
 │   │       └── components/          # Settings sub-components
-│   │           ├── AdvancedSection.vue
-│   │           ├── AgentSection.vue
-│   │           ├── AutocompleteSection.vue
-│   │           ├── ChatSection.vue
-│   │           ├── ConnectionSection.vue
-│   │           ├── ModelCapabilitiesSection.vue
-│   │           ├── ModelsSection.vue
-│   │           └── ToolsSection.vue
+│   │           ├── setup/           # Connection & infrastructure settings
+│   │           │   ├── ConnectionSection.vue
+│   │           │   ├── ModelsSection.vue
+│   │           │   └── AdvancedSection.vue
+│   │           └── features/        # Feature-specific settings
+│   │               ├── ModelCapabilitiesSection.vue
+│   │               ├── ChatSection.vue
+│   │               ├── AutocompleteSection.vue
+│   │               ├── AgentSection.vue
+│   │               └── ToolsSection.vue
 │   ├── scripts/           # Webview app logic split by concern
 │   │   ├── app/
 │   │   │   └── App.ts      # Entry/wiring for message handling
@@ -320,24 +342,27 @@ src/
 │   │       ├── state.ts    # Reactive state/refs
 │   │       └── types.ts    # Shared types
 │   └── styles/            # SCSS entry + partials
-├── templates/            # Prompt templates
 ├── types/                # TypeScript type definitions
 │   ├── agent.ts           # Shared agent types: ExecutorConfig, Tool, ToolContext, PersistUiEventFn
 │   ├── ollama.ts          # Ollama API wire format types (ChatMessage, ChatRequest, OllamaOptions, etc.)
 │   └── session.ts         # Shared chat + agent session types
 └── utils/                # Utility functions
     ├── asyncMutex.ts      # Reusable promise-chain mutex
-    ├── commandSafety.ts   # Terminal command safety analysis
     ├── diagnosticWaiter.ts # Event-driven LSP diagnostic waiting + formatting
     ├── fileSensitivity.ts # File sensitivity patterns for approval
     ├── toolCallParser.ts  # XML/bracket tool call parsing
-    └── ...                # debounce, diffParser, diffRenderer, gitCli, etc.
+    └── ...                # debounce, diffParser, tokenCounter, etc.
 
 tests/                    # All tests (separate from source)
 ├── extension/            # @vscode/test-electron + Mocha
 │   ├── runTest.ts         # Entry point — launches VS Code + mock server
 │   ├── mocks/             # HTTP mock server for Ollama API
-│   └── suite/             # Test suites (agent/, services/, utils/)
+│   └── suite/             # Test suites
+│       ├── agent/         # Agent tools, execution, approval tests
+│       ├── database/      # Database service tests
+│       ├── model/         # Model-related tests
+│       ├── utils/         # Utility tests (toolCallParser)
+│       └── views/         # View handler tests
 └── webview/              # Vitest + jsdom + Vue Test Utils
     ├── vitest.config.ts   # Vitest config
     ├── setup.ts           # Global setup (stubs acquireVsCodeApi)
@@ -408,7 +433,7 @@ User types message in webview
               → Post 'generationStopped'
 ```
 
-**Sub-handler ownership**: Each boxed section above is a separate class in `src/services/agent/`. The orchestrator (`agentChatExecutor.ts`) only wires dependencies and runs the while-loop. **Do NOT add streaming, tool execution, or summary logic directly to the orchestrator.** See `agent-tools.instructions.md` → "Agent Executor Architecture" for full decomposition rules.
+**Sub-handler ownership**: Each boxed section above is a separate class in `src/agent/execution/`. The orchestrator (`agentChatExecutor.ts`) only wires dependencies and runs the while-loop. **Do NOT add streaming, tool execution, or summary logic directly to the orchestrator.** See `agent-tools.instructions.md` → "Agent Executor Architecture" for full decomposition rules.
 
 **Key invariant**: Every `postMessage` to the webview has a matching `persistUiEvent` to the database, in the same order. This ensures session history matches live chat exactly.
 
@@ -490,7 +515,7 @@ Models are managed in the **Models** settings tab (`ModelCapabilitiesSection.vue
 - **Auto-save**: Model selection dropdowns save automatically on change — no explicit save button.
 - **Stale model cleanup**: `upsertModels()` in `sessionIndexService.ts` does `DELETE FROM models` before re-inserting, so models removed from Ollama are automatically dropped from the cache.
 
-### Agent Execution Engine (`src/services/agent/`)
+### Agent Execution Engine (`src/agent/execution/`)
 
 The agent executor is **decomposed into focused sub-handlers** — each owning a distinct phase of the agent loop. This is a deliberate architectural choice to keep each file under ~300 LOC and prevent monolithic growth.
 
@@ -514,6 +539,14 @@ The agent executor is **decomposed into focused sub-handlers** — each owning a
 | `checkpointManager.ts` | Checkpoint/snapshot lifecycle |
 
 **Anti-pattern**: Do NOT add streaming, tool execution, or summary generation logic directly to `agentChatExecutor.ts`. If you need new behavior in the agent loop, add it to the appropriate sub-handler or create a new one. See `agent-tools.instructions.md` → "Agent Executor Architecture" for full decomposition rules.
+
+**File locations within `src/agent/execution/`**:
+- Orchestration: `orchestration/agentChatExecutor.ts`, `orchestration/agentExploreExecutor.ts`, `orchestration/agentDispatcher.ts`
+- Streaming: `streaming/agentStreamProcessor.ts`, `streaming/agentControlPlane.ts`, `streaming/agentContextCompactor.ts`, `streaming/agentSessionMemory.ts`
+- Prompts: `prompts/agentPromptBuilder.ts`, `prompts/projectContext.ts`
+- Tool execution: `toolExecution/agentToolRunner.ts`, `toolExecution/agentSummaryBuilder.ts`, `toolExecution/checkpointManager.ts`
+- Approval: `approval/agentTerminalHandler.ts`, `approval/agentFileEditHandler.ts`, `approval/approvalManager.ts`, `approval/commandSafety.ts`, `approval/terminalApproval.ts`, `approval/diffRenderer.ts`
+- Root: `titleGenerator.ts`, `streamingFileWriter.ts`
 
 ---
 
@@ -684,36 +717,36 @@ npx tsc -p tsconfig.test.json --noEmit
 |------|---------|-------------------|
 | Add a new VS Code setting | `package.json` + `src/config/settings.ts` + `src/views/settingsHandler.ts` + webview | `add-new-setting` skill |
 | Add a new message type | `src/views/messageHandlers/` (backend) + `src/webview/scripts/core/messageHandlers/` (frontend) | `add-chat-message-type` skill |
-| Add a new agent tool | `src/agent/tools/` + `src/agent/tools/index.ts` + `src/views/toolUIFormatter.ts` + `src/services/agent/agentToolRunner.ts` | `add-agent-tool` skill |
+| Add a new agent tool | `src/agent/tools/` + `src/agent/tools/index.ts` + `src/views/toolUIFormatter.ts` + `src/agent/execution/toolExecution/agentToolRunner.ts` | `add-agent-tool` skill |
 | Modify chat UI | `src/webview/components/chat/` + `src/webview/scripts/core/` | `webview-ui` instructions |
-| Modify model management UI | `src/webview/components/settings/components/ModelCapabilitiesSection.vue` + `src/services/database/sessionIndexService.ts` | `database-rules` + `extension-architecture` instructions |
+| Modify model management UI | `src/webview/components/settings/components/features/ModelCapabilitiesSection.vue` + `src/services/database/sessionIndexService.ts` | `database-rules` + `extension-architecture` instructions |
 | Change API behavior | `src/services/model/ollamaClient.ts` | `extension-architecture` instructions |
-| Change inline completions | `src/providers/completionProvider.ts` | — |
-| Modify agent prompts | `src/services/agent/agentPromptBuilder.ts` | `agent-tools` instructions |
-| Modify agent intent classification | `src/services/agent/agentDispatcher.ts` + `src/types/agent.ts` (`TaskIntent`, `DispatchResult`) | `agent-tools` instructions → "Agent Dispatcher — Intent Classification" |
-| Modify agent streaming | `src/services/agent/agentStreamProcessor.ts` | `agent-tools` instructions |
-| Modify agent tool execution | `src/services/agent/agentToolRunner.ts` | `agent-tools` instructions |
-| Modify agent summary/finalization | `src/services/agent/agentSummaryBuilder.ts` | `agent-tools` instructions |
-| Explorer model resolution | `src/services/agent/agentChatExecutor.ts` (`resolveExplorerCapabilities`) + `src/views/messageHandlers/chatMessageHandler.ts` (3-tier fallback) + `src/config/settings.ts` + `package.json` | `agent-tools` instructions → "Explorer Model Resolution" |
+| Change inline completions | `src/completion/completionProvider.ts` | — |
+| Modify agent prompts | `src/agent/execution/prompts/agentPromptBuilder.ts` | `agent-tools` instructions |
+| Modify agent intent classification | `src/agent/execution/orchestration/agentDispatcher.ts` + `src/types/agent.ts` (`TaskIntent`, `DispatchResult`) | `agent-tools` instructions → "Agent Dispatcher — Intent Classification" |
+| Modify agent streaming | `src/agent/execution/streaming/agentStreamProcessor.ts` | `agent-tools` instructions |
+| Modify agent tool execution | `src/agent/execution/toolExecution/agentToolRunner.ts` | `agent-tools` instructions |
+| Modify agent summary/finalization | `src/agent/execution/toolExecution/agentSummaryBuilder.ts` | `agent-tools` instructions |
+| Explorer model resolution | `src/agent/execution/orchestration/agentChatExecutor.ts` (`resolveExplorerCapabilities`) + `src/views/messageHandlers/chatMessageHandler.ts` (3-tier fallback) + `src/config/settings.ts` + `package.json` | `agent-tools` instructions → "Explorer Model Resolution" |
 | Per-session explorer override | `src/views/chatSessionController.ts` + `src/webview/components/chat/components/SessionControls.vue` + `src/services/database/sessionRepository.ts` | `agent-tools` + `webview-ui` instructions |
 | Message storage (LanceDB) | `src/services/database/lanceSearchService.ts` + `src/services/database/databaseService.ts` | `database-rules` instructions |
 | Session storage (SQLite) | `src/services/database/sessionIndexService.ts` | `database-rules` instructions |
 | Storage path resolution | `src/services/database/storagePath.ts` (`resolveStoragePath`, `migrateIfNeeded`, `workspaceKey`) | `database-rules` instructions |
 | DB maintenance actions | `src/views/settingsHandler.ts` | `database-rules` instructions |
-| Terminal command execution | `src/services/terminalManager.ts` + `src/utils/commandSafety.ts` | `agent-tools` instructions |
-| File edit approval | `src/utils/fileSensitivity.ts` + `src/services/agent/agentFileEditHandler.ts` | `agent-tools` instructions |
+| Terminal command execution | `src/services/terminalManager.ts` + `src/agent/execution/approval/commandSafety.ts` | `agent-tools` instructions |
+| File edit approval | `src/utils/fileSensitivity.ts` + `src/agent/execution/approval/agentFileEditHandler.ts` | `agent-tools` instructions |
 | Inline change review (CodeLens) | `src/services/review/pendingEditReviewService.ts` (facade) + `reviewSessionBuilder.ts` + `reviewDecorationManager.ts` | `extension-architecture` instructions |
 | Cross-file change navigation | `src/services/review/reviewNavigator.ts` (pure math) + `pendingEditReviewService.ts` (side effects) + `FilesChanged.vue` (nav bar UI) | `extension-architecture` + `webview-ui` instructions |
 | Session stats badge (pending +/-) | `src/services/database/sessionIndexService.ts` (`getSessionsPendingStats`) + `src/views/chatSessionController.ts` (`sendSessionsList`) | `database-rules` + `extension-architecture` instructions |
 | Files changed widget | `src/webview/components/chat/components/FilesChanged.vue` + `src/webview/scripts/core/actions/filesChanged.ts` + `src/webview/scripts/core/messageHandlers/filesChanged.ts` | `webview-ui` + `ui-messages` instructions |
-| Checkpoint/snapshot management | `src/services/database/sessionIndexService.ts` (tables) + `src/services/agent/checkpointManager.ts` (lifecycle) | `database-rules` + `agent-tools` instructions |
-| Agent path resolution | `src/agent/tools/pathUtils.ts` (`resolveMultiRootPath`, `resolveWorkspacePath`) | `agent-tools` instructions |
-| User-provided context pipeline | `src/views/editorContextTracker.ts` → `src/webview/scripts/core/actions/input.ts` → `src/views/messageHandlers/chatMessageHandler.ts` → `src/services/agent/agentChatExecutor.ts` (`buildAgentSystemPrompt`) | `agent-tools` instructions → "User-Provided Context Pipeline" |
-| LSP code intelligence tools | `src/agent/tools/{findDefinition,findReferences,findSymbol,getDocumentSymbols,getHoverInfo,getCallHierarchy,findImplementations,getTypeHierarchy}.ts` | `agent-tools` instructions |
-| LSP symbol position resolution | `src/agent/tools/symbolResolver.ts` (`resolveSymbolPosition`, `formatLocation`) | `agent-tools` instructions |
-| UI file opening from tool results | `src/views/messageHandlers/fileChangeMessageHandler.ts` (`handleOpenWorkspaceFile`, `stripFolderPrefix`) + `src/webview/components/chat/components/ProgressGroup.vue` (click handlers) | `webview-ui` instructions |
+| Checkpoint/snapshot management | `src/services/database/sessionIndexService.ts` (tables) + `src/agent/execution/toolExecution/checkpointManager.ts` (lifecycle) | `database-rules` + `agent-tools` instructions |
+| Agent path resolution | `src/agent/tools/filesystem/pathUtils.ts` (`resolveMultiRootPath`, `resolveWorkspacePath`) | `agent-tools` instructions |
+| User-provided context pipeline | `src/views/editorContextTracker.ts` → `src/webview/scripts/core/actions/input.ts` → `src/views/messageHandlers/chatMessageHandler.ts` → `src/agent/execution/orchestration/agentChatExecutor.ts` (`buildAgentSystemPrompt`) | `agent-tools` instructions → "User-Provided Context Pipeline" |
+| LSP code intelligence tools | `src/agent/tools/lsp/{findDefinition,findReferences,findSymbol,getDocumentSymbols,getHoverInfo,getCallHierarchy,findImplementations,getTypeHierarchy}.ts` | `agent-tools` instructions |
+| LSP symbol position resolution | `src/agent/tools/lsp/symbolResolver.ts` (`resolveSymbolPosition`, `formatLocation`) | `agent-tools` instructions |
+| UI file opening from tool results | `src/views/messageHandlers/fileChangeMessageHandler.ts` (`handleOpenWorkspaceFile`, `stripFolderPrefix`) + `src/webview/components/chat/components/timeline/ProgressGroup.vue` (click handlers) | `webview-ui` instructions |
 | Tool UI formatting | `src/views/toolUIFormatter.ts` (maps tool names/output → icons, text, listing format) | `agent-tools` + `webview-ui` instructions |
-| Token usage indicator | `src/webview/components/chat/components/TokenUsageIndicator.vue` + `src/webview/scripts/core/messageHandlers/streaming.ts` (`handleTokenUsage`) + `src/services/agent/agentContextCompactor.ts` (`estimateTokensByCategory`) | `ui-messages` + `webview-ui` + `extension-architecture` instructions |
+| Token usage indicator | `src/webview/components/chat/components/input/TokenUsageIndicator.vue` + `src/webview/scripts/core/messageHandlers/streaming.ts` (`handleTokenUsage`) + `src/agent/execution/streaming/agentContextCompactor.ts` (`estimateTokensByCategory`) | `ui-messages` + `webview-ui` + `extension-architecture` instructions |
 | Model context window detection | `src/services/model/modelCompatibility.ts` (`extractContextLength`) + `src/services/database/sessionIndexService.ts` (`context_length` column) + `src/services/model/ollamaClient.ts` (`fetchModelsWithCapabilities`) | `extension-architecture` instructions |
 | Running models (API /api/ps) | `src/services/model/ollamaClient.ts` (`getRunningModels`) | `extension-architecture` instructions |
 | Write/edit instructions | `.github/instructions/` + `.github/skills/` | `copilot-custom-instructions` skill |

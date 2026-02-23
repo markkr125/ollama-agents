@@ -21,9 +21,11 @@ This repo uses two complementary test harnesses:
 - Location:
   - Test harness + mocks: `tests/extension/`
   - Test suites: `tests/extension/suite/`
-    - `tests/extension/suite/agent/` for agent tool tests (toolRegistry, readFile, codeIntelligenceTools)
-    - `tests/extension/suite/utils/` for pure utilities (toolCallParser, commandSafety, toolUIFormatter)
-    - `tests/extension/suite/services/` for service-level integration tests
+    - `tests/extension/suite/agent/` for agent tools, execution, and approval tests
+    - `tests/extension/suite/utils/` for pure utilities (toolCallParser, toolUIFormatter)
+    - `tests/extension/suite/database/` for database service tests
+    - `tests/extension/suite/views/` for view handler tests
+    - `tests/extension/suite/model/` for model-related tests
 
 2) **Webview tests (fast unit/component)**
 - Runner: Vitest + jsdom + Vue Test Utils
@@ -249,13 +251,13 @@ The following test suites exist in `tests/extension/suite/`:
 - Tests run in Extension Development Host (real VS Code APIs, TS server active)
 - Mocked: `vscode.commands.executeCommand` stubs return controlled results
 
-**`utils/toolUIFormatter.test.ts`** (29 tests) - Tests tool UI text generation:
+**`views/toolUIFormatter.test.ts`** (29 tests) - Tests tool UI text generation:
 - `getProgressGroupTitle`: single read shows filename, multiple reads show comma-separated, >5 reads → "Reading multiple files", deduplication, `file` arg variant, read+write → "Modifying files", search/write/list/command titles, empty args fallback
 - `getToolActionInfo`: read/write/list/search/unknown tool text, startLine line range in detail, empty detail without startLine
 - `getToolSuccessInfo`: read returns filePath + line count, read with startLine returns range + startLine, write returns filePath, list_files includes basePath tab-separated, search reports match count, command reports exit code
 - **REGRESSION: `_isNew` flag**: `write_file` with `_isNew=true` → "Created", `_isNew=false` → "Edited", omitted → "Edited" (default), `create_file` → "Created"
 
-**`services/sessionIndexService.test.ts`** (8 tests) - Tests SQLite session/message CRUD:
+**`database/sessionIndexService.test.ts`** (8 tests) - Tests SQLite session/message CRUD:
 - Session creation/update/listing with pagination
 - Message CRUD with tool fields (tool_name, tool_input, tool_output)
 - getNextTimestamp returns strictly increasing values
@@ -263,26 +265,26 @@ The following test suites exist in `tests/extension/suite/`:
 - CASCADE delete: deleteSession removes messages
 - clearAllSessions removes all sessions and messages
 
-**`services/databaseService.test.ts`** (3 tests) - Tests database facade:
+**`database/databaseService.test.ts`** (3 tests) - Tests database facade:
 - Message timestamps are strictly increasing and persist across restart
 - Maintenance returns zero orphans (FK prevents them)
 - deleteSession removes session and cascades to messages
 
-**`services/databaseServiceDeletion.test.ts`** - Tests session deletion edge cases:
+**`database/databaseServiceDeletion.test.ts`** - Tests session deletion edge cases:
 - Session deletion cascades to messages via FK constraint
 - Re-deletion of already-deleted session is safe
 
-**`services/databaseServiceExports.test.ts`** - Regression test for module exports:
+**`database/databaseServiceExports.test.ts`** - Regression test for module exports:
 - `getDatabaseService` is exported as a function (guards against stale webpack builds)
 - `DatabaseService` class is exported
 
-**`services/agentFileEditHandler.test.ts`** (10 tests) - Integration tests for file edit handler:
+**`agent/agentFileEditHandler.test.ts`** (10 tests) - Integration tests for file edit handler:
 - **REGRESSION: Single running action (no duplicates)**: New file emits exactly ONE `showToolAction(running)` with "Creating" verb; existing file uses "Editing" verb; sensitive file with auto-approve still only ONE running action; sensitive file with manual approve produces ONE running + ONE pending, no extras
 - **`_isNew` flag**: Set to `true` for non-existent files, `false` for existing files
 - **postMessage/persistUiEvent parity**: Every posted event has a matching persisted event with correct sessionId; sensitive file approval flow persists all event types
 - **Deferred content generation**: Uses `description` to generate content via LLM when `content` is missing; uses provided `content` directly when present
 
-**`services/subagentIsolation.test.ts`** (20 tests) - Tests sub-agent filtered emitter:
+**`agent/subagentIsolation.test.ts`** (20 tests) - Tests sub-agent filtered emitter:
 - **Suppressed types**: `finalMessage`, `streamChunk`, `thinkingBlock`, `collapseThinking`, `tokenUsage`, `iterationBoundary`, `hideThinking` — each verified individually
 - **Pass-through types**: `startProgressGroup`, `showToolAction`, `finishProgressGroup`, `showError`, `showWarningBanner` — each verified individually
 - **Title prefixing**: `startProgressGroup` titles prefixed with sub-agent label; custom `subagentTitle`; non-progress-group types NOT prefixed
@@ -290,7 +292,7 @@ The following test suites exist in `tests/extension/suite/`:
 - **Mixed sequences**: Correct filtering in a realistic event sequence (7 types mixed, 5 pass through)
 - **Edge cases**: `startProgressGroup` without title; unknown event types suppressed by allowlist
 
-**`services/duplicateToolDetection.test.ts`** (18 tests) - Tests duplicate tool call detection:
+**`agent/duplicateToolDetection.test.ts`** (18 tests) - Tests duplicate tool call detection:
 - **Intra-batch dedup**: Removes exact duplicate tool+args within same batch; keeps different-args calls; removes multiple duplicates
 - **Cross-iteration dedup**: Removes calls repeated from previous iteration; removes from 2 iterations ago; allows from 3+ iterations ago (outside window); mixes intra-batch and cross-iteration
 - **Signature sliding window**: Expires signatures older than 3 iterations
@@ -298,24 +300,24 @@ The following test suites exist in `tests/extension/suite/`:
 - **All-duplicate warning**: Detects when all calls are duplicates; `allDuplicates` false when some survive; false for empty batch
 - **Signature construction**: Sorted arg keys for consistency; empty args; nested object stringification
 
-**`services/explorerModelResolution.test.ts`** (13 tests) - Tests explorer model 3-tier fallback:
+**`agent/explorerModelResolution.test.ts`** (13 tests) - Tests explorer model 3-tier fallback:
 - **3-tier fallback chain**: Session override wins; global setting when no session override; empty string falls through; same as orchestrator when nothing configured
 - **Capability resolution (DB)**: Resolves from DB cache; detects tools/vision capabilities; handles models without tool support
 - **Capability resolution (live)**: Falls back to `/api/show`; returns undefined when both fail; preserves `contextLength`
 - **Capability cache**: Caches DB results; caches `/api/show` results; does NOT cache failures; separate cache per model
 
-**`services/agentControlPlane.test.ts`** — `buildToolCallSummary` suite (12 tests):
+**`agent/agentControlPlane.test.ts`** — `buildToolCallSummary` suite (12 tests):
 - Returns undefined for empty/undefined input
 - Summarizes individual tools: `read_file`, `write_file`, `search_workspace`, `run_terminal_command`, `run_subagent`, `get_diagnostics`, `list_files`
 - Chains multiple calls with "then" connector; starts with "I"; ends with period
 - Summarizes LSP tools (definition, references, call hierarchy)
 - Falls back to `used <tool_name>` for unknown tool names
 
-**`utils/commandSafety.test.ts`** - Tests terminal command safety analysis:
+**`agent/commandSafety.test.ts`** - Tests terminal command safety analysis:
 - Dangerous command detection (rm -rf, sudo, etc.)
 - Platform-specific filtering
 
-**`services/fileChangeMessageHandler.test.ts`** - Tests file change handler:
+**`views/fileChangeMessageHandler.test.ts`** - Tests file change handler:
 - **REGRESSION: requestFilesDiffStats recomputes from disk**: Stats are always fresh (recomputed from `original_content` vs current disk), not cached; verifies per-file + checkpoint totals update
 - **REGRESSION: re-edit stats freshness**: When agent re-edits a file, `requestFilesDiffStats` returns updated stats matching the new content
 - **REGRESSION: review position after keep/undo**: `handleKeepFile` and `handleUndoFile` post `reviewChangePosition` after removing file from review; counter decrements; zero hunks → no position sent

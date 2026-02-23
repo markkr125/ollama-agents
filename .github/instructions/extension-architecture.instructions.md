@@ -55,7 +55,7 @@ In `extension.ts → activate()`, a `ServiceContainer` groups all extension-wide
 
 ## Agent Dispatcher
 
-`AgentDispatcher` (`src/services/agent/agentDispatcher.ts`) classifies user intent before the agent loop starts. Created in `ChatMessageHandler`'s constructor, it runs an LLM call (no timeout — waits for model, caller shows "Analyzing request..." spinner) and defaults to `mixed` intent on failure. The `DispatchResult` determines:
+`AgentDispatcher` (`src/agent/execution/orchestration/agentDispatcher.ts`) classifies user intent before the agent loop starts. Created in `ChatMessageHandler`'s constructor, it runs an LLM call (no timeout — waits for model, caller shows "Analyzing request..." spinner) and defaults to `mixed` intent on failure. The `DispatchResult` determines:
 
 1. **Executor routing** — ALL analysis tasks (`analyze`) route to `AgentExploreExecutor`: `needsWrite=false` uses `deep-explore` mode (read-only), `needsWrite=true` uses `deep-explore-write` mode (read-only + write_file for docs output). All other intents go to `AgentChatExecutor`
 2. **Prompt adaptation** — `intent` is passed to `AgentPromptBuilder.buildOrchestratorNativePrompt(folders, workspace, intent)`, which feeds it to `doingTasksOrchestrator(intent)` to adapt the TASK EXECUTION section

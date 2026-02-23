@@ -26,7 +26,7 @@ this.emitter.postMessage({
 **Where to send from:**
 | Concern | File |
 |---------|------|
-| Agent tool execution / progress | `src/services/agent/agentChatExecutor.ts` (orchestrator) + `src/services/agent/agentToolRunner.ts` (tool batch execution) |
+| Agent tool execution / progress | `src/agent/execution/orchestration/agentChatExecutor.ts` (orchestrator) + `src/agent/execution/toolExecution/agentToolRunner.ts` (tool batch execution) |
 | Session state / list updates | `src/views/chatSessionController.ts` |
 | Settings / connection / DB ops | `src/views/settingsHandler.ts` |
 | Chat/agent mode dispatch | `src/views/messageHandlers/chatMessageHandler.ts` |

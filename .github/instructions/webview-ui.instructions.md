@@ -300,8 +300,8 @@ The backend sends `editorContext` messages whenever the active editor or selecti
 
 | Component | File | Purpose |
 |-----------|------|---------|
-| `PillPicker.vue` | `src/webview/components/chat/components/PillPicker.vue` | Compact pill button → opens `DropdownMenu` for mode/model selection |
-| `DropdownMenu.vue` | `src/webview/components/chat/components/DropdownMenu.vue` | Floating dropdown menu (teleported to body), keyboard-navigable, VS Code menu theming |
+| `PillPicker.vue` | `src/webview/components/chat/components/input/PillPicker.vue` | Compact pill button → opens `DropdownMenu` for mode/model selection |
+| `DropdownMenu.vue` | `src/webview/components/chat/components/input/DropdownMenu.vue` | Floating dropdown menu (teleported to body), keyboard-navigable, VS Code menu theming |
 
 ### Attach Menu (Multi-Source Context)
 
@@ -336,7 +336,7 @@ The chat UI uses VS Code's CSS variables for theming:
 
 ### ⚠️ diff2html CSS (Critical — Do NOT Import Base CSS)
 
-File edit approval cards render diffs using [diff2html](https://github.com/rtfpessoa/diff2html) (side-by-side mode). The diff HTML is generated server-side in `src/utils/diffRenderer.ts` and injected via `v-html`.
+File edit approval cards render diffs using [diff2html](https://github.com/rtfpessoa/diff2html) (side-by-side mode). The diff HTML is generated server-side in `src/agent/execution/approval/diffRenderer.ts` and injected via `v-html`.
 
 **Do NOT import `diff2html/bundles/css/diff2html.min.css`** — not from SCSS and not from JS. The base CSS adds ~17KB of opinionated light-theme styles (white backgrounds, colored borders, heavy line-number boxes) that look terrible in a VS Code dark-theme webview.
 
@@ -396,19 +396,37 @@ components/
 ├── chat/
 │   ├── ChatPage.vue           ← main page (obvious entry point)
 │   └── components/            ← sub-components only used by ChatPage
-│       ├── ChatInput.vue
-│       ├── CommandApproval.vue
-│       └── ...
+│       ├── FilesChanged.vue
+│       ├── SessionControls.vue
+│       ├── input/             ← input area sub-components
+│       │   ├── ChatInput.vue
+│       │   ├── DropdownMenu.vue
+│       │   ├── PillPicker.vue
+│       │   └── TokenUsageIndicator.vue
+│       └── timeline/          ← timeline rendering sub-components
+│           ├── MarkdownBlock.vue
+│           ├── ProgressGroup.vue
+│           ├── CommandApproval.vue
+│           ├── FileEditApproval.vue
+│           └── ContextFilesDisplay.vue
 └── settings/
     ├── SettingsPage.vue       ← main page (obvious entry point)
     └── components/            ← sub-components only used by SettingsPage
-        ├── ConnectionSection.vue
-        └── ...
+        ├── setup/             ← connection & infrastructure settings
+        │   ├── ConnectionSection.vue
+        │   ├── ModelsSection.vue
+        │   └── AdvancedSection.vue
+        └── features/          ← feature-specific settings
+            ├── ModelCapabilitiesSection.vue
+            ├── ChatSection.vue
+            ├── AutocompleteSection.vue
+            ├── AgentSection.vue
+            └── ToolsSection.vue
 ```
 
 **Rules for Vue components:**
 - ✅ Main page component = folder root (e.g. `chat/ChatPage.vue`).
-- ✅ Sub-components = nested `components/` subfolder (e.g. `chat/components/ChatInput.vue`).
+- ✅ Sub-components = nested `components/` subfolder, further organized into `input/`, `timeline/`, `setup/`, `features/` as needed (e.g. `chat/components/input/ChatInput.vue`).
 - ✅ Sub-components import from `'../../../scripts/core/...'` (one extra `../` because of the nesting).
 - ✅ Main page imports sub-components via `'./components/Foo.vue'`.
 - ✅ Standalone components that have no sub-components (like `HeaderBar.vue`, `SessionsPanel.vue`) stay directly in `components/`.- ✅ Naming: `.vue` files use **PascalCase**, `.ts` files use **camelCase**, folders use **camelCase**. Enforced by `npm run lint:naming`.- ❌ Do NOT put all `.vue` files flat in the same folder — keep main pages and sub-components visually separated.
@@ -567,7 +585,7 @@ Build output goes to `media/` and is loaded by `ChatViewProvider`.
 
 ### Component: `TokenUsageIndicator.vue`
 
-Copilot-style token usage ring + popup. Located in `src/webview/components/chat/components/TokenUsageIndicator.vue`, rendered in `ChatInput.vue`'s `.toolbar-right` (before the send button).
+Copilot-style token usage ring + popup. Located in `src/webview/components/chat/components/input/TokenUsageIndicator.vue`, rendered in `ChatInput.vue`'s `.toolbar-right` (before the send button).
 
 **Props**: `visible`, `promptTokens`, `completionTokens`, `contextWindow`, `categories` (all bound from `tokenUsage` reactive state).
 

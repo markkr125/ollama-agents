@@ -1,5 +1,5 @@
 ---
-applyTo: "src/agent/**,src/services/agent/**,src/utils/toolCallParser.ts"
+applyTo: "src/agent/**,src/utils/toolCallParser.ts"
 description: "Agent execution flow, tool registry, tool call parser robustness, terminal execution, command safety, file sensitivity, and approval flow"
 ---
 
@@ -7,25 +7,37 @@ description: "Agent execution flow, tool registry, tool call parser robustness, 
 
 ## Agent Executor Architecture — Decomposed Structure
 
-The agent execution logic lives in `src/services/agent/` and follows a **strict single-responsibility decomposition**. The executor was decomposed from a monolithic 800-line class into focused sub-handlers. **This structure is intentional — do NOT merge files back together or add new responsibilities to the orchestrator.**
+The agent execution logic lives in `src/agent/execution/` and follows a **strict single-responsibility decomposition**. The executor was decomposed from a monolithic 800-line class into focused sub-handlers, organized into subfolders by concern. **This structure is intentional — do NOT merge files back together or add new responsibilities to the orchestrator.**
 
 ### File Map & Responsibilities
 
 ```
-src/services/agent/
-├── agentChatExecutor.ts      # ORCHESTRATOR ONLY — wires sub-handlers, runs main loop
-├── agentExploreExecutor.ts   # Read-only executor for explore/plan/review/deep-explore/chat modes
-├── agentStreamProcessor.ts   # LLM streaming — chunk accumulation, throttled UI emission
-├── agentToolRunner.ts        # Tool batch execution — routing, UI events, diff stats, contextual reminders
-├── agentSummaryBuilder.ts    # Post-loop — summary generation, final message, filesChanged, scratch cleanup
-├── agentPromptBuilder.ts     # Modular system prompt assembly (native + XML + mode-specific)
-├── agentContextCompactor.ts  # Conversation summarization when approaching context limit
-├── agentSessionMemory.ts     # Structured in-memory notes maintained across iterations
-├── projectContext.ts         # Auto-discovers project files + git context at session start
-├── approvalManager.ts        # Approval promise lifecycle — waitForApproval / handleResponse
-├── agentTerminalHandler.ts   # Terminal commands — safety check, approval, execution
-├── agentFileEditHandler.ts   # File edits — sensitivity check, approval, diff preview
-└── checkpointManager.ts      # Checkpoints — snapshotting, keep/undo, diff computation
+src/agent/execution/
+├── titleGenerator.ts              # Fire-and-forget LLM session title generation with timeout
+├── streamingFileWriter.ts          # Streaming file write helper
+├── orchestration/                  # Core loop + intent routing
+│   ├── agentChatExecutor.ts           # ORCHESTRATOR ONLY — wires sub-handlers, runs main loop
+│   ├── agentExploreExecutor.ts        # Read-only executor for explore/plan/review/deep-explore/chat modes
+│   └── agentDispatcher.ts             # Intent classifier — LLM + heuristic, routes to executor
+├── streaming/                      # LLM streaming + context management
+│   ├── agentStreamProcessor.ts        # LLM streaming — chunk accumulation, throttled UI emission
+│   ├── agentControlPlane.ts           # Structured continuation messages — <agent_control> JSON packets
+│   ├── agentContextCompactor.ts       # Conversation summarization when approaching context limit
+│   └── agentSessionMemory.ts          # Structured in-memory notes maintained across iterations
+├── prompts/                        # System prompt assembly
+│   ├── agentPromptBuilder.ts          # Modular system prompt assembly (native + XML + mode-specific)
+│   └── projectContext.ts              # Auto-discovers project files + git context at session start
+├── toolExecution/                  # Tool batch execution + lifecycle
+│   ├── agentToolRunner.ts             # Tool batch execution — routing, UI events, diff stats, contextual reminders
+│   ├── agentSummaryBuilder.ts          # Post-loop — summary generation, final message, filesChanged, scratch cleanup
+│   └── checkpointManager.ts           # Checkpoints — snapshotting, keep/undo, diff computation
+└── approval/                       # Approval flow + safety
+    ├── agentTerminalHandler.ts        # Terminal commands — safety check, approval, execution
+    ├── agentFileEditHandler.ts        # File edits — sensitivity check, approval, diff preview
+    ├── approvalManager.ts             # Approval promise lifecycle — waitForApproval / handleResponse
+    ├── commandSafety.ts               # Terminal command safety analysis
+    ├── terminalApproval.ts            # Terminal approval decision logic
+    └── diffRenderer.ts                # Diff rendering for file edit approval cards
 ```
 
 ### Ownership Rules — Where Does New Code Go?
@@ -478,7 +490,7 @@ this.terminalHandler = new AgentTerminalHandler(..., persistFn, ...);
 
 Before the agent loop starts, `AgentDispatcher` classifies the user's intent to determine executor routing and system prompt framing. This prevents intent misclassification (e.g., model refactoring code when the user asked for documentation).
 
-**File**: `src/services/agent/agentDispatcher.ts`
+**File**: `src/agent/execution/orchestration/agentDispatcher.ts`
 
 **Classification flow**:
 1. **LLM classification** (no timeout — waits for model response, caller shows spinner via `showThinking`) — sends the user message to the model with a short classification prompt, expects JSON: `{"intent":"analyze|modify|create|mixed","needsWrite":true|false,"reasoning":"..."}`. Uses `keep_alive: '30m'` to keep the model loaded.
@@ -635,23 +647,25 @@ Manages tool registration, lookup, and execution. The registry itself is a slim 
 ```
 src/agent/tools/
 ├── index.ts              # Barrel export — builtInTools[] array
-├── pathUtils.ts          # resolveWorkspacePath(), resolveMultiRootPath() shared utility
-├── symbolResolver.ts     # Shared position resolution for LSP tools
-├── readFile.ts           # read_file tool
-├── writeFile.ts          # write_file tool
 ├── searchWorkspace.ts    # search_workspace tool (ripgrep-based)
-├── listFiles.ts          # list_files tool
 ├── runTerminalCommand.ts # run_terminal_command tool
-├── getDiagnostics.ts     # get_diagnostics tool
-├── getDocumentSymbols.ts # get_document_symbols tool (LSP)
-├── findDefinition.ts     # find_definition tool (LSP)
-├── findReferences.ts     # find_references tool (LSP)
-├── findImplementations.ts # find_implementations tool (LSP)
-├── findSymbol.ts         # find_symbol tool (LSP)
-├── getHoverInfo.ts       # get_hover_info tool (LSP)
-├── getCallHierarchy.ts   # get_call_hierarchy tool (LSP)
-├── getTypeHierarchy.ts   # get_type_hierarchy tool (LSP)
-└── runSubagent.ts        # run_subagent tool (sub-agent launcher)
+├── runSubagent.ts        # run_subagent tool (sub-agent launcher)
+├── filesystem/           # File system tools + path resolution
+│   ├── pathUtils.ts          # resolveWorkspacePath(), resolveMultiRootPath() shared utility
+│   ├── readFile.ts           # read_file tool
+│   ├── writeFile.ts          # write_file tool
+│   └── listFiles.ts          # list_files tool
+└── lsp/                  # LSP-powered code intelligence tools
+    ├── symbolResolver.ts     # Shared position resolution for LSP tools
+    ├── getDiagnostics.ts     # get_diagnostics tool
+    ├── getDocumentSymbols.ts # get_document_symbols tool (LSP)
+    ├── findDefinition.ts     # find_definition tool (LSP)
+    ├── findReferences.ts     # find_references tool (LSP)
+    ├── findImplementations.ts # find_implementations tool (LSP)
+    ├── findSymbol.ts         # find_symbol tool (LSP)
+    ├── getHoverInfo.ts       # get_hover_info tool (LSP)
+    ├── getCallHierarchy.ts   # get_call_hierarchy tool (LSP)
+    └── getTypeHierarchy.ts   # get_type_hierarchy tool (LSP)
 ```
 
 ### Shared Types (`src/types/agent.ts`)
@@ -669,7 +683,7 @@ All core agent types are centralised in `src/types/agent.ts`:
 *Core tools:*
 | Tool | Description |
 |------|-------------|
-| `read_file` | Read file contents (streaming, chunked in 100-line blocks via `countFileLines` + `readFileChunk`; see `src/agent/tools/readFile.ts`) |
+| `read_file` | Read file contents (streaming, chunked in 100-line blocks via `countFileLines` + `readFileChunk`; see `src/agent/tools/filesystem/readFile.ts`) |
 | `write_file` | Write/create file (handles both) |
 | `list_files` | List directory contents (output includes `basePath` for click handling) |
 | `search_workspace` | Search for text or regex patterns in files (ripgrep-based; supports `isRegex` flag, optional `directory` param to scope to a specific workspace folder or subdirectory) |
@@ -771,7 +785,7 @@ The injected messages appear as `role: 'tool'` with `tool_name: 'system'` (nativ
 Tools in `toolRegistry.ts` also accept multiple argument names for the file path:
 - `path`, `file`, or `filePath` are all valid for `read_file`, `write_file`, `get_diagnostics`
 
-## Path Resolution (`src/agent/tools/pathUtils.ts`)
+## Path Resolution (`src/agent/tools/filesystem/pathUtils.ts`)
 
 All built-in tools resolve file paths through `resolveWorkspacePath()` (single-root) or `resolveMultiRootPath()` (multi-root capable).
 
@@ -849,7 +863,7 @@ Without LSP tools, the agent can only do text search (`search_workspace`) and ma
 
 ### Shared Position Resolution (`symbolResolver.ts`)
 
-Multiple LSP tools need to convert `{path, symbolName?, line?, character?}` into a precise `{uri, position}`. This is centralised in `src/agent/tools/symbolResolver.ts`:
+Multiple LSP tools need to convert `{path, symbolName?, line?, character?}` into a precise `{uri, position}`. This is centralised in `src/agent/tools/lsp/symbolResolver.ts`:
 
 **Resolution strategy:**
 1. If `line` + `character` are both provided → use directly (1-based → 0-based conversion)
@@ -986,7 +1000,7 @@ In multi-root workspaces, `relativePath` includes the workspace folder name pref
 | `src/webview/scripts/core/actions/input.ts` | `handleSend()` — builds context array, uses relativePath for fileNames |
 | `src/webview/scripts/core/actions/implicitContext.ts` | `pinSelection()` — stores content + relativePath-based fileName |
 | `src/views/messageHandlers/chatMessageHandler.ts` | Resolves `__implicit_file__` markers, formats contextStr with descriptive labels |
-| `src/services/agent/agentChatExecutor.ts` | `buildAgentSystemPrompt()` — includes USER-PROVIDED CONTEXT section |
+| `src/agent/execution/orchestration/agentChatExecutor.ts` | `buildAgentSystemPrompt()` — includes USER-PROVIDED CONTEXT section |
 
 ## Streaming Behavior
 
@@ -1021,7 +1035,7 @@ Terminals are **keyed by session ID** — one terminal per agent session, reused
 
 ## Command Safety & Approval Flow
 
-### Severity Tiers (`src/utils/commandSafety.ts`)
+### Severity Tiers (`src/agent/execution/approval/commandSafety.ts`)
 `analyzeDangerousCommand()` returns a severity from highest-match in a static regex pattern array:
 
 | Severity | Examples | Behavior |
@@ -1031,7 +1045,7 @@ Terminals are **keyed by session ID** — one terminal per agent session, reused
 | `medium` | `npm install`, `pip install`, `docker run` | Requires approval unless auto-approved |
 | `none` | `ls`, `cat`, `echo` | Auto-approved if toggle enabled |
 
-### Approval Decision (`src/utils/terminalApproval.ts`)
+### Approval Decision (`src/agent/execution/approval/terminalApproval.ts`)
 `computeTerminalApprovalDecision()` returns the final decision:
 1. **Critical severity** → always requires approval (regardless of `auto_approve_commands`)
 2. **Auto-approve enabled** → approve and persist result with `autoApproved: true`
@@ -1082,7 +1096,7 @@ Each tool lives in its own file under `src/agent/tools/`. Quick summary:
 1. **Create tool file** — `src/agent/tools/myTool.ts` exporting a `Tool` object (`{ name, description, schema, execute }`).
 2. **Register in barrel** — Add to `builtInTools[]` in `src/agent/tools/index.ts`.
 3. **Add UI mapping** — Add a `case` in `getToolActionInfo()` in `src/views/toolUIFormatter.ts`.
-4. **Add to Settings UI** (if toggleable) — `src/webview/components/settings/components/ToolsSection.vue`.
+4. **Add to Settings UI** (if toggleable) — `src/webview/components/settings/components/features/ToolsSection.vue`.
 5. **Write tests** — `tests/extension/suite/agent/toolRegistry.test.ts`.
 
 Execution routing: `agentToolRunner.ts` calls `ToolRegistry.execute()` for standard tools. Terminal commands and file edits have dedicated sub-handlers (`agentTerminalHandler.ts`, `agentFileEditHandler.ts`).

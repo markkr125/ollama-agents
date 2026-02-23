@@ -105,14 +105,16 @@ async saveSettings(settings: any) {
 
 Add the setting to the appropriate section component in `src/webview/components/settings/components/`:
 
-| Setting Type | Component |
-|-------------|-----------|
-| Connection/URL | `ConnectionSection.vue` |
-| Agent behavior | `AgentSection.vue` |
-| Autocomplete | `AutocompleteSection.vue` |
-| Chat modes | `ChatSection.vue` |
-| Model selection | `ModelCapabilitiesSection.vue` |
-| Tool toggles | `ToolsSection.vue` |
+| Setting Type | Component | Subfolder |
+|-------------|-----------|-----------|
+| Connection/URL | `ConnectionSection.vue` | `setup/` |
+| Models/infrastructure | `ModelsSection.vue` | `setup/` |
+| Advanced/maintenance | `AdvancedSection.vue` | `setup/` |
+| Agent behavior | `AgentSection.vue` | `features/` |
+| Autocomplete | `AutocompleteSection.vue` | `features/` |
+| Chat modes | `ChatSection.vue` | `features/` |
+| Model selection | `ModelCapabilitiesSection.vue` | `features/` |
+| Tool toggles | `ToolsSection.vue` | `features/` |
 
 The settings component reads from `settings` reactive ref (in `src/webview/scripts/core/state.ts`) and sends `saveSettings` messages back:
 

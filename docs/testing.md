@@ -203,7 +203,8 @@ To debug, set breakpoints in VS Code, open the Run & Debug panel (Ctrl+Shift+D),
 |---------------|-------------------------------|
 | `tests/extension/suite/*.test.ts` | `../../../src/` |
 | `tests/extension/suite/agent/*.test.ts` | `../../../../src/` |
-| `tests/extension/suite/services/*.test.ts` | `../../../../src/` |
+| `tests/extension/suite/database/*.test.ts` | `../../../../src/` |
+| `tests/extension/suite/views/*.test.ts` | `../../../../src/` |
 | `tests/extension/suite/utils/*.test.ts` | `../../../../src/` |
 | Cross-test (mock server) | `../../mocks/ollamaMockServer` |
 
