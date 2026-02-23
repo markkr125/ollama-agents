@@ -1,5 +1,5 @@
 import * as vscode from 'vscode';
-import { AgentChatExecutor } from '../../services/agent/agentChatExecutor';
+import { AgentChatExecutor } from '../../agent/execution/orchestration/agentChatExecutor';
 import { PendingEditReviewService } from '../../services/review/pendingEditReviewService';
 import { ChatSessionController } from '../chatSessionController';
 import { IMessageHandler, WebviewMessageEmitter } from '../chatTypes';

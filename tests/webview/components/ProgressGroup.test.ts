@@ -1,6 +1,6 @@
 import { mount } from '@vue/test-utils';
 import { describe, expect, test, vi } from 'vitest';
-import ProgressGroup from '../../../src/webview/components/chat/components/ProgressGroup.vue';
+import ProgressGroup from '../../../src/webview/components/chat/components/timeline/ProgressGroup.vue';
 import type { ActionItem, ProgressItem } from '../../../src/webview/scripts/core/types';
 
 // Mock action imports used by the component

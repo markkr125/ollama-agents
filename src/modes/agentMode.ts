@@ -1,8 +1,8 @@
 import * as vscode from 'vscode';
 import { AgentExecutor } from '../agent/executor';
-import { GitOperations } from '../agent/gitOperations';
-import { PRWorkflow } from '../agent/prWorkflow';
-import { SessionManager } from '../agent/sessionManager';
+import { GitOperations } from '../agent/git/gitOperations';
+import { PRWorkflow } from '../agent/git/prWorkflow';
+import { SessionManager } from '../agent/sessions/sessionManager';
 import { ToolRegistry } from '../agent/toolRegistry';
 import { getModeConfig } from '../config/settings';
 import { OllamaClient } from '../services/model/ollamaClient';

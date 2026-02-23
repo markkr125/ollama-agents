@@ -1,6 +1,6 @@
 import { mount } from '@vue/test-utils';
 import { describe, expect, test, vi } from 'vitest';
-import MarkdownBlock from '../../../src/webview/components/chat/components/MarkdownBlock.vue';
+import MarkdownBlock from '../../../src/webview/components/chat/components/timeline/MarkdownBlock.vue';
 
 // Mock the formatMarkdown function so we don't pull in markdown-it
 vi.mock('../../../src/webview/scripts/core/actions', () => ({

@@ -1,4 +1,4 @@
-import { AgentChatExecutor } from '../../services/agent/agentChatExecutor';
+import { AgentChatExecutor } from '../../agent/execution/orchestration/agentChatExecutor';
 import { DatabaseService } from '../../services/database/databaseService';
 import { ChatSessionController } from '../chatSessionController';
 import { IMessageHandler, WebviewMessageEmitter } from '../chatTypes';

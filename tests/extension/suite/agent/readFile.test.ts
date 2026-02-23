@@ -2,7 +2,7 @@ import * as assert from 'assert';
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
-import { CHUNK_SIZE, countFileLines, readFileChunk } from '../../../../src/agent/tools/readFile';
+import { CHUNK_SIZE, countFileLines, readFileChunk } from '../../../../src/agent/tools/filesystem/readFile';
 
 suite('readFile streaming helpers', () => {
   let testDir: string;

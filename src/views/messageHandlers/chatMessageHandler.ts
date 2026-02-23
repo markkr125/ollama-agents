@@ -1,12 +1,12 @@
 import * as path from 'path';
 import * as vscode from 'vscode';
-import { GitOperations } from '../../agent/gitOperations';
-import { SessionManager } from '../../agent/sessionManager';
+import { AgentChatExecutor } from '../../agent/execution/orchestration/agentChatExecutor';
+import { AgentDispatcher } from '../../agent/execution/orchestration/agentDispatcher';
+import { AgentExploreExecutor, ExploreMode } from '../../agent/execution/orchestration/agentExploreExecutor';
+import { generateSessionTitle } from '../../agent/execution/titleGenerator';
+import { GitOperations } from '../../agent/git/gitOperations';
+import { SessionManager } from '../../agent/sessions/sessionManager';
 import { getConfig, getModeConfig } from '../../config/settings';
-import { AgentChatExecutor } from '../../services/agent/agentChatExecutor';
-import { AgentDispatcher } from '../../services/agent/agentDispatcher';
-import { AgentExploreExecutor, ExploreMode } from '../../services/agent/agentExploreExecutor';
-import { generateSessionTitle } from '../../services/agent/titleGenerator';
 import { DatabaseService } from '../../services/database/databaseService';
 import { getModelCapabilities, ModelCapabilities } from '../../services/model/modelCompatibility';
 import { OllamaClient } from '../../services/model/ollamaClient';

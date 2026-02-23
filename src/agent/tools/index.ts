@@ -7,21 +7,21 @@
  */
 
 import { Tool } from '../../types/agent';
-import { findDefinitionTool } from './findDefinition';
-import { findImplementationsTool } from './findImplementations';
-import { findReferencesTool } from './findReferences';
-import { findSymbolTool } from './findSymbol';
-import { getCallHierarchyTool } from './getCallHierarchy';
-import { getDiagnosticsTool } from './getDiagnostics';
-import { getDocumentSymbolsTool } from './getDocumentSymbols';
-import { getHoverInfoTool } from './getHoverInfo';
-import { getTypeHierarchyTool } from './getTypeHierarchy';
-import { listFilesTool } from './listFiles';
-import { readFileTool } from './readFile';
+import { listFilesTool } from './filesystem/listFiles';
+import { readFileTool } from './filesystem/readFile';
+import { writeFileTool } from './filesystem/writeFile';
+import { findDefinitionTool } from './lsp/findDefinition';
+import { findImplementationsTool } from './lsp/findImplementations';
+import { findReferencesTool } from './lsp/findReferences';
+import { findSymbolTool } from './lsp/findSymbol';
+import { getCallHierarchyTool } from './lsp/getCallHierarchy';
+import { getDiagnosticsTool } from './lsp/getDiagnostics';
+import { getDocumentSymbolsTool } from './lsp/getDocumentSymbols';
+import { getHoverInfoTool } from './lsp/getHoverInfo';
+import { getTypeHierarchyTool } from './lsp/getTypeHierarchy';
 import { runSubagentTool } from './runSubagent';
 import { runTerminalCommandTool } from './runTerminalCommand';
 import { searchWorkspaceTool } from './searchWorkspace';
-import { writeFileTool } from './writeFile';
 
 /** All built-in tools in registration order. */
 export const builtInTools: Tool[] = [

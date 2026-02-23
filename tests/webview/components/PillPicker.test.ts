@@ -1,9 +1,9 @@
 import { mount } from '@vue/test-utils';
 import { describe, expect, test, vi } from 'vitest';
-import PillPicker from '../../../src/webview/components/chat/components/PillPicker.vue';
+import PillPicker from '../../../src/webview/components/chat/components/input/PillPicker.vue';
 
 // DropdownMenu uses Teleport — stub it to render inline
-vi.mock('../../../src/webview/components/chat/components/DropdownMenu.vue', () => ({
+vi.mock('../../../src/webview/components/chat/components/input/DropdownMenu.vue', () => ({
   default: {
     name: 'DropdownMenu',
     props: ['items', 'modelValue', 'anchorRect'],

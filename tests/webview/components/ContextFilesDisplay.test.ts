@@ -1,6 +1,6 @@
 import { mount } from '@vue/test-utils';
 import { describe, expect, test } from 'vitest';
-import ContextFilesDisplay from '../../../src/webview/components/chat/components/ContextFilesDisplay.vue';
+import ContextFilesDisplay from '../../../src/webview/components/chat/components/timeline/ContextFilesDisplay.vue';
 import type { ContextFileRef } from '../../../src/webview/scripts/core/types';
 
 const explicitFile: ContextFileRef = { fileName: 'src/app.ts', kind: 'explicit' };

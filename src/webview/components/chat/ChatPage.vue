@@ -267,14 +267,14 @@ import { setSessionExplorerModel } from '../../scripts/core/actions/sessions';
 import type { ChatPageProps } from '../../scripts/core/chat';
 import { useChatPage } from '../../scripts/core/chat';
 import { filesChangedBlocks, implicitFile, implicitFileEnabled, implicitSelection, isGenerating, pendingPlanContent, sessionExplorerModel, vscode, warningBanner } from '../../scripts/core/state';
-import ChatInput from './components/ChatInput.vue';
-import CommandApproval from './components/CommandApproval.vue';
-import ContextFilesDisplay from './components/ContextFilesDisplay.vue';
-import FileEditApproval from './components/FileEditApproval.vue';
 import FilesChanged from './components/FilesChanged.vue';
-import MarkdownBlock from './components/MarkdownBlock.vue';
-import ProgressGroup from './components/ProgressGroup.vue';
+import ChatInput from './components/input/ChatInput.vue';
 import SessionControls from './components/SessionControls.vue';
+import CommandApproval from './components/timeline/CommandApproval.vue';
+import ContextFilesDisplay from './components/timeline/ContextFilesDisplay.vue';
+import FileEditApproval from './components/timeline/FileEditApproval.vue';
+import MarkdownBlock from './components/timeline/MarkdownBlock.vue';
+import ProgressGroup from './components/timeline/ProgressGroup.vue';
 
 const props = defineProps<ChatPageProps>();
 

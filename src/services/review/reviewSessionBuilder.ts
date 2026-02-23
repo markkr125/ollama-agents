@@ -1,6 +1,6 @@
 import { structuredPatch } from 'diff';
 import * as vscode from 'vscode';
-import { resolveMultiRootPath } from '../../agent/tools/pathUtils';
+import { resolveMultiRootPath } from '../../agent/tools/filesystem/pathUtils';
 import { DatabaseService } from '../database/databaseService';
 import { FileReviewState, ReviewHunk, ReviewSession } from './reviewTypes';
 

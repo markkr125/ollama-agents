@@ -97,13 +97,13 @@
 import type { SettingsPageProps } from '../../scripts/core/settings';
 import { useSettingsPage } from '../../scripts/core/settings';
 import { isFirstRun } from '../../scripts/core/state';
-import AdvancedSection from './components/AdvancedSection.vue';
-import AgentSection from './components/AgentSection.vue';
-import AutocompleteSection from './components/AutocompleteSection.vue';
-import ChatSection from './components/ChatSection.vue';
-import ConnectionSection from './components/ConnectionSection.vue';
-import ModelCapabilitiesSection from './components/ModelCapabilitiesSection.vue';
-import ToolsSection from './components/ToolsSection.vue';
+import AgentSection from './components/features/AgentSection.vue';
+import AutocompleteSection from './components/features/AutocompleteSection.vue';
+import ChatSection from './components/features/ChatSection.vue';
+import ModelCapabilitiesSection from './components/features/ModelCapabilitiesSection.vue';
+import ToolsSection from './components/features/ToolsSection.vue';
+import AdvancedSection from './components/setup/AdvancedSection.vue';
+import ConnectionSection from './components/setup/ConnectionSection.vue';
 
 const props = defineProps<SettingsPageProps>();
 

@@ -1,9 +1,9 @@
 import { mount } from '@vue/test-utils';
 import { describe, expect, test, vi } from 'vitest';
-import ChatInput from '../../../src/webview/components/chat/components/ChatInput.vue';
+import ChatInput from '../../../src/webview/components/chat/components/input/ChatInput.vue';
 
 // Stub child components that use Teleport (DropdownMenu is in PillPicker and attach menu)
-vi.mock('../../../src/webview/components/chat/components/DropdownMenu.vue', () => ({
+vi.mock('../../../src/webview/components/chat/components/input/DropdownMenu.vue', () => ({
   default: {
     name: 'DropdownMenu',
     props: ['items', 'modelValue', 'anchorRect'],

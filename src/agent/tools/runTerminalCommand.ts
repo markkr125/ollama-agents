@@ -1,5 +1,5 @@
 import { Tool } from '../../types/agent';
-import { resolveMultiRootPath } from './pathUtils';
+import { resolveMultiRootPath } from './filesystem/pathUtils';
 
 /**
  * run_terminal_command — Execute a shell command in the workspace terminal.

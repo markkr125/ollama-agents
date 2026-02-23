@@ -1,6 +1,6 @@
 import { mount } from '@vue/test-utils';
 import { expect, test, vi } from 'vitest';
-import CommandApproval from '../../../src/webview/components/chat/components/CommandApproval.vue';
+import CommandApproval from '../../../src/webview/components/chat/components/timeline/CommandApproval.vue';
 
 test('pending status renders editable input and calls onApprove with edited command', async () => {
   const onApprove = vi.fn();

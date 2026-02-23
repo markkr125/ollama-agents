@@ -10,8 +10,8 @@ import {
     ShowModelResponse,
     StreamChunk
 } from '../../types/ollama';
-import { parseNDJSON } from '../../utils/streamParser';
 import { extractContextLength } from '../model/modelCompatibility';
+import { parseNDJSON } from './streamParser';
 
 export class OllamaClient {
   private baseUrl: string;

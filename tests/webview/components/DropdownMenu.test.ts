@@ -1,6 +1,6 @@
 import { mount } from '@vue/test-utils';
 import { describe, expect, test } from 'vitest';
-import DropdownMenu from '../../../src/webview/components/chat/components/DropdownMenu.vue';
+import DropdownMenu from '../../../src/webview/components/chat/components/input/DropdownMenu.vue';
 
 const sampleItems = [
   { id: 'agent', icon: 'codicon-hubot', label: 'Agent', description: 'Autonomous agent' },

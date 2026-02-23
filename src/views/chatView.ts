@@ -4,15 +4,15 @@
  */
 import { readFile } from 'fs/promises';
 import * as vscode from 'vscode';
-import { GitOperations } from '../agent/gitOperations';
-import { SessionManager } from '../agent/sessionManager';
+import { AgentChatExecutor } from '../agent/execution/orchestration/agentChatExecutor';
+import { AgentExploreExecutor } from '../agent/execution/orchestration/agentExploreExecutor';
+import { GitOperations } from '../agent/git/gitOperations';
+import { SessionManager } from '../agent/sessions/sessionManager';
 import { ToolRegistry } from '../agent/toolRegistry';
-import { AgentChatExecutor } from '../services/agent/agentChatExecutor';
-import { AgentExploreExecutor } from '../services/agent/agentExploreExecutor';
 import { DatabaseService } from '../services/database/databaseService';
 import { ModelManager } from '../services/model/modelManager';
 import { OllamaClient } from '../services/model/ollamaClient';
-import { PendingEditDecorationProvider } from '../services/pendingEditDecorationProvider';
+import { PendingEditDecorationProvider } from '../services/review/pendingEditDecorationProvider';
 import { PendingEditReviewService } from '../services/review/pendingEditReviewService';
 import { TerminalManager } from '../services/terminalManager';
 import { TokenManager } from '../services/tokenManager';

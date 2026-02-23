@@ -1,6 +1,6 @@
 import * as assert from 'assert';
 import * as vscode from 'vscode';
-import { AgentDispatcher } from '../../../../src/services/agent/agentDispatcher';
+import { AgentDispatcher } from '../../../../src/agent/execution/orchestration/agentDispatcher';
 import { OllamaClient } from '../../../../src/services/model/ollamaClient';
 
 /**

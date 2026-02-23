@@ -3,7 +3,7 @@ import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
 import * as vscode from 'vscode';
-import { resolveMultiRootPath, resolveWorkspacePath } from '../../../../src/agent/tools/pathUtils';
+import { resolveMultiRootPath, resolveWorkspacePath } from '../../../../src/agent/tools/filesystem/pathUtils';
 
 /**
  * Helper: create a mock WorkspaceFolder pointing at the given directory.
