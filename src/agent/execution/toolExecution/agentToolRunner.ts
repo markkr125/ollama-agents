@@ -2,15 +2,14 @@ import { structuredPatch } from 'diff';
 import * as vscode from 'vscode';
 import { DatabaseService } from '../../../services/database/databaseService';
 import { PendingEditDecorationProvider } from '../../../services/review/pendingEditDecorationProvider';
-import { PersistUiEventFn } from '../../../types/agent';
 import { ChatMessage } from '../../../types/ollama';
-import { ToolExecution } from '../../../types/session';
+import { Session, ToolExecution } from '../../../types/session';
 import { formatDiagnostics, getErrorDiagnostics, waitForDiagnostics } from '../../../utils/diagnosticWaiter';
-import { WebviewMessageEmitter } from '../../../views/chatTypes';
 import { getToolActionInfo, getToolSuccessInfo } from '../../../views/toolUIFormatter';
 import { ToolRegistry } from '../../toolRegistry';
 import { resolveMultiRootPath } from '../../tools/filesystem/pathUtils';
 import { CHUNK_SIZE, countFileLines, readFileChunk } from '../../tools/filesystem/readFile';
+import { AgentEventEmitter } from '../agentEventEmitter';
 import { AgentFileEditHandler } from '../approval/agentFileEditHandler';
 import { AgentTerminalHandler } from '../approval/agentTerminalHandler';
 import { CheckpointManager } from './checkpointManager';
@@ -26,6 +25,23 @@ export interface ToolBatchResult {
   xmlResults: string[];
   /** Whether any file write was performed (not skipped) */
   wroteFiles: boolean;
+}
+
+// ---------------------------------------------------------------------------
+// Request object for executeBatch — replaces 10 positional params
+// ---------------------------------------------------------------------------
+
+export interface ToolBatchRequest {
+  toolCalls: Array<{ name: string; args: any }>;
+  context: any;
+  sessionId: string;
+  model: string;
+  groupTitle: string;
+  currentCheckpointId: string | undefined;
+  agentSession: Session;
+  useNativeTools: boolean;
+  token: vscode.CancellationToken;
+  messages?: ChatMessage[];
 }
 
 // ---------------------------------------------------------------------------
@@ -50,32 +66,31 @@ export class AgentToolRunner {
   constructor(
     private readonly toolRegistry: ToolRegistry,
     private readonly databaseService: DatabaseService,
-    private readonly emitter: WebviewMessageEmitter,
     private readonly terminalHandler: AgentTerminalHandler,
     private readonly fileEditHandler: AgentFileEditHandler,
     private readonly checkpointManager: CheckpointManager,
     private readonly decorationProvider: PendingEditDecorationProvider,
-    private readonly persistUiEvent: PersistUiEventFn,
     private readonly refreshExplorer: () => void,
     private readonly onFileWritten?: (checkpointId: string) => void
   ) {}
+
+  private events!: AgentEventEmitter;
+
+  /** Bind the event emitter for the current session. Called once per execute() cycle. */
+  bindEmitter(events: AgentEventEmitter): void {
+    this.events = events;
+    // Propagate to sub-handlers
+    this.terminalHandler.bindEmitter(events);
+    this.fileEditHandler.bindEmitter(events);
+  }
 
   /**
    * Execute every tool call in `toolCalls`, emitting UI events and feeding
    * results back into the conversation history in the appropriate format.
    */
-  async executeBatch(
-    toolCalls: Array<{ name: string; args: any }>,
-    context: any,
-    sessionId: string,
-    model: string,
-    groupTitle: string,
-    currentCheckpointId: string | undefined,
-    agentSession: any,
-    useNativeTools: boolean,
-    token: vscode.CancellationToken,
-    messages?: ChatMessage[]
-  ): Promise<ToolBatchResult> {
+  async executeBatch(request: ToolBatchRequest): Promise<ToolBatchResult> {
+    let { toolCalls, context, sessionId, model, groupTitle,
+          currentCheckpointId, agentSession, useNativeTools, token, messages } = request;
     const nativeResults: ToolBatchResult['nativeResults'] = [];
     const xmlResults: string[] = [];
     let wroteFiles = false;
@@ -121,8 +136,7 @@ export class AgentToolRunner {
         if (this.toolResultCache.has(cacheKey)) {
           const cached = this.toolResultCache.get(cacheKey)!;
           const cachePayload = { status: 'success' as const, icon: actionIcon, text: `${actionText} (cached)`, detail: 'Identical call — returning cached result' };
-          this.emitter.postMessage({ type: 'showToolAction', ...cachePayload, sessionId });
-          await this.persistUiEvent(sessionId, 'showToolAction', cachePayload);
+          await this.events.emit('showToolAction', cachePayload);
 
           if (useNativeTools) {
             nativeResults.push({ role: 'tool', content: cached, tool_name: toolCall.name });
@@ -151,8 +165,7 @@ export class AgentToolRunner {
             text: actionText,
             detail: error.message
           };
-          this.emitter.postMessage({ type: 'showToolAction', ...errorPayload, sessionId });
-          await this.persistUiEvent(sessionId, 'showToolAction', errorPayload);
+          await this.events.emit('showToolAction', errorPayload);
           agentSession.errors.push(error.message);
           if (sessionId) {
             await this.databaseService.addMessage(sessionId, 'tool', `Error: ${error.message}`, {
@@ -175,13 +188,11 @@ export class AgentToolRunner {
       // file edit handler emits its own with correct Creating/Editing verb;
       // sub-agent creates its own wrapper progress group)
       if (!isTerminalCommand && !isFileEdit && !isSubagentCall) {
-        this.emitter.postMessage({
-          type: 'showToolAction',
+        this.events.post('showToolAction', {
           status: 'running',
           icon: actionIcon,
           text: actionText,
-          detail: actionDetail,
-          sessionId
+          detail: actionDetail
         });
       }
 
@@ -220,12 +231,10 @@ export class AgentToolRunner {
             if (currentCheckpointId) {
               const uniqueFiles = [...new Set(agentSession.filesChanged)] as string[];
               const fileInfos = uniqueFiles.map((fp: string) => ({ path: fp, action: 'modified' }));
-              this.emitter.postMessage({
-                type: 'filesChanged',
+              this.events.post('filesChanged', {
                 checkpointId: currentCheckpointId,
                 files: fileInfos,
-                status: 'pending',
-                sessionId
+                status: 'pending'
               });
 
               // Trigger inline review (CodeLens) immediately after each write
@@ -268,8 +277,7 @@ export class AgentToolRunner {
           };
           // Terminal commands already show skip in the approval card
           if (!isSkipped) {
-            this.emitter.postMessage({ type: 'showToolAction', ...skipPayload, sessionId });
-            await this.persistUiEvent(sessionId, 'showToolAction', skipPayload);
+            await this.events.emit('showToolAction', skipPayload);
           }
 
           // Tool denial tracking: tell the LLM not to retry the same call
@@ -303,8 +311,7 @@ export class AgentToolRunner {
           // Terminal commands already show result in the approval card;
           // sub-agent creates its own wrapper progress group
           if (!isTerminalCommand && !isSubagentCall) {
-            this.emitter.postMessage({ type: 'showToolAction', ...actionPayload, sessionId });
-            await this.persistUiEvent(sessionId, 'showToolAction', actionPayload);
+            await this.events.emit('showToolAction', actionPayload);
           }
         }
 
@@ -360,8 +367,7 @@ export class AgentToolRunner {
           detail: error.message
         };
         if (!isTerminalCommand) {
-          this.emitter.postMessage({ type: 'showToolAction', ...errorPayload, sessionId });
-          await this.persistUiEvent(sessionId, 'showToolAction', errorPayload);
+          await this.events.emit('showToolAction', errorPayload);
         }
         agentSession.errors.push(error.message);
 
@@ -402,7 +408,7 @@ export class AgentToolRunner {
     sessionId: string,
     model: string,
     groupTitle: string,
-    agentSession: any,
+    agentSession: Session,
     _useNativeTools: boolean
   ): Promise<string> {
     const relativePath = toolCall.args?.path || toolCall.args?.file || toolCall.args?.filePath;
@@ -426,7 +432,7 @@ export class AgentToolRunner {
         filePath: relativePath,
         startLine: start
       };
-      this.emitter.postMessage({ type: 'showToolAction', ...runPayload, sessionId });
+      this.events.post('showToolAction', runPayload);
 
       // Streaming read of just this chunk
       const chunkContent = await readFileChunk(absPath, start, end);
@@ -441,8 +447,7 @@ export class AgentToolRunner {
         filePath: relativePath,
         startLine: start
       };
-      this.emitter.postMessage({ type: 'showToolAction', ...successPayload, sessionId });
-      await this.persistUiEvent(sessionId, 'showToolAction', successPayload);
+      await this.events.emit('showToolAction', successPayload);
     }
 
     const combined = chunks.join('\n');
@@ -458,7 +463,7 @@ export class AgentToolRunner {
       });
     }
 
-    agentSession.toolCalls.push({ tool: toolCall.name, input: toolCall.args, output: combined });
+    agentSession.toolCalls.push({ tool: toolCall.name, input: toolCall.args, output: combined, timestamp: Date.now() });
     return combined;
   }
 

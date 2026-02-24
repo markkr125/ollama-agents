@@ -229,7 +229,7 @@ describe('getEffectiveContext', () => {
 describe('handleEditorContext', () => {
   test('sets implicit file and selection from message', async () => {
     const state = await import('../../../src/webview/scripts/core/state');
-    const { handleEditorContext } = await import('../../../src/webview/scripts/core/messageHandlers/sessions');
+    const { handleEditorContext } = await import('../../../src/webview/scripts/core/messageHandlers/chatState');
 
     handleEditorContext({
       type: 'editorContext',
@@ -243,7 +243,7 @@ describe('handleEditorContext', () => {
 
   test('clears state when no editor is active', async () => {
     const state = await import('../../../src/webview/scripts/core/state');
-    const { handleEditorContext } = await import('../../../src/webview/scripts/core/messageHandlers/sessions');
+    const { handleEditorContext } = await import('../../../src/webview/scripts/core/messageHandlers/chatState');
 
     state.implicitFile.value = { fileName: 'old.ts', filePath: '/old.ts', languageId: 'typescript' };
     state.implicitSelection.value = { fileName: 'old.ts', content: 'x', startLine: 1, endLine: 1, languageId: 'typescript' };
@@ -256,7 +256,7 @@ describe('handleEditorContext', () => {
 
   test('handles file with no selection', async () => {
     const state = await import('../../../src/webview/scripts/core/state');
-    const { handleEditorContext } = await import('../../../src/webview/scripts/core/messageHandlers/sessions');
+    const { handleEditorContext } = await import('../../../src/webview/scripts/core/messageHandlers/chatState');
 
     handleEditorContext({
       type: 'editorContext',

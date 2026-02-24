@@ -1,4 +1,5 @@
 import * as vscode from 'vscode';
+import type { ExecutorConfig } from '../types/agent';
 import { AgentConfig, ExtensionConfig, ModeConfig } from '../types/config';
 import { DEFAULT_SENSITIVE_FILE_PATTERNS } from '../utils/fileSensitivity';
 
@@ -67,4 +68,22 @@ export function getModeConfig(mode: 'completion' | 'chat' | 'plan' | 'agent'): M
 
 export function getAgentConfig(): AgentConfig {
   return getConfig().agent;
+}
+
+/**
+ * Build an `ExecutorConfig` from the VS Code configuration.
+ * Assembles values from `agentMode` (temperature) and `agent`
+ * (maxIterations, toolTimeout, explorerModel) sections.
+ *
+ * @param overrides — optional partial overrides (e.g. session-level explorerModel).
+ */
+export function buildExecutorConfig(overrides?: Partial<ExecutorConfig>): ExecutorConfig {
+  const { agentMode, agent } = getConfig();
+  return {
+    maxIterations: agent.maxIterations,
+    toolTimeout: agent.toolTimeout,
+    temperature: agentMode.temperature,
+    explorerModel: agent.explorerModel,
+    ...overrides,
+  };
 }

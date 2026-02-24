@@ -14,39 +14,43 @@ import type {
     ToolApprovalResultMessage
 } from '../types';
 import { handleFileEditApprovalResult, handleRequestFileEditApproval, handleRequestToolApproval, handleToolApprovalResult } from './approvals';
-import { handleFileChangeResult, handleFilesChanged, handleFilesDiffStats, handleKeepUndoResult, handleReviewChangePosition } from './filesChanged';
-import { handleFinishProgressGroup, handleShowError, handleShowToolAction, handleStartProgressGroup, handleSubagentThinking } from './progress';
 import {
     handleAddContextItem,
     handleAddMessage,
-    handleAppendSessions,
-    handleBearerTokenSaved,
-    handleCapabilityCheckComplete,
-    handleCapabilityCheckProgress,
-    handleClearMessages,
-    handleConnectionError,
-    handleConnectionTestResult,
-    handleDbMaintenanceResult,
-    handleDeletionProgress,
     handleEditorContext,
     handleGenerationStarted,
     handleGenerationStopped,
     handleHideThinking,
-    handleInit,
+    handleShowThinking,
+    handleShowWarningBanner
+} from './chatState';
+import { handleFileChangeResult, handleFilesChanged, handleFilesDiffStats, handleKeepUndoResult, handleReviewChangePosition } from './filesChanged';
+import { handleFinishProgressGroup, handleShowError, handleShowToolAction, handleStartProgressGroup, handleSubagentThinking } from './progress';
+import {
+    handleAppendSessions,
+    handleClearMessages,
+    handleDeletionProgress,
     handleLoadSessionMessages,
     handleLoadSessions,
-    handleModelEnabledChanged,
-    handleNavigateToSettings,
-    handleRecreateMessagesResult,
     handleSearchSessionsResult,
     handleSessionApprovalSettings,
     handleSessionDeleted,
     handleSessionsDeleted,
-    handleSettingsUpdate,
-    handleShowThinking,
-    handleShowWarningBanner,
     handleUpdateSessionStatus
 } from './sessions';
+import {
+    handleBearerTokenSaved,
+    handleCapabilityCheckComplete,
+    handleCapabilityCheckProgress,
+    handleConnectionError,
+    handleConnectionTestResult,
+    handleDbMaintenanceResult,
+    handleInit,
+    handleModelEnabledChanged,
+    handleNavigateToSettings,
+    handleRecreateMessagesResult,
+    handleSettingsUpdate
+} from './settingsSync';
 import { handleCollapseThinking, handleFinalMessage, handleStreamChunk, handleStreamThinking, handleTokenUsage, markIterationBoundary } from './streaming';
 
 export const handleMessage = (msg: any) => {

@@ -6,19 +6,38 @@ import { AgentExploreExecutor, ExploreMode } from '../../agent/execution/orchest
 import { generateSessionTitle } from '../../agent/execution/titleGenerator';
 import { GitOperations } from '../../agent/git/gitOperations';
 import { SessionManager } from '../../agent/sessions/sessionManager';
-import { getConfig, getModeConfig } from '../../config/settings';
+import { buildExecutorConfig, getConfig, getModeConfig } from '../../config/settings';
 import { DatabaseService } from '../../services/database/databaseService';
 import { getModelCapabilities, ModelCapabilities } from '../../services/model/modelCompatibility';
 import { OllamaClient } from '../../services/model/ollamaClient';
 import { PendingEditReviewService } from '../../services/review/pendingEditReviewService';
 import { TokenManager } from '../../services/tokenManager';
-import { DispatchResult, ExecutorConfig } from '../../types/agent';
+import { DispatchResult } from '../../types/agent';
 import { Model } from '../../types/ollama';
 import { ChatSessionStatus, MessageRecord } from '../../types/session';
 import { ChatSessionController } from '../chatSessionController';
 import { ChatMessage, ContextItem, IMessageHandler, ViewState, WebviewMessageEmitter } from '../chatTypes';
 import { SettingsHandler } from '../settingsHandler';
 import { mergeCachedCapabilities, ModelMessageHandler } from './modelMessageHandler';
+
+/**
+ * Dependencies for ChatMessageHandler — replaces 13 positional constructor params.
+ */
+export interface ChatMessageHandlerDeps {
+  state: ViewState;
+  emitter: WebviewMessageEmitter;
+  sessionController: ChatSessionController;
+  settingsHandler: SettingsHandler;
+  agentExecutor: AgentChatExecutor;
+  exploreExecutor: AgentExploreExecutor;
+  databaseService: DatabaseService;
+  client: OllamaClient;
+  tokenManager: TokenManager;
+  sessionManager: SessionManager;
+  gitOps: GitOperations;
+  modelHandler: ModelMessageHandler;
+  reviewService?: PendingEditReviewService;
+}
 
 /**
  * Handles core chat lifecycle messages: init, send, stop, model/mode selection, new chat, add context.
@@ -34,23 +53,36 @@ export class ChatMessageHandler implements IMessageHandler {
   private cancellationTokenSource?: vscode.CancellationTokenSource;
   private readonly dispatcher: AgentDispatcher;
 
-  constructor(
-    private readonly state: ViewState,
-    private readonly emitter: WebviewMessageEmitter,
-    private readonly sessionController: ChatSessionController,
-    private readonly settingsHandler: SettingsHandler,
-    private readonly agentExecutor: AgentChatExecutor,
-    private readonly exploreExecutor: AgentExploreExecutor,
-    private readonly databaseService: DatabaseService,
-    private readonly client: OllamaClient,
-    private readonly tokenManager: TokenManager,
-    private readonly sessionManager: SessionManager,
-    private readonly gitOps: GitOperations,
-    private readonly modelHandler: ModelMessageHandler,
-    private readonly reviewService?: PendingEditReviewService,
-  ) {
+  private readonly state: ViewState;
+  private readonly emitter: WebviewMessageEmitter;
+  private readonly sessionController: ChatSessionController;
+  private readonly settingsHandler: SettingsHandler;
+  private readonly agentExecutor: AgentChatExecutor;
+  private readonly exploreExecutor: AgentExploreExecutor;
+  private readonly databaseService: DatabaseService;
+  private readonly client: OllamaClient;
+  private readonly tokenManager: TokenManager;
+  private readonly sessionManager: SessionManager;
+  private readonly gitOps: GitOperations;
+  private readonly modelHandler: ModelMessageHandler;
+  private readonly reviewService?: PendingEditReviewService;
+
+  constructor(deps: ChatMessageHandlerDeps) {
+    this.state = deps.state;
+    this.emitter = deps.emitter;
+    this.sessionController = deps.sessionController;
+    this.settingsHandler = deps.settingsHandler;
+    this.agentExecutor = deps.agentExecutor;
+    this.exploreExecutor = deps.exploreExecutor;
+    this.databaseService = deps.databaseService;
+    this.client = deps.client;
+    this.tokenManager = deps.tokenManager;
+    this.sessionManager = deps.sessionManager;
+    this.gitOps = deps.gitOps;
+    this.modelHandler = deps.modelHandler;
+    this.reviewService = deps.reviewService;
     this.dispatcher = new AgentDispatcher(
-      client,
+      deps.client,
       vscode.window.createOutputChannel('Ollama Copilot Dispatcher', { log: true })
     );
   }
@@ -574,12 +606,13 @@ export class ChatMessageHandler implements IMessageHandler {
 
     const agentSession = this.sessionManager.createSession(prompt, this.state.currentModel, workspace);
 
-    const config: ExecutorConfig = { maxIterations: getConfig().agent.maxIterations, toolTimeout: getConfig().agent.toolTimeout, temperature: 0.7 };
-
     // Resolve explorer model: session override → global setting → agent model (empty = same as orchestrator)
     const sessionExplorer = this.sessionController.getSessionExplorerModel();
     const globalExplorer = getConfig().agent.explorerModel;
-    config.explorerModel = sessionExplorer || globalExplorer || '';
+    const config = buildExecutorConfig({
+      temperature: 0.7,
+      explorerModel: sessionExplorer || globalExplorer || '',
+    });
 
     // Fetch model capabilities to decide native vs XML tool calling
     let capabilities: ModelCapabilities | undefined;
@@ -608,7 +641,10 @@ export class ChatMessageHandler implements IMessageHandler {
       };
     }
 
-    const result = await this.agentExecutor.execute(agentSession, config, token, sessionId, this.state.currentModel, capabilities, sessionMessages, dispatch);
+    const result = await this.agentExecutor.execute({
+      agentSession, config, token, sessionId, model: this.state.currentModel,
+      capabilities, conversationHistory: sessionMessages, dispatch
+    });
 
     // Clear the per-write callback
     this.agentExecutor.onFileWritten = undefined;
@@ -639,10 +675,14 @@ export class ChatMessageHandler implements IMessageHandler {
       }
     } catch { /* proceed without */ }
 
-    const config: ExecutorConfig = { maxIterations: getConfig().agent.maxIterations, toolTimeout: getConfig().agent.toolTimeout, temperature: 0.7 };
+    const config = buildExecutorConfig({ temperature: 0.7 });
 
     const primaryWorkspace = this.detectPrimaryWorkspace();
-    const result = await this.exploreExecutor.execute(prompt, config, token, sessionId, this.state.currentModel, mode, capabilities, sessionMessages, /* isSubagent */ false, primaryWorkspace);
+    const result = await this.exploreExecutor.execute({
+      task: prompt, config, token, sessionId, model: this.state.currentModel,
+      mode, capabilities, conversationHistory: sessionMessages,
+      isSubagent: false, primaryWorkspaceHint: primaryWorkspace
+    });
 
     if (this.sessionController.getCurrentSessionId() === sessionId) {
       this.sessionController.pushMessage(result.assistantMessage);

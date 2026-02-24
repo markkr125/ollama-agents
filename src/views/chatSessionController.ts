@@ -200,7 +200,7 @@ export class ChatSessionController {
 
     // Ensure filesChanged widget appears even if the original __ui__ event
     // was never persisted (old sessions, or sessionId was undefined at emit
-    // time — see Pitfall #13). Check whether the messages already contain a
+    // time). Check whether the messages already contain a
     // filesChanged __ui__ event; if not but the DB has pending checkpoints,
     // send synthetic filesChanged messages so the webview can construct the
     // widget and request diff stats.

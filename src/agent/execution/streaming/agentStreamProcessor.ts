@@ -186,26 +186,27 @@ export class AgentStreamProcessor {
               sessionId
             });
           }
-          // Bare JSON pre-scan — detect models (e.g. Qwen2.5-Coder) that emit
-          // tool calls as raw JSON without <tool_call> wrapping. Freeze text
-          // early to prevent bare JSON from leaking into streamed assistant text.
-          if (!textFrozen && knownToolNames) {
-            const bareMatch = response.match(/\{[^{}]*?"name"\s*:\s*"(\w+)"[^{}]*?"(?:arguments|args)"\s*:\s*\{/);
-            if (bareMatch && knownToolNames.has(bareMatch[1])) {
-              textFrozen = true;
-              this.emitter.postMessage({
-                type: 'showThinking',
-                message: `Preparing to use ${bareMatch[1]}...`,
-                sessionId
-              });
-            }
+        }
+
+        // Bare JSON pre-scan — detect models (e.g. Qwen2.5-Coder) that emit
+        // tool calls as raw JSON in the content field, even in native mode.
+        // Freeze text early to prevent bare JSON from leaking into the UI.
+        if (!textFrozen && knownToolNames) {
+          const bareMatch = response.match(/\{[^{}]*?"name"\s*:\s*"(\w+)"[^{}]*?"(?:arguments|args)"\s*:\s*\{/);
+          if (bareMatch && knownToolNames.has(bareMatch[1])) {
+            textFrozen = true;
+            this.emitter.postMessage({
+              type: 'showThinking',
+              message: `Preparing to use ${bareMatch[1]}...`,
+              sessionId
+            });
           }
         }
 
         const now = Date.now();
         if (!textFrozen && now - lastStreamTime >= STREAM_THROTTLE_MS) {
           lastStreamTime = now;
-          const latestCleaned = useNativeTools ? response : removeToolCalls(response);
+          const latestCleaned = removeToolCalls(response);
           let latestText = latestCleaned.replace(/\[TASK_COMPLETE\]/gi, '');
           // Strip partial [TASK_COMPLETE] prefix at end of stream
           const TASK_MARKER = '[TASK_COMPLETE]';
@@ -250,7 +251,7 @@ export class AgentStreamProcessor {
 
     // Flush final content — synchronous throttle may have skipped the last tokens
     if (!textFrozen && firstChunkReceived) {
-      const finalCleaned = (useNativeTools ? response : removeToolCalls(response))
+      const finalCleaned = removeToolCalls(response)
         .replace(/\[TASK_COMPLETE\]/gi, '');
       let finalText = finalCleaned;
       const FLUSH_MARKER = '[TASK_COMPLETE]';

@@ -3,6 +3,49 @@ import * as path from 'path';
 import * as vscode from 'vscode';
 
 /**
+ * Synchronously search for a file by bare filename across workspace folders.
+ * Uses a breadth-first walk (max depth 8) over src-like directories first,
+ * then falls back to the full tree. Returns the first match found, or null.
+ *
+ * This is intentionally synchronous and limited to prevent slowdowns on
+ * large workspaces. The max-depth cap avoids crawling node_modules/dist/etc.
+ */
+function findFileByName(filename: string, folders: readonly vscode.WorkspaceFolder[]): string | null {
+  const SKIP_DIRS = new Set(['node_modules', '.git', 'dist', 'out', 'build', '.next', 'coverage', '__pycache__', '.venv', 'venv']);
+  const MAX_DEPTH = 8;
+
+  function walk(dir: string, depth: number): string | null {
+    if (depth > MAX_DEPTH) return null;
+    let entries: fs.Dirent[];
+    try {
+      entries = fs.readdirSync(dir, { withFileTypes: true });
+    } catch {
+      return null;
+    }
+    // Check files at this level first
+    for (const entry of entries) {
+      if (entry.isFile() && entry.name === filename) {
+        return path.join(dir, entry.name);
+      }
+    }
+    // Then recurse into subdirectories
+    for (const entry of entries) {
+      if (entry.isDirectory() && !SKIP_DIRS.has(entry.name) && !entry.name.startsWith('.')) {
+        const found = walk(path.join(dir, entry.name), depth + 1);
+        if (found) return found;
+      }
+    }
+    return null;
+  }
+
+  for (const folder of folders) {
+    const found = walk(folder.uri.fsPath, 0);
+    if (found) return found;
+  }
+  return null;
+}
+
+/**
  * Resolve a workspace-relative path to an absolute file system path.
  * If the path is already absolute, return it as-is.
  * Shared by all built-in tools that accept file/directory paths.
@@ -58,7 +101,20 @@ export function resolveMultiRootPath(
         return stripped;
       }
     }
-    return path.join(primaryWorkspace.uri.fsPath, relativePath);
+    const resolved = path.join(primaryWorkspace.uri.fsPath, relativePath);
+    if (fs.existsSync(resolved)) {
+      return resolved;
+    }
+    // Bare filename fallback — search the workspace tree when a simple
+    // filename like "ProcessSearch.ts" doesn't resolve directly.
+    const isBareFilename = !relativePath.includes('/') && !relativePath.includes(path.sep) && relativePath.includes('.');
+    if (isBareFilename) {
+      const found = findFileByName(relativePath, [primaryWorkspace]);
+      if (found) {
+        return found;
+      }
+    }
+    return resolved;
   }
 
   // If the entire relativePath matches a workspace folder name (no path separators),
@@ -102,6 +158,18 @@ export function resolveMultiRootPath(
           return candidate;
         }
       }
+    }
+  }
+
+  // Bare filename fallback — LLMs (especially smaller models) often pass
+  // just the filename without the directory path (e.g. "ProcessSearch.ts"
+  // instead of "src/helpers/Search/ProcessSearch.ts"). Use VS Code's
+  // findFiles API to locate the file anywhere in the workspace.
+  const isBareFilename = !relativePath.includes('/') && !relativePath.includes(path.sep) && relativePath.includes('.');
+  if (isBareFilename) {
+    const found = findFileByName(relativePath, allFolders);
+    if (found) {
+      return found;
     }
   }
 

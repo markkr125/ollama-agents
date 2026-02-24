@@ -1249,3 +1249,242 @@ describe('CRITICAL: Chunked read_file parity - startLine + filePath passthrough'
     expect(restoredGroup.status).toBe(liveGroup.status);
   });
 });
+
+// =============================================================================
+// REGRESSION: Sub-agent progress groups — live must match history
+// =============================================================================
+// Before fix: FilteredAgentEventEmitter blocked startProgressGroup and
+// finishProgressGroup from reaching the webview. The live UI showed all
+// sub-agent actions under a fallback "Working on task" group. History
+// restoration correctly created separate "Sub-agent: [title]" groups because
+// timelineBuilder reads ALL persisted events. This caused a CRITICAL
+// live vs history mismatch — the #1 worst bug in the system.
+
+describe('CRITICAL: Sub-agent progress groups — live vs history parity', () => {
+
+  test('REGRESSION: sub-agent gets its own progress group with correct title (not "Working on task")', async () => {
+    // ─── PATH 1: Live handlers ───
+    const state = await import('../../../src/webview/scripts/core/state');
+    const streaming = await import('../../../src/webview/scripts/core/messageHandlers/streaming');
+    const progress = await import('../../../src/webview/scripts/core/messageHandlers/progress');
+
+    state.timeline.value = [];
+    state.currentStreamIndex.value = null;
+    state.currentAssistantThreadId.value = null;
+    state.currentProgressIndex.value = null;
+    (state as any).progressIndexStack.value = [];
+
+    // Simulate: assistant text → sub-agent group → tool action → group finish
+    streaming.handleStreamChunk({ type: 'streamChunk', content: 'Let me analyze the code.' });
+
+    // Sub-agent wrapper group
+    progress.handleStartProgressGroup({
+      type: 'startProgressGroup',
+      title: 'Sub-agent: Analyze SearchController',
+      isSubagent: true
+    } as any);
+
+    // Description action inside the group
+    progress.handleShowToolAction({
+      type: 'showToolAction',
+      status: 'running',
+      icon: '📋',
+      text: 'Examine the search function in SearchController.ts'
+    } as any);
+
+    // Tool action
+    progress.handleShowToolAction({
+      type: 'showToolAction',
+      status: 'success',
+      icon: '📄',
+      text: 'Read SearchController.ts  272 lines'
+    } as any);
+
+    // Close sub-agent group
+    progress.handleFinishProgressGroup({ type: 'finishProgressGroup' } as any);
+
+    const liveThread = state.timeline.value[0] as any;
+    // Find the progress group
+    let liveGroup: any = null;
+    for (const block of liveThread.blocks) {
+      if (block.type === 'tools') {
+        for (const tool of block.tools) {
+          if (tool.type === 'progress') {
+            liveGroup = tool;
+            break;
+          }
+        }
+      }
+      if (liveGroup) break;
+    }
+
+    // CRITICAL assertions:
+    expect(liveGroup).toBeTruthy();
+    expect(liveGroup.title).toBe('Sub-agent: Analyze SearchController');
+    expect(liveGroup.title).not.toBe('Working on task');
+    expect(liveGroup.isSubagent).toBe(true);
+    expect(liveGroup.status).toBe('done');
+    // finishProgressGroup transitions running actions → success
+    expect(liveGroup.actions.every((a: any) => a.status === 'success')).toBe(true);
+
+    // ─── PATH 2: Timeline builder (from DB messages) ───
+    const builder = await import('../../../src/webview/scripts/core/timelineBuilder');
+
+    const dbMessages = [
+      { id: 'a1', role: 'assistant', content: 'Let me analyze the code.' },
+      makeUiEvent('ui1', 'startProgressGroup', { title: 'Sub-agent: Analyze SearchController', isSubagent: true }),
+      makeUiEvent('ui2', 'showToolAction', { status: 'running', icon: '📋', text: 'Examine the search function in SearchController.ts' }),
+      makeUiEvent('ui3', 'showToolAction', { status: 'success', icon: '📄', text: 'Read SearchController.ts  272 lines' }),
+      makeUiEvent('ui4', 'finishProgressGroup', {}),
+    ];
+
+    const restoredTimeline = builder.buildTimelineFromMessages(dbMessages);
+    const restoredThread = restoredTimeline[0] as any;
+    let restoredGroup: any = null;
+    for (const block of restoredThread.blocks) {
+      if (block.type === 'tools') {
+        for (const tool of block.tools) {
+          if (tool.type === 'progress') {
+            restoredGroup = tool;
+            break;
+          }
+        }
+      }
+      if (restoredGroup) break;
+    }
+
+    // History MUST match live
+    expect(restoredGroup).toBeTruthy();
+    expect(restoredGroup.title).toBe(liveGroup.title);
+    expect(restoredGroup.isSubagent).toBe(liveGroup.isSubagent);
+    expect(restoredGroup.status).toBe(liveGroup.status);
+    expect(restoredGroup.actions.length).toBe(liveGroup.actions.length);
+  });
+
+  test('REGRESSION: multiple sub-agents get separate groups (not all under one)', async () => {
+    const state = await import('../../../src/webview/scripts/core/state');
+    const streaming = await import('../../../src/webview/scripts/core/messageHandlers/streaming');
+    const progress = await import('../../../src/webview/scripts/core/messageHandlers/progress');
+
+    state.timeline.value = [];
+    state.currentStreamIndex.value = null;
+    state.currentAssistantThreadId.value = null;
+    state.currentProgressIndex.value = null;
+    (state as any).progressIndexStack.value = [];
+
+    streaming.handleStreamChunk({ type: 'streamChunk', content: 'Analyzing...' });
+
+    // Sub-agent 1
+    progress.handleStartProgressGroup({ type: 'startProgressGroup', title: 'Sub-agent: Analyze auth', isSubagent: true } as any);
+    progress.handleShowToolAction({ type: 'showToolAction', status: 'success', icon: '📄', text: 'Read auth.ts  50 lines' } as any);
+    progress.handleFinishProgressGroup({ type: 'finishProgressGroup' } as any);
+
+    // Sub-agent 2
+    progress.handleStartProgressGroup({ type: 'startProgressGroup', title: 'Sub-agent: Analyze database', isSubagent: true } as any);
+    progress.handleShowToolAction({ type: 'showToolAction', status: 'success', icon: '📄', text: 'Read db.ts  100 lines' } as any);
+    progress.handleFinishProgressGroup({ type: 'finishProgressGroup' } as any);
+
+    // Sub-agent 3
+    progress.handleStartProgressGroup({ type: 'startProgressGroup', title: 'Sub-agent: Analyze API', isSubagent: true } as any);
+    progress.handleShowToolAction({ type: 'showToolAction', status: 'success', icon: '📄', text: 'Read api.ts  200 lines' } as any);
+    progress.handleFinishProgressGroup({ type: 'finishProgressGroup' } as any);
+
+    const liveThread = state.timeline.value[0] as any;
+    const liveGroups: any[] = [];
+    for (const block of liveThread.blocks) {
+      if (block.type === 'tools') {
+        for (const tool of block.tools) {
+          if (tool.type === 'progress') liveGroups.push(tool);
+        }
+      }
+    }
+
+    // CRITICAL: must have 3 SEPARATE groups, not 1
+    expect(liveGroups.length).toBe(3);
+    expect(liveGroups[0].title).toBe('Sub-agent: Analyze auth');
+    expect(liveGroups[1].title).toBe('Sub-agent: Analyze database');
+    expect(liveGroups[2].title).toBe('Sub-agent: Analyze API');
+    // All must be completed
+    expect(liveGroups.every((g: any) => g.status === 'done')).toBe(true);
+
+    // ─── Verify history matches ───
+    const builder = await import('../../../src/webview/scripts/core/timelineBuilder');
+
+    const dbMessages = [
+      { id: 'a1', role: 'assistant', content: 'Analyzing...' },
+      makeUiEvent('ui1', 'startProgressGroup', { title: 'Sub-agent: Analyze auth', isSubagent: true }),
+      makeUiEvent('ui2', 'showToolAction', { status: 'success', icon: '📄', text: 'Read auth.ts  50 lines' }),
+      makeUiEvent('ui3', 'finishProgressGroup', {}),
+      makeUiEvent('ui4', 'startProgressGroup', { title: 'Sub-agent: Analyze database', isSubagent: true }),
+      makeUiEvent('ui5', 'showToolAction', { status: 'success', icon: '📄', text: 'Read db.ts  100 lines' }),
+      makeUiEvent('ui6', 'finishProgressGroup', {}),
+      makeUiEvent('ui7', 'startProgressGroup', { title: 'Sub-agent: Analyze API', isSubagent: true }),
+      makeUiEvent('ui8', 'showToolAction', { status: 'success', icon: '📄', text: 'Read api.ts  200 lines' }),
+      makeUiEvent('ui9', 'finishProgressGroup', {}),
+    ];
+
+    const restoredTimeline = builder.buildTimelineFromMessages(dbMessages);
+    const restoredThread = restoredTimeline[0] as any;
+    const restoredGroups: any[] = [];
+    for (const block of restoredThread.blocks) {
+      if (block.type === 'tools') {
+        for (const tool of block.tools) {
+          if (tool.type === 'progress') restoredGroups.push(tool);
+        }
+      }
+    }
+
+    expect(restoredGroups.length).toBe(liveGroups.length);
+    for (let i = 0; i < liveGroups.length; i++) {
+      expect(restoredGroups[i].title).toBe(liveGroups[i].title);
+      expect(restoredGroups[i].status).toBe(liveGroups[i].status);
+      expect(restoredGroups[i].actions.length).toBe(liveGroups[i].actions.length);
+    }
+  });
+
+  test('REGRESSION: sub-agent group nested inside parent iteration group', async () => {
+    // When the model calls run_subagent mixed with other tools, the parent
+    // creates a group and sub-agent creates a nested group inside it.
+    const state = await import('../../../src/webview/scripts/core/state');
+    const streaming = await import('../../../src/webview/scripts/core/messageHandlers/streaming');
+    const progress = await import('../../../src/webview/scripts/core/messageHandlers/progress');
+
+    state.timeline.value = [];
+    state.currentStreamIndex.value = null;
+    state.currentAssistantThreadId.value = null;
+    state.currentProgressIndex.value = null;
+    (state as any).progressIndexStack.value = [];
+
+    streaming.handleStreamChunk({ type: 'streamChunk', content: 'Working...' });
+
+    // Parent iteration group (from agentChatExecutor when mixed tools)
+    progress.handleStartProgressGroup({ type: 'startProgressGroup', title: 'Reading files' } as any);
+    progress.handleShowToolAction({ type: 'showToolAction', status: 'success', icon: '📄', text: 'Read main.ts  10 lines' } as any);
+
+    // Sub-agent nested inside parent group
+    progress.handleStartProgressGroup({ type: 'startProgressGroup', title: 'Sub-agent: Deep analysis', isSubagent: true } as any);
+    progress.handleShowToolAction({ type: 'showToolAction', status: 'success', icon: '📄', text: 'Read helper.ts  50 lines' } as any);
+    progress.handleFinishProgressGroup({ type: 'finishProgressGroup' } as any);
+
+    // Close parent group
+    progress.handleFinishProgressGroup({ type: 'finishProgressGroup' } as any);
+
+    const liveThread = state.timeline.value[0] as any;
+    const liveGroups: any[] = [];
+    for (const block of liveThread.blocks) {
+      if (block.type === 'tools') {
+        for (const tool of block.tools) {
+          if (tool.type === 'progress') liveGroups.push(tool);
+        }
+      }
+    }
+
+    // Should have 2 groups: parent + sub-agent
+    expect(liveGroups.length).toBe(2);
+    expect(liveGroups[0].title).toBe('Reading files');
+    expect(liveGroups[0].isSubagent).toBeFalsy();
+    expect(liveGroups[1].title).toBe('Sub-agent: Deep analysis');
+    expect(liveGroups[1].isSubagent).toBe(true);
+    expect(liveGroups.every((g: any) => g.status === 'done')).toBe(true);
+  });
+});

@@ -25,6 +25,10 @@ export interface Session {
   errors: string[];
   branch?: string;
   filesChanged: string[];
+  /** Set after the terminal-nudge heuristic fires once per session. */
+  _terminalNudgeSent?: boolean;
+  /** Set after the post-task verification gate has run once per session. */
+  _verificationDone?: boolean;
 }
 
 export interface SessionTreeItem extends vscode.TreeItem {

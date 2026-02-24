@@ -1,5 +1,7 @@
 import type * as vscode from 'vscode';
+import type { ModelCapabilities } from '../services/model/modelCompatibility';
 import type { TerminalManager } from '../services/terminalManager';
+import type { MessageRecord, Session } from './session';
 
 // ---------------------------------------------------------------------------
 // Shared agent type definitions — used by toolRegistry, executor, and
@@ -56,17 +58,6 @@ export interface ToolContext {
   runSubagent?: (task: string, mode: 'explore' | 'review' | 'deep-explore', contextHint?: string, title?: string, description?: string) => Promise<string>;
 }
 
-/**
- * Callback type for persisting UI events to the database.
- * Defined here (rather than in a handler file) to avoid circular
- * dependencies between agent sub-handlers and the executor.
- */
-export type PersistUiEventFn = (
-  sessionId: string | undefined,
-  eventType: string,
-  payload: Record<string, any>
-) => Promise<void>;
-
 // ---------------------------------------------------------------------------
 // Agent Control Plane — structured continuation messages
 // ---------------------------------------------------------------------------
@@ -121,4 +112,22 @@ export interface DispatchResult {
   confidence: number;
   /** Short reasoning for diagnostic logging. */
   reasoning: string;
+}
+
+// ---------------------------------------------------------------------------
+// Agent Execute Params — parameter object for AgentChatExecutor.execute()
+// ---------------------------------------------------------------------------
+
+/**
+ * Parameter object for AgentChatExecutor.execute() — replaces 8 positional params.
+ */
+export interface AgentExecuteParams {
+  agentSession: Session;
+  config: ExecutorConfig;
+  token: vscode.CancellationToken;
+  sessionId: string;
+  model: string;
+  capabilities?: ModelCapabilities;
+  conversationHistory?: MessageRecord[];
+  dispatch?: DispatchResult;
 }

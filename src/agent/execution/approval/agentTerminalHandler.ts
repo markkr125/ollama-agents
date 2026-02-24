@@ -1,16 +1,11 @@
 import * as path from 'path';
 import * as vscode from 'vscode';
 import { DatabaseService } from '../../../services/database/databaseService';
-import type { PersistUiEventFn } from '../../../types/agent';
-import { WebviewMessageEmitter } from '../../../views/chatTypes';
 import { ToolRegistry } from '../../toolRegistry';
+import { AgentEventEmitter } from '../agentEventEmitter';
 import { ApprovalManager } from './approvalManager';
 import { analyzeDangerousCommand } from './commandSafety';
 import { computeTerminalApprovalDecision } from './terminalApproval';
-
-// Re-export PersistUiEventFn from the shared types location.
-// Consumers should prefer importing from '../../../types/agent' directly.
-export type { PersistUiEventFn } from '../../../types/agent';
 
 // ---------------------------------------------------------------------------
 // AgentTerminalHandler — terminal command safety check, approval flow, and
@@ -18,14 +13,19 @@ export type { PersistUiEventFn } from '../../../types/agent';
 // ---------------------------------------------------------------------------
 
 export class AgentTerminalHandler {
+  private events!: AgentEventEmitter;
+
   constructor(
     private readonly toolRegistry: ToolRegistry,
     private readonly databaseService: DatabaseService,
-    private readonly emitter: WebviewMessageEmitter,
     private readonly approvalManager: ApprovalManager,
-    private readonly persistUiEvent: PersistUiEventFn,
     private readonly outputChannel: vscode.OutputChannel
   ) {}
+
+  /** Bind the event emitter for the current session. Called once per execute() cycle. */
+  bindEmitter(events: AgentEventEmitter): void {
+    this.events = events;
+  }
 
   async execute(
     toolName: string,
@@ -61,7 +61,7 @@ export class AgentTerminalHandler {
     const approvalId = `approval_${Date.now()}_${Math.random().toString(36).slice(2)}`;
 
     if (requiresApproval) {
-      await this.persistUiEvent(sessionId, 'requestToolApproval', {
+      const approvalPayload = {
         id: approvalId,
         command,
         cwd,
@@ -69,34 +69,14 @@ export class AgentTerminalHandler {
         reason,
         status: 'pending',
         timestamp: Date.now()
-      });
-      this.emitter.postMessage({
-        type: 'requestToolApproval',
-        sessionId,
-        approval: {
-          id: approvalId,
-          command,
-          cwd,
-          severity,
-          reason,
-          status: 'pending',
-          timestamp: Date.now()
-        }
-      });
+      };
+      await this.events.emit('requestToolApproval', { approval: approvalPayload, ...approvalPayload });
 
       const approval = await this.approvalManager.waitForApproval(approvalId, token);
       if (!approval.approved) {
         const skippedOutput = 'Command skipped by user.';
 
-        await this.persistUiEvent(sessionId, 'toolApprovalResult', {
-          approvalId,
-          status: 'skipped',
-          output: skippedOutput
-        });
-
-        this.emitter.postMessage({
-          type: 'toolApprovalResult',
-          sessionId,
+        await this.events.emit('toolApprovalResult', {
           approvalId,
           status: 'skipped',
           output: skippedOutput
@@ -115,33 +95,14 @@ export class AgentTerminalHandler {
       }
 
       // Emit 'running' state so the webview keeps the spinner while the command executes
-      await this.persistUiEvent(sessionId, 'toolApprovalResult', {
+      await this.events.emit('toolApprovalResult', {
         approvalId,
         status: 'running',
         command: String(args?.command || '').trim(),
         cwd
       });
-      this.emitter.postMessage({
-        type: 'toolApprovalResult',
-        sessionId,
-        approvalId,
-        status: 'running',
-        command: String(args?.command || '').trim()
-      });
     } else {
-      await this.persistUiEvent(sessionId, 'toolApprovalResult', {
-        approvalId,
-        status: 'running',
-        output: 'Auto-approved for this session.',
-        autoApproved: true,
-        command,
-        cwd,
-        severity,
-        reason
-      });
-      this.emitter.postMessage({
-        type: 'toolApprovalResult',
-        sessionId,
+      await this.events.emit('toolApprovalResult', {
         approvalId,
         status: 'running',
         output: 'Auto-approved for this session.',
@@ -157,23 +118,13 @@ export class AgentTerminalHandler {
     const exitCodeMatch = (result.output || '').match(/Exit code:\s*(\d+)/i);
     const exitCode = exitCodeMatch ? Number(exitCodeMatch[1]) : null;
 
-    await this.persistUiEvent(sessionId, 'toolApprovalResult', {
+    await this.events.emit('toolApprovalResult', {
       approvalId,
       status: 'approved',
       output: result.output,
       exitCode,
       command: String(args?.command || '').trim(),
       cwd
-    });
-
-    this.emitter.postMessage({
-      type: 'toolApprovalResult',
-      sessionId,
-      approvalId,
-      status: 'approved',
-      output: result.output,
-      exitCode,
-      command: String(args?.command || '').trim()
     });
 
     return result;

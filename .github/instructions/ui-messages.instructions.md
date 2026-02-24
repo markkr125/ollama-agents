@@ -151,11 +151,11 @@ Widget requests diff stats
   → Backend responds with 'filesDiffStats' + 'reviewChangePosition'
 ```
 
-**⚠️ The webview does NOT send `sessionId`** in keep/undo messages. The backend MUST resolve it via `this.sessionController.getCurrentSessionId()`. Without this, `persistUiEvent` silently skips (see Pitfall #13 in `copilot-instructions.md`).
+**⚠️ The webview does NOT send `sessionId`** in keep/undo messages. The backend MUST resolve it via `this.sessionController.getCurrentSessionId()`. Without this, `persistUiEvent` silently skips.
 
 **History restoration**: `timelineBuilder.ts` handles `filesChanged`, `fileChangeResult`, and `keepUndoResult` events by building/merging/removing standalone `filesChangedBlocks`. Multiple incremental `filesChanged` events with the same `checkpointId` must be **merged** (not duplicated) — see Pitfall #14.
 
-**Fallback for missing `__ui__` events**: `chatSessionController.ensureFilesChangedWidget()` fires after `loadSessionMessages`. If no `filesChanged` `__ui__` event exists in the session's messages but the DB has pending checkpoints with pending file_snapshots, it posts synthetic `filesChanged` messages. This handles old sessions or sessions where `persistUiEvent` silently skipped due to undefined `sessionId` (Pitfall #13). See the full flow diagram in `extension-architecture.instructions.md` → "Diff Stats Flow".
+**Fallback for missing `__ui__` events**: `chatSessionController.ensureFilesChangedWidget()` fires after `loadSessionMessages`. If no `filesChanged` `__ui__` event exists in the session's messages but the DB has pending checkpoints with pending file_snapshots, it posts synthetic `filesChanged` messages. This handles old sessions or sessions where `persistUiEvent` silently skipped due to undefined `sessionId`. See the full flow diagram in `extension-architecture.instructions.md` → "Diff Stats Flow".
 
 - **`src/views/chatView.ts`**
   - Webview lifecycle + MessageRouter wiring only

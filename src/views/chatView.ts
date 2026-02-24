@@ -92,11 +92,12 @@ export class ChatViewProvider implements vscode.WebviewViewProvider, WebviewMess
 
     // Build message handlers
     const modelHandler = new ModelMessageHandler(this, client, databaseService);
-    const chatHandler = new ChatMessageHandler(
-      this.state, this, this.sessionController, this.settingsHandler,
-      this.agentExecutor, this.exploreExecutor, databaseService, client, tokenManager,
+    const chatHandler = new ChatMessageHandler({
+      state: this.state, emitter: this, sessionController: this.sessionController,
+      settingsHandler: this.settingsHandler, agentExecutor: this.agentExecutor,
+      exploreExecutor: this.exploreExecutor, databaseService, client, tokenManager,
       sessionManager, gitOps, modelHandler, reviewService
-    );
+    });
     const sessionHandler = new SessionMessageHandler(this.state, this, this.sessionController);
     const settingsMessageHandler = new SettingsMessageHandler(this.settingsHandler);
     const approvalHandler = new ApprovalMessageHandler(this, this.sessionController, this.agentExecutor, databaseService);

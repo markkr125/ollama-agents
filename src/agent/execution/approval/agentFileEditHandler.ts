@@ -3,12 +3,11 @@ import * as vscode from 'vscode';
 import { DatabaseService } from '../../../services/database/databaseService';
 import { EditManager } from '../../../services/editManager';
 import { OllamaClient } from '../../../services/model/ollamaClient';
-import { PersistUiEventFn } from '../../../types/agent';
 import { ChatMessage, ChatRequest } from '../../../types/ollama';
-import { DEFAULT_SENSITIVE_FILE_PATTERNS, evaluateFileSensitivity } from '../../../utils/fileSensitivity';
-import { WebviewMessageEmitter } from '../../../views/chatTypes';
+import { DEFAULT_SENSITIVE_FILE_PATTERNS, evaluateFileSensitivity, type FilePatternMap } from '../../../utils/fileSensitivity';
 import { ToolRegistry } from '../../toolRegistry';
 import { resolveMultiRootPath } from '../../tools/filesystem/pathUtils';
+import { AgentEventEmitter } from '../agentEventEmitter';
 import { ApprovalManager } from './approvalManager';
 import { renderDiffHtml } from './diffRenderer';
 
@@ -27,16 +26,21 @@ export class AgentFileEditHandler {
   /** Cache of file content for diff preview during approval flow. */
   readonly fileApprovalCache = new Map<string, { filePath: string; displayPath: string; originalContent: string; newContent: string }>();
 
+  private events!: AgentEventEmitter;
+
   constructor(
     private readonly toolRegistry: ToolRegistry,
     private readonly databaseService: DatabaseService,
     private readonly editManager: EditManager,
-    private readonly emitter: WebviewMessageEmitter,
     private readonly approvalManager: ApprovalManager,
-    private readonly persistUiEvent: PersistUiEventFn,
     private readonly outputChannel: vscode.OutputChannel,
     private readonly client: OllamaClient
   ) {}
+
+  /** Bind the event emitter for the current session. Called once per execute() cycle. */
+  bindEmitter(events: AgentEventEmitter): void {
+    this.events = events;
+  }
 
   async execute(
     toolName: string,
@@ -74,19 +78,11 @@ export class AgentFileEditHandler {
     // Must happen BEFORE deferred content generation so the UI isn't empty.
     const fileName = relPath.split('/').pop() || relPath;
     const runningText = isNew ? `Creating ${fileName}` : `Editing ${fileName}`;
-    await this.persistUiEvent(sessionId, 'showToolAction', {
+    await this.events.emit('showToolAction', {
       status: 'running',
       icon: actionIcon,
       text: runningText,
       detail: ''
-    });
-    this.emitter.postMessage({
-      type: 'showToolAction',
-      status: 'running',
-      icon: actionIcon,
-      text: runningText,
-      detail: '',
-      sessionId
     });
 
     // -----------------------------------------------------------------------
@@ -131,18 +127,7 @@ export class AgentFileEditHandler {
         newContent
       });
       await this.persistFileEditApproval(sessionId, normalizedRelPath, originalContent, newContent, decision, true, 'approved', diffHtml);
-      await this.persistUiEvent(sessionId, 'fileEditApprovalResult', {
-        approvalId,
-        status: 'approved',
-        autoApproved: true,
-        filePath: normalizedRelPath,
-        severity: decision.severity,
-        reason: decision.reason,
-        diffHtml
-      });
-      this.emitter.postMessage({
-        type: 'fileEditApprovalResult',
-        sessionId,
+      await this.events.emit('fileEditApprovalResult', {
         approvalId,
         status: 'approved',
         autoApproved: true,
@@ -159,34 +144,21 @@ export class AgentFileEditHandler {
         newContent
       });
 
-      await this.persistUiEvent(sessionId, 'showToolAction', {
+      await this.events.emit('showToolAction', {
         status: 'pending',
         icon: actionIcon,
         text: runningText,
         detail: 'Awaiting approval'
       });
 
-      this.emitter.postMessage({
-        type: 'showToolAction',
-        status: 'pending',
-        icon: actionIcon,
-        text: runningText,
-        detail: 'Awaiting approval',
-        sessionId
-      });
-
-      await this.persistUiEvent(sessionId, 'requestFileEditApproval', {
+      await this.events.emit('requestFileEditApproval', {
         id: approvalId,
         filePath: normalizedRelPath,
         severity: decision.severity,
         reason: decision.reason,
         status: 'pending',
         timestamp: Date.now(),
-        diffHtml
-      });
-      this.emitter.postMessage({
-        type: 'requestFileEditApproval',
-        sessionId,
+        diffHtml,
         approval: {
           id: approvalId,
           filePath: normalizedRelPath,
@@ -203,18 +175,7 @@ export class AgentFileEditHandler {
         const skippedOutput = 'Edit skipped by user.';
 
         await this.persistFileEditApproval(sessionId, normalizedRelPath, originalContent, newContent, decision, false, 'skipped', diffHtml);
-        await this.persistUiEvent(sessionId, 'fileEditApprovalResult', {
-          approvalId,
-          status: 'skipped',
-          autoApproved: false,
-          filePath: normalizedRelPath,
-          severity: decision.severity,
-          reason: decision.reason,
-          diffHtml
-        });
-        this.emitter.postMessage({
-          type: 'fileEditApprovalResult',
-          sessionId,
+        await this.events.emit('fileEditApprovalResult', {
           approvalId,
           status: 'skipped',
           autoApproved: false,
@@ -233,18 +194,7 @@ export class AgentFileEditHandler {
       }
 
       await this.persistFileEditApproval(sessionId, normalizedRelPath, originalContent, newContent, decision, false, 'approved', diffHtml);
-      await this.persistUiEvent(sessionId, 'fileEditApprovalResult', {
-        approvalId,
-        status: 'approved',
-        autoApproved: false,
-        filePath: normalizedRelPath,
-        severity: decision.severity,
-        reason: decision.reason,
-        diffHtml
-      });
-      this.emitter.postMessage({
-        type: 'fileEditApprovalResult',
-        sessionId,
+      await this.events.emit('fileEditApprovalResult', {
         approvalId,
         status: 'approved',
         autoApproved: false,
@@ -280,16 +230,16 @@ export class AgentFileEditHandler {
   // Private helpers
   // -------------------------------------------------------------------------
 
-  private getSettingsPatterns(): Record<string, boolean> {
+  private getSettingsPatterns(): FilePatternMap {
     const config = vscode.workspace.getConfiguration('ollamaCopilot');
     return config.get('agent.sensitiveFilePatterns', DEFAULT_SENSITIVE_FILE_PATTERNS);
   }
 
-  private safeParsePatterns(raw: string): Record<string, boolean> | null {
+  private safeParsePatterns(raw: string): FilePatternMap | null {
     try {
       const parsed = JSON.parse(raw);
       if (!parsed || typeof parsed !== 'object') return null;
-      return parsed as Record<string, boolean>;
+      return parsed as FilePatternMap;
     } catch {
       return null;
     }

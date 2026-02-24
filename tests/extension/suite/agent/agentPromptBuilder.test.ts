@@ -557,5 +557,61 @@ suite('AgentPromptBuilder', () => {
       assert.ok(!native.includes('CODE NAVIGATION STRATEGY'), 'Native orchestrator should not have code nav');
       assert.ok(!xml.includes('CODE NAVIGATION STRATEGY'), 'XML orchestrator should not have code nav');
     });
+
+    // ── REGRESSION: Bug #4 — prompt must instruct forwarding file paths ──
+    // Before fix: the SUB-AGENT BEST PRACTICES section didn't tell the model
+    // to include exact file paths from user context in sub-agent tasks.
+    // The model would launch sub-agents with vague descriptions, forcing
+    // sub-agents to rediscover files the user already provided.
+
+    test('REGRESSION: orchestrator prompt instructs forwarding file paths to sub-agents', () => {
+      const native = builder.buildOrchestratorNativePrompt(singleRoot, singleRoot[0]);
+      assert.ok(
+        native.includes('ALWAYS include exact file paths'),
+        'Orchestrator prompt must instruct the model to forward file paths to sub-agents'
+      );
+    });
+
+    test('REGRESSION: orchestrator XML prompt also instructs forwarding file paths', () => {
+      const xml = builder.buildOrchestratorXmlPrompt(singleRoot, singleRoot[0]);
+      assert.ok(
+        xml.includes('ALWAYS include exact file paths'),
+        'Orchestrator XML prompt must instruct the model to forward file paths to sub-agents'
+      );
+    });
+  });
+
+  // ===========================================================================
+  // REGRESSION: Sub-agent prompt MUST tell the model to produce text findings
+  // ===========================================================================
+  // Before fix: the NO-NARRATION RULE said "every response must be tool calls
+  // OR [TASK_COMPLETE]". Small models interpreted this literally and just said
+  // [task_complete] without any analysis text after reading a file. The parent
+  // orchestrator got nothing useful.
+
+  suite('sub-agent prompt — REGRESSION: REPORT YOUR FINDINGS required', () => {
+    test('sub-agent explore prompt includes REPORT YOUR FINDINGS section', () => {
+      const prompt = builder.buildSubAgentExplorePrompt(singleRoot, singleRoot[0]);
+      assert.ok(
+        prompt.includes('REPORT YOUR FINDINGS'),
+        'Sub-agent prompt must include REPORT YOUR FINDINGS section'
+      );
+    });
+
+    test('sub-agent prompt requires text summary before TASK_COMPLETE', () => {
+      const prompt = builder.buildSubAgentExplorePrompt(singleRoot, singleRoot[0]);
+      assert.ok(
+        prompt.includes('MUST write a text summary'),
+        'Sub-agent prompt must require text findings before [TASK_COMPLETE]'
+      );
+    });
+
+    test('sub-agent prompt warns against empty TASK_COMPLETE', () => {
+      const prompt = builder.buildSubAgentExplorePrompt(singleRoot, singleRoot[0]);
+      assert.ok(
+        prompt.includes('NEVER output just [TASK_COMPLETE] with no analysis'),
+        'Sub-agent prompt must warn against empty [TASK_COMPLETE]'
+      );
+    });
   });
 });

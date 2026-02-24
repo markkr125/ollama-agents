@@ -58,8 +58,44 @@ suite('agentControlPlane', () => {
       true
     );
     assert.strictEqual(isCompletionSignaled('Done. [TASK_COMPLETE]', ''), true);
-    assert.strictEqual(isCompletionSignaled('Task is complete.', ''), true);
     assert.strictEqual(isCompletionSignaled('Keep going', ''), false);
+  });
+
+  // =========================================================================
+  // REGRESSION: isCompletionSignaled must NOT accept loose/variant signals
+  // =========================================================================
+  // Before fix: models used [END_OF_EXPLORATION] or "task is complete" to
+  // escape the loop after 0 tool calls. The code accepted these as valid
+  // completion signals, letting sub-agents quit without doing any work.
+
+  test('REGRESSION: [END_OF_EXPLORATION] must NOT be accepted as completion', () => {
+    // This was the #1 sub-agent escape hatch — model says [END_OF_EXPLORATION]
+    // after 0 tool calls and the loop breaks, returning useless narration
+    assert.strictEqual(
+      isCompletionSignaled('I analyzed the code.\n[END_OF_EXPLORATION]', ''),
+      false,
+      '[END_OF_EXPLORATION] must NOT be accepted — it lets models escape without calling tools'
+    );
+  });
+
+  test('REGRESSION: "task is complete" must NOT be accepted (too loose)', () => {
+    // "The task is complete" in narration text should NOT trigger completion
+    assert.strictEqual(
+      isCompletionSignaled('Task is complete.', ''),
+      false,
+      '"task is complete" is too loose — models use this in narration without actually completing'
+    );
+    assert.strictEqual(
+      isCompletionSignaled('The task is complete, summary follows.', ''),
+      false,
+      'Loose "task is complete" in narration should not trigger completion'
+    );
+  });
+
+  test('REGRESSION: only [TASK_COMPLETE] (bracketed) signals completion', () => {
+    assert.strictEqual(isCompletionSignaled('[TASK_COMPLETE]', ''), true);
+    assert.strictEqual(isCompletionSignaled('Summary here.\n[TASK_COMPLETE]', ''), true);
+    assert.strictEqual(isCompletionSignaled('', '[TASK_COMPLETE]'), true, 'Thinking-only completion');
   });
 
   test('buildLoopContinuationMessage normalizes files and uses default note', () => {
@@ -248,6 +284,42 @@ suite('checkNoToolCompletion — smart completion detection', () => {
     const result = checkNoToolCompletion({ response: '', thinkingContent: '', hasWrittenFiles: true, consecutiveNoToolIterations: 2 });
     assert.strictEqual(result, 'break_implicit');
   });
+
+  // ── REGRESSION: Bug #1 — sub-agents must NOT pass hasWrittenFiles=true ──
+  // Before fix: explore executor passed hasWrittenFiles=true for ALL modes,
+  // including sub-agents. Sub-agents are read-only and never write files.
+  // With hasWrittenFiles=true, any empty response → break_implicit (instant kill).
+  // Small models (qwen2.5-coder:7b) often produce near-empty responses on
+  // their first try and need a retry. The fix passes hasWrittenFiles=false
+  // for sub-agents so they get 'continue' instead of 'break_implicit'.
+
+  test('REGRESSION: sub-agent (hasWrittenFiles=false) empty response → continue, NOT break_implicit', () => {
+    // This is the critical scenario: sub-agent produces empty response on first try.
+    // With the old hasWrittenFiles=true, this would return 'break_implicit' (killed).
+    // With the fix (hasWrittenFiles=false), this returns 'continue' (gets another chance).
+    assert.strictEqual(
+      checkNoToolCompletion({ response: '', thinkingContent: '', hasWrittenFiles: false, consecutiveNoToolIterations: 1 }),
+      'continue'
+    );
+  });
+
+  test('REGRESSION: sub-agent still breaks after 2 consecutive empty iterations', () => {
+    // Even with hasWrittenFiles=false, break_consecutive should still work
+    // to prevent infinite loops.
+    assert.strictEqual(
+      checkNoToolCompletion({ response: '', thinkingContent: '', hasWrittenFiles: false, consecutiveNoToolIterations: 2 }),
+      'break_consecutive'
+    );
+  });
+
+  test('REGRESSION: non-sub-agent (hasWrittenFiles=true) still gets break_implicit on empty', () => {
+    // Normal explore modes should still break immediately on empty response
+    // when files have been written (the original correct behavior).
+    assert.strictEqual(
+      checkNoToolCompletion({ response: '', thinkingContent: '', hasWrittenFiles: true, consecutiveNoToolIterations: 1 }),
+      'break_implicit'
+    );
+  });
 });
 
 // ── computeDynamicNumCtx ──────────────────────────────────────────
@@ -383,5 +455,58 @@ suite('buildToolCallSummary', () => {
     const result = buildToolCallSummary([{ name: 'list_files', args: { path: 'src' } }]);
     assert.ok(result);
     assert.ok(result!.includes('listed'), `Expected 'listed' in: ${result}`);
+  });
+
+  // ── REGRESSION: Bug #2 — tool summaries must use neutral phrasing ──
+  // Before fix: "I got symbols in src/file.ts" implied success before execution.
+  // The model saw this + an error result and got confused, giving up immediately.
+
+  test('REGRESSION: get_document_symbols uses neutral phrasing (not "got symbols in")', () => {
+    const result = buildToolCallSummary([{ name: 'get_document_symbols', args: { path: 'src/SearchController.ts' } }]);
+    assert.ok(result);
+    assert.ok(!result!.includes('got symbols in'), `Should NOT use success-implying "got symbols in": ${result}`);
+    assert.ok(result!.includes('checked symbols'), `Expected neutral 'checked symbols' in: ${result}`);
+  });
+
+  test('REGRESSION: find_definition uses neutral phrasing (not "found definition")', () => {
+    const result = buildToolCallSummary([{ name: 'find_definition', args: { symbol: 'handleClick' } }]);
+    assert.ok(result);
+    assert.ok(!result!.includes('found definition'), `Should NOT use success-implying "found": ${result}`);
+    assert.ok(result!.includes('looked up definition'), `Expected neutral 'looked up definition' in: ${result}`);
+  });
+
+  test('REGRESSION: find_references uses neutral phrasing (not "found references")', () => {
+    const result = buildToolCallSummary([{ name: 'find_references', args: { symbol: 'myFunc' } }]);
+    assert.ok(result);
+    assert.ok(!result!.includes('found references'), `Should NOT use success-implying phrasing: ${result}`);
+    assert.ok(result!.includes('looked up references'), `Expected neutral phrasing in: ${result}`);
+  });
+
+  test('REGRESSION: find_implementations uses neutral phrasing', () => {
+    const result = buildToolCallSummary([{ name: 'find_implementations', args: { symbol: 'IService' } }]);
+    assert.ok(result);
+    assert.ok(!result!.includes('found implementations'), `Should NOT use "found": ${result}`);
+    assert.ok(result!.includes('looked up implementations'), `Expected neutral phrasing in: ${result}`);
+  });
+
+  test('REGRESSION: get_hover_info uses neutral phrasing', () => {
+    const result = buildToolCallSummary([{ name: 'get_hover_info', args: { symbol: 'myVar' } }]);
+    assert.ok(result);
+    assert.ok(!result!.includes('got hover'), `Should NOT use "got": ${result}`);
+    assert.ok(result!.includes('checked hover'), `Expected neutral phrasing in: ${result}`);
+  });
+
+  test('REGRESSION: get_call_hierarchy uses neutral phrasing', () => {
+    const result = buildToolCallSummary([{ name: 'get_call_hierarchy', args: { symbol: 'process' } }]);
+    assert.ok(result);
+    assert.ok(!result!.includes('got call hierarchy'), `Should NOT use "got": ${result}`);
+    assert.ok(result!.includes('checked call hierarchy'), `Expected neutral phrasing in: ${result}`);
+  });
+
+  test('REGRESSION: get_type_hierarchy uses neutral phrasing', () => {
+    const result = buildToolCallSummary([{ name: 'get_type_hierarchy', args: { symbol: 'BaseClass' } }]);
+    assert.ok(result);
+    assert.ok(!result!.includes('got type hierarchy'), `Should NOT use "got": ${result}`);
+    assert.ok(result!.includes('checked type hierarchy'), `Expected neutral phrasing in: ${result}`);
   });
 });

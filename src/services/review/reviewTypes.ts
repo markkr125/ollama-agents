@@ -9,6 +9,21 @@ import * as vscode from 'vscode';
 // =============================================================================
 
 /**
+ * Explicit lifecycle phase for PendingEditReviewService.
+ *
+ * Valid transitions:
+ *   idle     → building   (start review / checkpoint merge)
+ *   building → active     (session built successfully)
+ *   building → idle       (build produced no files / error)
+ *   active   → building   (re-edit / new checkpoint merge)
+ *   active   → idle       (close review / all files resolved)
+ *
+ * The `AsyncMutex` serialises all methods that transition between phases,
+ * so concurrent operations cannot corrupt the lifecycle.
+ */
+export type ReviewPhase = 'idle' | 'building' | 'active';
+
+/**
  * A single contiguous hunk of changes in a file.
  */
 export interface ReviewHunk {

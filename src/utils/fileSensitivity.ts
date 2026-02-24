@@ -2,6 +2,21 @@ import { minimatch } from 'minimatch';
 
 export type FileSensitivitySeverity = 'critical' | 'high' | 'medium';
 
+/**
+ * Self-documenting action for file sensitivity patterns.
+ * - `'auto-approve'` — file edits matching this pattern are approved automatically
+ * - `'require-approval'` — file edits matching this pattern need user confirmation
+ *
+ * Legacy boolean values are supported for backward compatibility with existing
+ * database records and VS Code settings:
+ * - `true`  → treated as `'auto-approve'`
+ * - `false` → treated as `'require-approval'`
+ */
+export type FilePatternAction = 'auto-approve' | 'require-approval';
+
+/** Patterns can use either the new string actions or legacy booleans. */
+export type FilePatternMap = Record<string, FilePatternAction | boolean>;
+
 export type FileSensitivityDecision = {
   requiresApproval: boolean;
   severity: FileSensitivitySeverity;
@@ -9,28 +24,28 @@ export type FileSensitivityDecision = {
   matchedPattern?: string;
 };
 
-export const DEFAULT_SENSITIVE_FILE_PATTERNS: Record<string, boolean> = {
-  '**/*': true,
-  '**/.env*': false,
-  '**/.vscode/*.json': false,
-  '**/package.json': false,
-  '**/package-lock.json': false,
-  '**/yarn.lock': false,
-  '**/pnpm-lock.yaml': false,
-  '**/*.pem': false,
-  '**/*.key': false,
-  '**/*.pfx': false,
-  '**/*.p12': false,
-  '**/tsconfig.json': false,
-  '**/jsconfig.json': false,
-  '**/Dockerfile': false,
-  '**/docker-compose*.yml': false,
-  '**/docker-compose*.yaml': false,
-  '**/.github/workflows/*': false,
-  '**/.npmrc': false,
-  '**/.yarnrc': false,
-  '**/.yarnrc.yml': false,
-  '**/*.secrets.*': false
+export const DEFAULT_SENSITIVE_FILE_PATTERNS: FilePatternMap = {
+  '**/*': 'auto-approve',
+  '**/.env*': 'require-approval',
+  '**/.vscode/*.json': 'require-approval',
+  '**/package.json': 'require-approval',
+  '**/package-lock.json': 'require-approval',
+  '**/yarn.lock': 'require-approval',
+  '**/pnpm-lock.yaml': 'require-approval',
+  '**/*.pem': 'require-approval',
+  '**/*.key': 'require-approval',
+  '**/*.pfx': 'require-approval',
+  '**/*.p12': 'require-approval',
+  '**/tsconfig.json': 'require-approval',
+  '**/jsconfig.json': 'require-approval',
+  '**/Dockerfile': 'require-approval',
+  '**/docker-compose*.yml': 'require-approval',
+  '**/docker-compose*.yaml': 'require-approval',
+  '**/.github/workflows/*': 'require-approval',
+  '**/.npmrc': 'require-approval',
+  '**/.yarnrc': 'require-approval',
+  '**/.yarnrc.yml': 'require-approval',
+  '**/*.secrets.*': 'require-approval'
 };
 
 const CRITICAL_PATH_PATTERNS: RegExp[] = [
@@ -76,13 +91,20 @@ export const getFileSeverity = (filePath: string): FileSensitivitySeverity => {
   return matchesAny(normalized, MEDIUM_PATH_PATTERNS) ? 'medium' : 'medium';
 };
 
+/**
+ * Evaluate whether a file path requires approval based on glob patterns.
+ * Iterates patterns in insertion order — the **last matching pattern wins**.
+ *
+ * Accepts both new `FilePatternAction` strings and legacy `boolean` values
+ * for backward compatibility with existing DB records and VS Code settings.
+ */
 export const evaluateFileSensitivity = (
   filePath: string,
-  patterns: Record<string, boolean>
+  patterns: FilePatternMap
 ): FileSensitivityDecision => {
   const normalized = normalizePath(filePath);
   let matchedPattern: string | undefined;
-  let matchedValue: boolean | undefined;
+  let matchedValue: FilePatternAction | boolean | undefined;
 
   for (const [pattern, value] of Object.entries(patterns || {})) {
     if (minimatch(normalized, pattern, { dot: true, nocase: true })) {
@@ -91,7 +113,9 @@ export const evaluateFileSensitivity = (
     }
   }
 
-  const requiresApproval = matchedValue === false;
+  // Normalize: false / 'require-approval' → requires approval
+  //            true  / 'auto-approve'     → auto-approved
+  const requiresApproval = matchedValue === false || matchedValue === 'require-approval';
   const severity = getFileSeverity(normalized);
   const reason = requiresApproval && matchedPattern
     ? `Matched sensitive pattern: ${matchedPattern}`

@@ -1,6 +1,7 @@
 import * as vscode from 'vscode';
 import type { TaskIntent } from '../../../types/agent';
 import { ToolRegistry } from '../../toolRegistry';
+import { ANALYZE_WRITE_TOOLS, DEEP_EXPLORE_TOOLS, ORCHESTRATOR_TOOLS, READ_ONLY_TOOLS, SECURITY_REVIEW_TOOLS } from '../toolSets';
 import { discoverProjectContext } from './projectContext';
 
 // ---------------------------------------------------------------------------
@@ -277,6 +278,7 @@ SUB-AGENT BEST PRACTICES:
 - Give each sub-agent a descriptive title (3-5 words): "Analyze auth middleware", "Find test patterns"
 - Use context_hint to narrow their search: "start from src/services/auth/"
 - Be specific in the task description — what to look for, what to return
+- ALWAYS include exact file paths from the user's context in the sub-agent task. If the user provided code from "src/controllers/search/SearchController.ts", tell the sub-agent: "Read src/controllers/search/SearchController.ts and analyze...". Do NOT make sub-agents rediscover files you already know about.
 - Sub-agents are read-only — they CANNOT write files or run commands
 - Sub-agent results are NOT shown to the user — YOU must summarize or act on their findings
 - Prefer multiple focused sub-agents over one broad one
@@ -441,6 +443,12 @@ NO-NARRATION RULE:
 - Every response MUST contain EITHER tool calls OR [TASK_COMPLETE]. No exceptions.
 - Do not explain what you plan to do — just do it by calling tools.
 
+REPORT YOUR FINDINGS:
+- Before writing [TASK_COMPLETE], you MUST write a text summary of what you discovered.
+- Your text output IS the report to the caller — if you produce no text, the caller gets nothing.
+- Include: key facts, function signatures, code structure, relevant snippets with file:line references.
+- NEVER output just [TASK_COMPLETE] with no analysis text. Always describe what you found first.
+
 OUTPUT BUDGET:
 Keep your final response under 1500 words. Focus on facts, code references, and concrete findings. Omit general advice or disclaimers.`,
       this.workspaceInfo(workspaceFolders, primaryWorkspace),
@@ -511,13 +519,7 @@ When you have thoroughly answered the question, respond with [TASK_COMPLETE].`,
 
   /** Tool definitions for explore mode — only read-only tools. */
   private buildExploreToolDefinitions(): string {
-    const readOnlyNames = new Set([
-      'read_file', 'search_workspace', 'list_files', 'get_diagnostics',
-      'get_document_symbols', 'find_definition', 'find_references',
-      'find_implementations', 'find_symbol', 'get_hover_info',
-      'get_call_hierarchy', 'get_type_hierarchy',
-    ]);
-    const tools = this.toolRegistry.getAll().filter(t => readOnlyNames.has(t.name));
+    const tools = this.toolRegistry.getAll().filter(t => READ_ONLY_TOOLS.has(t.name));
     const descriptions = tools.map((t: { name: string; description: string; schema?: any }) => {
       const params = t.schema?.properties
         ? Object.entries(t.schema.properties)
@@ -671,13 +673,7 @@ Then respond with [TASK_COMPLETE].`,
 
   /** Tool definitions for security review — read-only + limited git commands. */
   private buildSecurityReviewToolDefinitions(): string {
-    const allowedNames = new Set([
-      'read_file', 'search_workspace', 'list_files', 'get_diagnostics',
-      'get_document_symbols', 'find_definition', 'find_references',
-      'find_implementations', 'find_symbol', 'get_hover_info',
-      'get_call_hierarchy', 'get_type_hierarchy',
-      'run_terminal_command',
-    ]);
+    const allowedNames = SECURITY_REVIEW_TOOLS;
     const tools = this.toolRegistry.getAll().filter(t => allowedNames.has(t.name));
     const descriptions = tools.map((t: { name: string; description: string; schema?: any }) => {
       const params = t.schema?.properties
@@ -800,13 +796,7 @@ When you have thoroughly explored all requested code paths and written the docum
 
   /** XML tool definitions for analyze-with-write mode. */
   private buildAnalyzeWithWriteToolDefinitions_XML(): string {
-    const allowedNames = new Set([
-      'read_file', 'search_workspace', 'list_files', 'get_diagnostics',
-      'get_document_symbols', 'find_definition', 'find_references',
-      'find_implementations', 'find_symbol', 'get_hover_info',
-      'get_call_hierarchy', 'get_type_hierarchy',
-      'run_subagent', 'write_file',
-    ]);
+    const allowedNames = ANALYZE_WRITE_TOOLS;
     const tools = this.toolRegistry.getAll().filter(t => allowedNames.has(t.name));
     const descriptions = tools.map((t: { name: string; description: string; schema?: any }) => {
       const params = t.schema?.properties
@@ -821,15 +811,8 @@ When you have thoroughly explored all requested code paths and written the docum
 
   /** Get Ollama native tool definitions for analyze-with-write (read-only + subagent + write_file). */
   getAnalyzeWithWriteToolDefinitions(): any[] {
-    const allowedNames = new Set([
-      'read_file', 'search_workspace', 'list_files', 'get_diagnostics',
-      'get_document_symbols', 'find_definition', 'find_references',
-      'find_implementations', 'find_symbol', 'get_hover_info',
-      'get_call_hierarchy', 'get_type_hierarchy',
-      'run_subagent', 'write_file',
-    ]);
     return this.toolRegistry.getOllamaToolDefinitions()
-      .filter((td: any) => allowedNames.has(td.function?.name));
+      .filter((td: any) => ANALYZE_WRITE_TOOLS.has(td.function?.name));
   }
 
   // ---------------------------------------------------------------------------
@@ -899,13 +882,7 @@ Your response should be a complete, accurate documentation of everything you tra
 
   /** Tool definitions for deep-explore mode — read-only + subagent. */
   private buildDeepExploreToolDefinitions(): string {
-    const allowedNames = new Set([
-      'read_file', 'search_workspace', 'list_files', 'get_diagnostics',
-      'get_document_symbols', 'find_definition', 'find_references',
-      'find_implementations', 'find_symbol', 'get_hover_info',
-      'get_call_hierarchy', 'get_type_hierarchy',
-      'run_subagent',
-    ]);
+    const allowedNames = DEEP_EXPLORE_TOOLS;
     const tools = this.toolRegistry.getAll().filter(t => allowedNames.has(t.name));
     const descriptions = tools.map((t: { name: string; description: string; schema?: any }) => {
       const params = t.schema?.properties
@@ -920,15 +897,8 @@ Your response should be a complete, accurate documentation of everything you tra
 
   /** Get Ollama native tool definitions for deep-explore (read-only + subagent). */
   getDeepExploreToolDefinitions(): any[] {
-    const allowedNames = new Set([
-      'read_file', 'search_workspace', 'list_files', 'get_diagnostics',
-      'get_document_symbols', 'find_definition', 'find_references',
-      'find_implementations', 'find_symbol', 'get_hover_info',
-      'get_call_hierarchy', 'get_type_hierarchy',
-      'run_subagent',
-    ]);
     return this.toolRegistry.getOllamaToolDefinitions()
-      .filter((td: any) => allowedNames.has(td.function?.name));
+      .filter((td: any) => DEEP_EXPLORE_TOOLS.has(td.function?.name));
   }
 
   // ---------------------------------------------------------------------------
@@ -937,27 +907,14 @@ Your response should be a complete, accurate documentation of everything you tra
 
   /** Get Ollama native tool definitions filtered to read-only tools only. */
   getReadOnlyToolDefinitions(): any[] {
-    const readOnlyNames = new Set([
-      'read_file', 'search_workspace', 'list_files', 'get_diagnostics',
-      'get_document_symbols', 'find_definition', 'find_references',
-      'find_implementations', 'find_symbol', 'get_hover_info',
-      'get_call_hierarchy', 'get_type_hierarchy',
-    ]);
     return this.toolRegistry.getOllamaToolDefinitions()
-      .filter((td: any) => readOnlyNames.has(td.function?.name));
+      .filter((td: any) => READ_ONLY_TOOLS.has(td.function?.name));
   }
 
   /** Get Ollama native tool definitions for security review (read-only + terminal). */
   getSecurityReviewToolDefinitions(): any[] {
-    const allowedNames = new Set([
-      'read_file', 'search_workspace', 'list_files', 'get_diagnostics',
-      'get_document_symbols', 'find_definition', 'find_references',
-      'find_implementations', 'find_symbol', 'get_hover_info',
-      'get_call_hierarchy', 'get_type_hierarchy',
-      'run_terminal_command',
-    ]);
     return this.toolRegistry.getOllamaToolDefinitions()
-      .filter((td: any) => allowedNames.has(td.function?.name));
+      .filter((td: any) => SECURITY_REVIEW_TOOLS.has(td.function?.name));
   }
 
   // ---------------------------------------------------------------------------
@@ -965,20 +922,16 @@ Your response should be a complete, accurate documentation of everything you tra
   // and run_subagent. All research/exploration is delegated to sub-agents.
   // ---------------------------------------------------------------------------
 
-  private static readonly ORCHESTRATOR_TOOLS = new Set([
-    'write_file', 'run_terminal_command', 'run_subagent',
-  ]);
-
   /** Get Ollama native tool definitions restricted to orchestrator-only tools. */
   getOrchestratorToolDefinitions(): any[] {
     return this.toolRegistry.getOllamaToolDefinitions()
-      .filter((td: any) => AgentPromptBuilder.ORCHESTRATOR_TOOLS.has(td.function?.name));
+      .filter((td: any) => ORCHESTRATOR_TOOLS.has(td.function?.name));
   }
 
   /** Build XML tool definitions restricted to orchestrator-only tools. */
   private buildOrchestratorToolDefinitions_XML(): string {
     const tools = this.toolRegistry.getAll()
-      .filter(t => AgentPromptBuilder.ORCHESTRATOR_TOOLS.has(t.name));
+      .filter(t => ORCHESTRATOR_TOOLS.has(t.name));
     const descriptions = tools.map((t: { name: string; description: string; schema?: any }) => {
       const params = t.schema?.properties
         ? Object.entries(t.schema.properties)

@@ -142,18 +142,11 @@ export const closeActiveThinkingGroup = (collapse = true) => { ... }
 
 **Why this matters**: Without `collapse = false` at generation-end, all tool action groups inside the last thinking group would collapse into a "Thought for Xs" pill. Users reported the scroll area shrinking and action groups becoming unclickable — the thinking group `<details>` was collapsing and hiding all its children.
 
-### First-Chunk Streaming Gate
-
-To prevent incomplete markdown (e.g., `**What` rendering as literal text instead of the spinner), the backend applies a **first-chunk gate**:
-
-- **First chunk**: Requires ≥8 word characters (`[a-zA-Z0-9_]`) before sending `streamChunk`. This ensures enough content for meaningful markdown rendering.
-- **Subsequent chunks**: Any content with ≥1 word character is sent immediately, since the markdown renderer has prior context to handle partial syntax.
-- **While gated**: The webview continues showing the spinner/loading animation.
-
 **Rules**:
 - The assistant thread is the only container for tool UI blocks during an assistant response.
 - Never render tool blocks as standalone timeline items outside the assistant thread.
 - Both live handlers and `timelineBuilder` create an initial empty text block for consistency.
+- **First-chunk gate**: See `ui-messages.instructions.md` → "First-Chunk Gate".
 
 ## Progress Group Rendering Modes
 
@@ -213,36 +206,11 @@ Both `handleOpenWorkspaceFile` and `handleRevealInExplorer` call `stripFolderPre
 
 ## UI Event Persistence
 
-UI events (progress groups, tool actions, approvals) are persisted as `__ui__` tool messages:
+> Full event ordering table and persist+post rules are in `copilot-instructions.md` → CRITICAL RULE #1.
 
-```typescript
-{
-  role: 'tool',
-  toolName: '__ui__',
-  toolOutput: JSON.stringify({
-    eventType: 'startProgressGroup' | 'showToolAction' | 'finishProgressGroup' | 'requestToolApproval' | 'toolApprovalResult' | 'requestFileEditApproval' | 'fileEditApprovalResult',
-    payload: { ... }
-  })
-}
-```
+UI events are persisted as `__ui__` tool messages (`role: 'tool'`, `toolName: '__ui__'`, `toolOutput: JSON.stringify({eventType, payload})`).
 
-**Persisted events** (saved to database):
-- `startProgressGroup` - Creates new progress group
-- `showToolAction` - Adds action to progress group (only final states, not transient "running" states)
-- `finishProgressGroup` - Marks group as done/collapsed
-- `requestToolApproval` - Creates pending terminal command approval card + "Awaiting approval" action
-- `toolApprovalResult` - Updates terminal command approval status and action status
-- `requestFileEditApproval` - Creates pending file edit approval card with diff + "Awaiting approval" action
-- `fileEditApprovalResult` - Updates file edit approval status and action status
-- `thinkingBlock` - Stores collapsed thinking content for history rebuild
-- `filesChanged` - Creates/merges standalone files-changed widget block
-- `fileChangeResult` - Removes a single file from widget (after keep/undo)
-- `keepUndoResult` - Removes entire widget block (after Keep All / Undo All)
-
-**Not persisted** (transient UI states):
-- "Running" status updates that will be replaced by final status
-- Intermediate streaming content (only final content is saved as assistant message)
-- `streamThinking` / `collapseThinking` — live streaming events (final content persisted as `thinkingBlock`)
+**Not persisted** (transient): "Running" status updates, intermediate streaming content, `streamThinking`/`collapseThinking` (final content persisted as `thinkingBlock`).
 
 ## Editable Command Approvals
 
@@ -464,143 +432,36 @@ If you add new functionality, place it in the appropriate folder above and keep 
 
 ## Files Changed Widget (Standalone State)
 
-The files-changed widget shows which files the agent modified and lets users Keep/Undo changes. It is **NOT** part of the assistant thread blocks — it uses standalone reactive state:
-
-```typescript
-// src/webview/scripts/core/state.ts
-export const filesChangedBlocks = ref<AssistantThreadFilesChangedBlock[]>([]);
-```
-
-### Why Standalone?
-
-The widget is pinned to the bottom of the chat (below the input area), not embedded in the message timeline. This means:
-- It is NOT an `AssistantThreadItem.blocks` entry
-- `AssistantThreadFilesChangedBlock` is NOT in the thread block union type
-- `ChatPage.vue` renders it from `filesChangedBlocks` state, not from timeline items
+The files-changed widget shows which files the agent modified and lets users Keep/Undo changes. It is **NOT** part of the assistant thread blocks — it uses standalone reactive state (`filesChangedBlocks` ref in `state.ts`), pinned below the chat input.
 
 ### Widget Data Flow
 
 | Action | Handler | Effect |
 |--------|---------|--------|
-| Agent writes files | `handleFilesChanged()` | Creates/merges block in `filesChangedBlocks` by `checkpointId`; re-requests stats on re-edits |
+| Agent writes files | `handleFilesChanged()` | Creates/merges block by `checkpointId`; re-requests stats on re-edits |
 | Stats arrive | `handleFilesDiffStats()` | Populates `additions`/`deletions` on matching files |
-| Single keep/undo (click) | `FilesChanged.vue` click handler | **Optimistic UI**: `removeFileOptimistic()` removes file immediately, recalculates totals, cleans up empty checkpointIds/block. THEN sends `keepFile`/`undoFile` to backend. |
-| Single keep/undo (response) | `handleFileChangeResult()` | **Safety net only**: removes file if still present (usually already gone from optimistic removal) |
-| Keep All / Undo All (click) | `FilesChanged.vue` click handler | **Optimistic UI**: `filesChangedBlocks.value = []` immediately, then sends backend message |
-| Keep All / Undo All (response) | `handleKeepUndoResult()` | Removes block (usually already cleared by optimistic UI) |
-| Re-edit detected | `handleFilesChanged()` | When all incoming files already exist (`added=false`), still sends `requestFilesDiffStats` to refresh stale stats |
-| Session cleared | `handleClearMessages()` | Sets `filesChangedBlocks.value = []` |
+| Single keep/undo | `FilesChanged.vue` click | **Optimistic UI**: removes file immediately via `removeFileOptimistic()`, then sends to backend |
+| Keep All / Undo All | `FilesChanged.vue` click | **Optimistic UI**: clears `filesChangedBlocks.value = []`, then sends to backend |
+| Response handlers | `handleFileChangeResult` / `handleKeepUndoResult` | Safety net: removes if still present (usually gone from optimistic removal) |
 
-### ⚠️ Optimistic UI Pattern (Keep/Undo)
+### ⚠️ Key Rules
 
-The filesChanged widget uses **optimistic UI** for keep/undo operations. The file is removed from the widget **immediately in the click handler** (inside the Vue component), before the backend round-trip completes. This guarantees Vue reactivity, since the mutation happens in a synchronous component method.
+1. **Optimistic UI is mandatory**: File removal happens in the click handler (synchronous component method) — NOT in the backend response handler. Vue reactivity quirks with deeply nested arrays inside `ref()` make the response handler unreliable.
+2. **Merge by checkpointId**: Multiple `filesChanged` events with same `checkpointId` merge (don't push duplicates).
+3. **DataCloneError prevention**: Always spread reactive arrays before `postMessage()`: `navigatePrevChange([...props.block.checkpointIds])`.
+4. **History restoration** (`timelineBuilder.ts`): Rebuilds `filesChangedBlocks` into `restoredFcBlocks`, then assigns. `keepUndoResult` removes ALL blocks with matching `checkpointId` (backward loop).
+5. **Nav bar**: Shows "Change X of Y" (hunk-level, not file-level). Hidden until `currentChange`/`totalChanges` set by `reviewChangePosition` message.
 
-**Why not rely on the message handler?** Three approaches were attempted for handling removal in the `handleFileChangeResult` response handler:
-1. `filter()` + reassignment — failed in practice
-2. Fully immutable object replacement — failed in practice
-3. `triggerRef()` — failed in practice
+### Key Files
 
-All three suffered from Vue reactivity quirks with deeply nested reactive arrays inside `ref()`. The optimistic approach bypasses the problem entirely.
-
-**`FilesChanged.vue` → `removeFileOptimistic()`** handles:
-- Removing the file from `block.files` via `splice()`
-- Recalculating `totalAdditions` / `totalDeletions`
-- Cleaning up `checkpointIds` when no files reference a checkpoint
-- Clearing `filesChangedBlocks.value = []` when the block becomes empty
-
-**`handleFileChangeResult`** is retained as a **safety net** for edge cases (e.g., session restore where the optimistic handler wasn't active).
-
-### History Restoration
-
-`timelineBuilder.ts` rebuilds `filesChangedBlocks` into a local `restoredFcBlocks` array, then assigns it to `filesChangedBlocks.value` at the end. Key rules:
-
-1. **Merge by checkpointId**: Multiple incremental `filesChanged` events with the same `checkpointId` must merge into one block (add only files not already present)
-2. **fileChangeResult removes files**: Splice the resolved file out; remove the block if it's now empty
-3. **keepUndoResult removes ALL blocks**: Use a backward loop to remove ALL blocks with matching `checkpointId` (not just the first)
-
-### Component: `FilesChanged.vue`
-
-- Renders from `filesChangedBlocks` (standalone state, not thread blocks)
-- Per-file row shows: file icon, relative path, `+N -N` diff stats columns, ✓ (keep) and ↩ (undo) buttons, review icon
-- Header shows total file count, total `+N -N`, Keep All and Undo All buttons
-- **Nav bar**: Shows "Change X of Y" counter with ◀ / ▶ buttons for cross-file hunk navigation (hunk-level, not file-level). Hidden until `currentChange` and `totalChanges` are set (populated by `reviewChangePosition` message).
-- **Active file indicator**: File rows have `files-changed-file--active` class when `block.activeFilePath === file.path`. Styled with a blue left border (`--vscode-focusBorder`) and selection background (`--vscode-list-activeSelectionBackground`).
-- Actions are in `src/webview/scripts/core/actions/filesChanged.ts`
-- Handlers are in `src/webview/scripts/core/messageHandlers/filesChanged.ts`
-
-### ⚠️ DataCloneError Prevention
-
-Vue reactive `Proxy` arrays cannot be cloned by `postMessage()`. This causes `DataCloneError` at runtime. When passing `checkpointIds` (or any reactive array) to `postMessage`, **always spread into a plain array first**:
-
-```typescript
-// ✅ CORRECT: spread to unwrap the Proxy
-navigatePrevChange([...props.block.checkpointIds]);
-
-// ❌ WRONG: passes the Proxy directly → DataCloneError
-navigatePrevChange(props.block.checkpointIds);
-```
-
-This applies to any Vue reactive array passed through `vscodeApi.postMessage()`.
-
-### Nav & Review Actions
-
-| Action | Function | Payload |
-|--------|----------|--------|
-| Navigate prev | `navigatePrevChange(checkpointIds)` | `{ type: 'navigateReviewPrev', checkpointIds: string[] }` |
-| Navigate next | `navigateNextChange(checkpointIds)` | `{ type: 'navigateReviewNext', checkpointIds: string[] }` |
-| Open file review | `openFileChangeReview(id, path)` | `{ type: 'openFileChangeReview', checkpointId, filePath }` |
-| Open file diff | `openFileChangeDiff(id, path)` | `{ type: 'openFileChangeDiff', checkpointId, filePath }` |
-
-### `AssistantThreadFilesChangedBlock` Fields
-
-```typescript
-interface AssistantThreadFilesChangedBlock {
-  type: 'filesChanged';
-  checkpointIds: string[];          // All checkpoint IDs across agent iterations
-  files: FileChangeFileItem[];       // Per-file items with path, action, +/- stats
-  totalAdditions?: number;           // Sum across all files
-  totalDeletions?: number;
-  status: 'pending' | 'kept' | 'undone' | 'partial';
-  collapsed: boolean;
-  statsLoading: boolean;             // True while waiting for filesDiffStats
-  currentChange?: number;            // Current hunk position (1-based)
-  totalChanges?: number;             // Total hunks across all files
-  activeFilePath?: string;           // Currently navigated file (for highlight)
-}
-```
+- Component: `src/webview/components/chat/components/FilesChanged.vue`
+- Actions: `src/webview/scripts/core/actions/filesChanged.ts`
+- Handlers: `src/webview/scripts/core/messageHandlers/filesChanged.ts`
 
 ## Modifying the Chat UI
 
-The chat UI is a Vue app under `src/webview/`:
-- `App.vue` composes UI subcomponents and contains the `onMounted` hook that sends the `ready` message
-- `components/` follows the **page-per-folder** pattern (see above)
-- `scripts/app/App.ts` wires message handling and exports state/actions
-- `scripts/core/*` holds state, computed values, actions, and types
-- `styles/styles.scss` is the SCSS entry; partials live under `styles/`
-- `main.ts` bootstraps the Vue app
+The chat UI is a Vue app under `src/webview/`. Entry: `main.ts` → `App.vue` → page components. Logic: `scripts/core/*` (state, computed, actions, types). Styles: `styles/styles.scss` + partials.
 
-**Important**: Vue lifecycle hooks like `onMounted` must be called inside a Vue component's `<script setup>` block. Do NOT place them in plain `.ts` files - they won't execute!
+**Important**: Vue lifecycle hooks like `onMounted` must be called inside a `<script setup>` block. Do NOT place them in plain `.ts` files.
 
 Build output goes to `media/` and is loaded by `ChatViewProvider`.
-
-### Component: `TokenUsageIndicator.vue`
-
-Copilot-style token usage ring + popup. Located in `src/webview/components/chat/components/input/TokenUsageIndicator.vue`, rendered in `ChatInput.vue`'s `.toolbar-right` (before the send button).
-
-**Props**: `visible`, `promptTokens`, `completionTokens`, `contextWindow`, `categories` (all bound from `tokenUsage` reactive state).
-
-**Ring (20px SVG)**: Usage arc colored by level:
-- Green (`.level-ok`) — <50% usage
-- Yellow (`.level-warning`) — 50–80% usage
-- Red (`.level-danger`) — >80% usage
-
-**Popup** (Teleported to `<body>`, positioned bottom-right):
-- Context Window header with close ✕ button
-- Usage bar: `{used}K / {total}K tokens · {pct}%`
-- Category sections: System (Instructions + Tool Definitions), User Context (Messages + Tool Results + Files)
-- Warning text when >70%: "Quality may decline as limit nears."
-- Closes on Escape key or click-away backdrop
-
-**State**: `tokenUsage` reactive object in `state.ts`. Reset on `generationStarted`, hidden on `generationStopped`. Updated by `handleTokenUsage()` in `streaming.ts`.
-
-**Styles**: `_token-usage.scss` — uses VS Code theme variables (`--vscode-editor-foreground`, `--vscode-badge-background`, etc.).

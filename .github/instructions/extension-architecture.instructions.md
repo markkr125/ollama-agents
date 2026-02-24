@@ -108,6 +108,8 @@ disposeDatabaseService();
 const config = getConfig();   // reads ALL settings right now
 const mode = getModeConfig('agent'); // shortcut for config.agentMode
 const agent = getAgentConfig();      // shortcut for config.agent
+const execConfig = buildExecutorConfig();         // assembles ExecutorConfig from agentMode + agent
+const execConfigOvr = buildExecutorConfig({ temperature: 0.7 }); // with overrides
 ```
 
 ## Build Output Directories
@@ -230,6 +232,22 @@ The extracted value is:
 2. Persisted to the `context_length INTEGER DEFAULT NULL` column in the SQLite `models` table
 3. Used by both executors as the **first-priority** context window: `capabilities?.contextLength || userConfigContextWindow || 16000`
 
+### Context Window Floor & Ceiling
+
+`computeEffectiveContextWindow()` in `agentLoopHelpers.ts` applies a **floor** and a **ceiling** to the raw context window:
+
+```
+effective = Math.max(MIN_CONTEXT_TOKENS, Math.min(rawContextWindow, perModelCap ?? globalCap))
+```
+
+| Constant | Value | Location | Purpose |
+|----------|-------|----------|---------|
+| `MIN_CONTEXT_TOKENS` | **8 192** | `agentLoopHelpers.ts` | Floor — tool-using agents need at least 8K for system prompt + tool defs + conversation |
+| `maxContextWindow` setting | 65 536 | `package.json` | Global ceiling — prevents massive KV cache allocation |
+| `maxContext` (per-model) | user-set | Models tab | Per-model ceiling — overrides global when set |
+
+To change the floor, edit `MIN_CONTEXT_TOKENS` in `src/agent/execution/agentLoopHelpers.ts`.
+
 ### Running Models (`/api/ps`)
 
 `OllamaClient.getRunningModels()` calls `GET /api/ps` and returns `RunningModelsResponse` — an array of `RunningModel` objects with `name`, `size`, `expires_at`, and other runtime fields. Currently used for diagnostics/monitoring; may be wired into the UI in the future.
@@ -244,29 +262,11 @@ The model list (name, size, family, quantization, capabilities, `enabled` flag) 
 - **Enable/disable**: Each model has an `enabled INTEGER NOT NULL DEFAULT 1` column. Disabled models are filtered out of `modelOptions` in the webview. Bulk "Enable All" / "Disable All" toggles loop through `modelInfo` and call `toggleModelEnabled()` for each.
 - **Auto-save**: The Model Selection dropdowns (`ModelCapabilitiesSection.vue`) auto-save on change via `@change="autoSave"` — no explicit Save button.
 
-## File Sensitivity (`src/utils/fileSensitivity.ts`)
+## File Sensitivity & Auto-Approve
 
-### Pattern Evaluation: Last-Match-Wins
-`evaluateFileSensitivity()` iterates the `sensitiveFilePatterns` object **in insertion order**. The **last matching pattern wins**:
-```json
-{ "**/*": true, "**/.env*": false }
-```
-- `**/*` matches everything → `true` (auto-approve)
-- `**/.env*` matches `.env` → `false` (require approval) ← wins because it's last
+> Full details (inverted boolean semantics, last-match-wins, session overrides, two independent toggles, critical severity bypass) are in `agent-tools.instructions.md` → "Command Safety & Approval Flow".
 
-**Value semantics**: `true` = auto-approve (NOT sensitive), `false` = require approval (sensitive). The boolean is inverted from what the key name "sensitive" suggests.
-
-### Session-Level Overrides
-Each session can have its own `sensitive_file_patterns` (stored as JSON string in the `sensitive_file_patterns` SQLite column). Session patterns take precedence over the global `agent.sensitiveFilePatterns` setting.
-
-## Auto-Approve: Two Independent Toggles
-
-| Toggle | DB Column | Controls |
-|--------|-----------|----------|
-| `auto_approve_commands` | `auto_approve_commands` | Terminal command execution |
-| `auto_approve_sensitive_edits` | `auto_approve_sensitive_edits` | File edits to sensitive files |
-
-These are stored per-session and toggled independently. **Critical severity commands always require approval** regardless of `auto_approve_commands` — this is enforced in `terminalApproval.ts`.
+Key files: `src/utils/fileSensitivity.ts` (pattern evaluation), `src/agent/execution/approval/terminalApproval.ts` (command approval), `src/agent/execution/approval/agentFileEditHandler.ts` (file edit approval). Session-level overrides stored in `sensitive_file_patterns` column (JSON string).
 
 ## Deactivation
 
@@ -423,43 +423,7 @@ Without this, `persistUiEvent()` silently drops the event (`if (!sessionId) retu
 
 ## Checkpoint & Snapshot Architecture
 
-### Data Model
-
-Checkpoints and file snapshots are stored in SQLite (not LanceDB):
-
-**`checkpoints` table:**
-| Column | Type | Purpose |
-|--------|------|---------|
-| `id` | `TEXT PRIMARY KEY` | UUID (`ckpt_<timestamp>_<random>`), created at start of each agent execution |
-| `session_id` | `TEXT NOT NULL` | FK → sessions |
-| `message_id` | `TEXT` | Associated message (nullable) |
-| `status` | `TEXT` | `'pending'` → `'kept'` / `'undone'` / `'partial'` |
-| `total_additions` | `INTEGER` | Cached total added lines across all files (migration-added) |
-| `total_deletions` | `INTEGER` | Cached total deleted lines across all files (migration-added) |
-| `created_at` | `INTEGER` | Timestamp |
-
-**`file_snapshots` table:**
-| Column | Type | Purpose |
-|--------|------|---------|
-| `id` | `TEXT PRIMARY KEY` | UUID |
-| `checkpoint_id` | `TEXT NOT NULL` | FK → checkpoints (CASCADE delete) |
-| `file_path` | `TEXT NOT NULL` | Workspace-relative path |
-| `original_content` | `TEXT` | Content BEFORE agent edit (NULL after kept+pruned) |
-| `action` | `TEXT` | `'modified'` / `'created'` |
-| `file_status` | `TEXT` | `'pending'` / `'kept'` / `'undone'` |
-| `created_at` | `INTEGER` | Timestamp |
-| `additions` | `INTEGER` | Per-file added line count (migration-added, NULL until stats computed) |
-| `deletions` | `INTEGER` | Per-file deleted line count (migration-added, NULL until stats computed) |
-| **UNIQUE** | | `(checkpoint_id, file_path)` — INSERT OR IGNORE keeps first snapshot |
-
-### Session Stats (`getSessionsPendingStats`)
-
-The sessions panel shows `+N -N` badges per session. `getSessionsPendingStats()` computes these via a **two-level aggregation query**:
-
-1. **Inner query** (per-checkpoint): For each checkpoint with pending files, sums `file_snapshots.additions`/`deletions`. If any files have non-NULL stats, uses those; otherwise falls back to `checkpoints.total_additions`/`total_deletions`.
-2. **Outer query** (per-session): Sums the per-checkpoint totals across all checkpoints in a session.
-
-This two-level approach handles the case where some checkpoints have per-file stats and others only have checkpoint-level totals.
+> Table schemas (`checkpoints`, `file_snapshots`) and `getSessionsPendingStats` query are documented in `database-rules.instructions.md`. This section covers lifecycle and diff stats flow.
 
 ### Checkpoint Lifecycle
 
@@ -480,84 +444,14 @@ This two-level approach handles the case where some checkpoints have per-file st
 
 After a file is **kept**, its `original_content` is set to `NULL` via `pruneCheckpointContent()`. This saves storage since the original is no longer needed for undo. Undone files retain `original_content` for debugging.
 
-### Diff Stats Flow — `computeFilesDiffStats` & the filesChanged Widget
+### Diff Stats Flow
 
-Diff stats (`+N -N` per file) flow through several paths depending on context. Understanding **when** stats are computed and **how** they reach the UI prevents long debugging sessions.
+Diff stats (`+N -N` per file) are computed and delivered through 5 paths:
 
-#### 1. Live Agent Flow (first computation)
-
-```
-Agent loop ends → agentSummaryBuilder.finalize()
-  ├─ persistUiEvent(sessionId, 'filesChanged', {checkpointId, files, status:'pending'})
-  └─ emitter.postMessage({type:'filesChanged', checkpointId, files, status:'pending', sessionId})
-      → webview handleFilesChanged() creates standalone block in filesChangedBlocks
-      → webview posts {type:'requestFilesDiffStats', checkpointId}
-          → FileChangeMessageHandler.handleRequestFilesDiffStats()
-              ├─ checkpointManager.computeFilesDiffStats(checkpointId)
-              │   ├─ Reads file_snapshots from DB (original_content)
-              │   ├─ Reads current file from disk
-              │   ├─ structuredPatch() → counts +/- per file
-              │   ├─ updateFileSnapshotsDiffStats() → saves per-file stats to DB
-              │   └─ updateCheckpointDiffStats() → caches totals on checkpoint row
-              ├─ emitter.postMessage({type:'filesDiffStats', checkpointId, files})
-              └─ reviewService.startReviewForCheckpoint() → builds review session
-```
-
-#### 2. Session Restore (from history)
-
-```
-User clicks session in list → chatSessionController.loadSession()
-  ├─ postMessage({type:'loadSessionMessages', messages})
-  │   → webview handleLoadSessionMessages()
-  │       ├─ buildTimelineFromMessages(messages)
-  │       │   └─ TimelineBuilder processes __ui__ tool messages:
-  │       │       handleFilesChanged(payload) → pushes to restoredFcBlocks
-  │       │       build() → sets filesChangedBlocks.value = restoredFcBlocks
-  │       └─ For each block with statsLoading && checkpointIds.length:
-  │           vscode.postMessage({type:'requestFilesDiffStats', checkpointId})
-  │           → same backend path as live flow (step 1 above)
-  ├─ ensureFilesChangedWidget(sessionId, messages)  ← FALLBACK
-  │   (only fires if NO __ui__ filesChanged event in messages)
-  │   ├─ Queries getCheckpoints(sessionId) for pending/partial
-  │   ├─ Queries getFileSnapshots(ckptId) for pending files
-  │   └─ Posts synthetic {type:'filesChanged'} per checkpoint
-  │       → webview live handleFilesChanged() creates block + requests stats
-  └─ postMessage({type:'generationStopped'})
-```
-
-**Why the fallback?** Old sessions (created before `filesChanged` persistence was implemented), or sessions where `sessionId` was `undefined` at `persistUiEvent` time (Pitfall #13), have no `__ui__` filesChanged event in the DB. Without the fallback, the widget silently doesn't appear even though the checkpoint data exists.
-
-#### 3. Review CodeLens Keep/Undo (recomputation)
-
-```
-User clicks Keep/Undo via CodeLens on a hunk
-  → reviewService resolves hunk → emits onDidResolveFile
-  → chatView.ts subscriber posts fileChangeResult + calls:
-      computeFilesDiffStats(checkpointId) → recalculates all files
-      → posts filesDiffStats to webview → widget updates +/- counts
-```
-
-#### 4. Hunk-Level Stats Update (real-time)
-
-```
-Any hunk keep/undo → reviewService emits onDidUpdateHunkStats
-  → chatView.ts subscriber posts {type:'filesDiffStats', checkpointId, files:[{path, additions, deletions}]}
-  → webview handleFilesDiffStats() updates single file in block
-```
-
-#### 5. Session List Badge Refresh
-
-```
-sendSessionsList()
-  ├─ databaseService.listSessions()
-  └─ databaseService.getSessionsPendingStats()  ← SQL query over checkpoints + file_snapshots
-      → returns Map<sessionId, {additions, deletions, fileCount}>
-      → merged into session list payload → webview shows +N -N badge
-```
-
-**Refresh triggers** — all call `sendSessionsList()`:
-- Agent/chat execution completes (`chatMessageHandler.ts` finally block)
-- Keep/Undo file (`fileChangeMessageHandler.ts`)
-- Keep All / Undo All (`fileChangeMessageHandler.ts`)
-- Session delete, new session create
-- First message in new session (title update)
+| Path | Trigger | Flow |
+|------|---------|------|
+| Live agent | Agent loop ends | `filesChanged` → webview requests `requestFilesDiffStats` → `computeFilesDiffStats()` reads snapshots + disk, diffs, saves stats → posts `filesDiffStats` + starts review |
+| Session restore | User loads session | `timelineBuilder` rebuilds `filesChangedBlocks` from `__ui__` events → webview requests stats per checkpoint. Fallback: `ensureFilesChangedWidget()` synthesizes `filesChanged` for old sessions missing `__ui__` events |
+| CodeLens keep/undo | Hunk resolved | `onDidResolveFile` → recomputes all file stats → posts `filesDiffStats` |
+| Hunk-level update | Any hunk action | `onDidUpdateHunkStats` → posts single-file `filesDiffStats` |
+| Session badge | Various | `sendSessionsList()` queries `getSessionsPendingStats()` — triggered by: agent/chat completion, keep/undo (single or all), session create/delete |

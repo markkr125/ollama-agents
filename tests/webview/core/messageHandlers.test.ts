@@ -657,7 +657,7 @@ describe('live/history consistency contract', () => {
 describe('connectionTestResult handler', () => {
   test('handleConnectionTestResult populates modelOptions from models array', async () => {
     const state = await import('../../../src/webview/scripts/core/state');
-    const handlers = await import('../../../src/webview/scripts/core/messageHandlers/sessions');
+    const handlers = await import('../../../src/webview/scripts/core/messageHandlers/settingsSync');
 
     state.modelOptions.value = [];
 
@@ -681,7 +681,7 @@ describe('connectionTestResult handler', () => {
 
   test('handleConnectionTestResult sets currentModel via syncModelSelection', async () => {
     const state = await import('../../../src/webview/scripts/core/state');
-    const handlers = await import('../../../src/webview/scripts/core/messageHandlers/sessions');
+    const handlers = await import('../../../src/webview/scripts/core/messageHandlers/settingsSync');
 
     state.modelOptions.value = [];
     state.currentModel.value = '';
@@ -700,7 +700,7 @@ describe('connectionTestResult handler', () => {
 
   test('handleConnectionTestResult does not clear models on error (no models field)', async () => {
     const state = await import('../../../src/webview/scripts/core/state');
-    const handlers = await import('../../../src/webview/scripts/core/messageHandlers/sessions');
+    const handlers = await import('../../../src/webview/scripts/core/messageHandlers/settingsSync');
 
     // Pre-populate models
     state.modelOptions.value = ['existing-model'];
@@ -717,7 +717,7 @@ describe('connectionTestResult handler', () => {
 
   test('handleSettingsUpdate does not clear modelOptions', async () => {
     const state = await import('../../../src/webview/scripts/core/state');
-    const handlers = await import('../../../src/webview/scripts/core/messageHandlers/sessions');
+    const handlers = await import('../../../src/webview/scripts/core/messageHandlers/settingsSync');
 
     // Pre-populate models (from a previous connectionTestResult)
     state.modelOptions.value = ['model-a', 'model-b'];
@@ -829,7 +829,7 @@ describe('thinking block handlers', () => {
 describe('warning banner handler', () => {
   test('handleShowWarningBanner sets banner state', async () => {
     const state = await import('../../../src/webview/scripts/core/state');
-    const handlers = await import('../../../src/webview/scripts/core/messageHandlers/sessions');
+    const handlers = await import('../../../src/webview/scripts/core/messageHandlers/chatState');
 
     state.warningBanner.visible = false;
     state.warningBanner.message = '';
@@ -845,7 +845,7 @@ describe('warning banner handler', () => {
 
   test('handleShowWarningBanner ignores different session', async () => {
     const state = await import('../../../src/webview/scripts/core/state');
-    const handlers = await import('../../../src/webview/scripts/core/messageHandlers/sessions');
+    const handlers = await import('../../../src/webview/scripts/core/messageHandlers/chatState');
 
     state.currentSessionId.value = 'session-1';
     state.warningBanner.visible = false;
@@ -969,7 +969,7 @@ describe('chunked read_file handlers', () => {
 describe('handleAddContextItem deduplication', () => {
   test('adds a context item normally when list is empty', async () => {
     const state = await import('../../../src/webview/scripts/core/state');
-    const { handleAddContextItem } = await import('../../../src/webview/scripts/core/messageHandlers/sessions');
+    const { handleAddContextItem } = await import('../../../src/webview/scripts/core/messageHandlers/chatState');
 
     state.contextList.value = [];
 
@@ -981,7 +981,7 @@ describe('handleAddContextItem deduplication', () => {
 
   test('rejects duplicate context item with same fileName', async () => {
     const state = await import('../../../src/webview/scripts/core/state');
-    const { handleAddContextItem } = await import('../../../src/webview/scripts/core/messageHandlers/sessions');
+    const { handleAddContextItem } = await import('../../../src/webview/scripts/core/messageHandlers/chatState');
 
     state.contextList.value = [];
 
@@ -994,7 +994,7 @@ describe('handleAddContextItem deduplication', () => {
 
   test('allows different files to be added', async () => {
     const state = await import('../../../src/webview/scripts/core/state');
-    const { handleAddContextItem } = await import('../../../src/webview/scripts/core/messageHandlers/sessions');
+    const { handleAddContextItem } = await import('../../../src/webview/scripts/core/messageHandlers/chatState');
 
     state.contextList.value = [];
 
@@ -1007,7 +1007,7 @@ describe('handleAddContextItem deduplication', () => {
 
   test('no-op when msg.context is missing', async () => {
     const state = await import('../../../src/webview/scripts/core/state');
-    const { handleAddContextItem } = await import('../../../src/webview/scripts/core/messageHandlers/sessions');
+    const { handleAddContextItem } = await import('../../../src/webview/scripts/core/messageHandlers/chatState');
 
     state.contextList.value = [];
 
@@ -1067,7 +1067,7 @@ describe('planReady / modeChanged handlers', () => {
 
   test('handleInit resets pendingPlanContent', async () => {
     const state = await import('../../../src/webview/scripts/core/state');
-    const { handleInit } = await import('../../../src/webview/scripts/core/messageHandlers/sessions');
+    const { handleInit } = await import('../../../src/webview/scripts/core/messageHandlers/settingsSync');
 
     state.pendingPlanContent.value = 'some plan';
 

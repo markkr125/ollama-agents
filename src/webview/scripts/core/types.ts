@@ -215,9 +215,24 @@ export type LoadSessionMessagesMessage = {
   sessionExplorerModel?: string;
 };
 
+/**
+ * Streaming content message from the backend.
+ *
+ * **IMPORTANT**: `content` uses **accumulated** (replacement) semantics, NOT
+ * incremental deltas. Each chunk replaces the entire text block content for
+ * the current iteration. For example, chunks arrive as:
+ *   "Hello" → "Hello World" → "Hello World!"
+ *
+ * The handler in `streaming.ts` REPLACES the block content with the received
+ * string. Never append `content` to existing text — that would double it.
+ *
+ * See also: Pitfall #3 (copilot-instructions.md), `iterationBoundary` for
+ * multi-iteration base content merging.
+ */
 export type StreamChunkMessage = {
   type: 'streamChunk' | 'finalMessage';
   sessionId?: string;
+  /** Accumulated text for this iteration (NOT a delta). */
   content?: string;
   model?: string;
 };

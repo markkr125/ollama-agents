@@ -104,21 +104,21 @@ function createStubModelHandler(): any {
 }
 
 function createHandler(emitter: WebviewMessageEmitter, state?: ViewState): ChatMessageHandler {
-  return new ChatMessageHandler(
-    state || createStubViewState(),
+  return new ChatMessageHandler({
+    state: state || createStubViewState(),
     emitter,
-    createStubSessionController(),
-    createStubSettingsHandler(),
-    createStubAgentExecutor(),
-    createStubExploreExecutor(),
-    createStubDatabaseService(),
-    createStubClient(),
-    createStubTokenManager(),
-    createStubSessionManager(),
-    createStubGitOps(),
-    createStubModelHandler(),
-    undefined // reviewService
-  );
+    sessionController: createStubSessionController(),
+    settingsHandler: createStubSettingsHandler(),
+    agentExecutor: createStubAgentExecutor(),
+    exploreExecutor: createStubExploreExecutor(),
+    databaseService: createStubDatabaseService(),
+    client: createStubClient(),
+    tokenManager: createStubTokenManager(),
+    sessionManager: createStubSessionManager(),
+    gitOps: createStubGitOps(),
+    modelHandler: createStubModelHandler(),
+    reviewService: undefined
+  });
 }
 
 // ─── Tests ───────────────────────────────────────────────────────────
@@ -277,21 +277,21 @@ suite('ChatMessageHandler – contextFiles in sendMessage', () => {
       }
     };
 
-    const handler = new ChatMessageHandler(
+    const handler = new ChatMessageHandler({
       state,
       emitter,
-      createStubSessionController(),
-      createStubSettingsHandler(),
-      createStubAgentExecutor(),
-      createStubExploreExecutor(),
-      dbService,
-      createStubClient(),
-      createStubTokenManager(),
-      createStubSessionManager(),
-      createStubGitOps(),
-      createStubModelHandler(),
-      undefined
-    );
+      sessionController: createStubSessionController(),
+      settingsHandler: createStubSettingsHandler(),
+      agentExecutor: createStubAgentExecutor(),
+      exploreExecutor: createStubExploreExecutor(),
+      databaseService: dbService,
+      client: createStubClient(),
+      tokenManager: createStubTokenManager(),
+      sessionManager: createStubSessionManager(),
+      gitOps: createStubGitOps(),
+      modelHandler: createStubModelHandler(),
+      reviewService: undefined
+    });
 
     await handler.handle({
       type: 'sendMessage',
@@ -333,21 +333,21 @@ suite('ChatMessageHandler – contextFiles in sendMessage', () => {
       }
     };
 
-    const handler = new ChatMessageHandler(
+    const handler = new ChatMessageHandler({
       state,
       emitter,
-      createStubSessionController(),
-      createStubSettingsHandler(),
-      createStubAgentExecutor(),
-      createStubExploreExecutor(),
-      dbService,
-      createStubClient(),
-      createStubTokenManager(),
-      createStubSessionManager(),
-      createStubGitOps(),
-      createStubModelHandler(),
-      undefined
-    );
+      sessionController: createStubSessionController(),
+      settingsHandler: createStubSettingsHandler(),
+      agentExecutor: createStubAgentExecutor(),
+      exploreExecutor: createStubExploreExecutor(),
+      databaseService: dbService,
+      client: createStubClient(),
+      tokenManager: createStubTokenManager(),
+      sessionManager: createStubSessionManager(),
+      gitOps: createStubGitOps(),
+      modelHandler: createStubModelHandler(),
+      reviewService: undefined
+    });
 
     await handler.handle({
       type: 'sendMessage',
@@ -383,8 +383,8 @@ suite('ChatMessageHandler – explore/plan/review dispatch', () => {
 
     let capturedMode = '';
     const exploreExecutor = {
-      execute: async (_task: string, _config: any, _token: any, _sessionId: string, _model: string, mode: string) => {
-        capturedMode = mode;
+      execute: async (params: any) => {
+        capturedMode = params.mode;
         return { summary: 'Chat response', assistantMessage: {} };
       }
     };
@@ -394,21 +394,21 @@ suite('ChatMessageHandler – explore/plan/review dispatch', () => {
       execute: async () => { agentCalled = true; return {}; }
     };
 
-    const handler = new ChatMessageHandler(
+    const handler = new ChatMessageHandler({
       state,
       emitter,
-      createStubSessionController(),
-      createStubSettingsHandler(),
-      agentExecutor as any,
-      exploreExecutor as any,
-      createStubDatabaseService(),
-      createStubClient(),
-      createStubTokenManager(),
-      createStubSessionManager(),
-      createStubGitOps(),
-      createStubModelHandler(),
-      undefined
-    );
+      sessionController: createStubSessionController(),
+      settingsHandler: createStubSettingsHandler(),
+      agentExecutor: agentExecutor as any,
+      exploreExecutor: exploreExecutor as any,
+      databaseService: createStubDatabaseService(),
+      client: createStubClient(),
+      tokenManager: createStubTokenManager(),
+      sessionManager: createStubSessionManager(),
+      gitOps: createStubGitOps(),
+      modelHandler: createStubModelHandler(),
+      reviewService: undefined
+    });
 
     await handler.handle({ type: 'sendMessage', text: 'Find the main entry point' });
 
@@ -429,27 +429,27 @@ suite('ChatMessageHandler – explore/plan/review dispatch', () => {
 
     let capturedMode = '';
     const exploreExecutor = {
-      execute: async (_task: string, _config: any, _token: any, _sessionId: string, _model: string, mode: string) => {
-        capturedMode = mode;
+      execute: async (params: any) => {
+        capturedMode = params.mode;
         return { summary: 'Planned', assistantMessage: {} };
       }
     };
 
-    const handler = new ChatMessageHandler(
+    const handler = new ChatMessageHandler({
       state,
       emitter,
-      createStubSessionController(),
-      createStubSettingsHandler(),
-      createStubAgentExecutor(),
-      exploreExecutor as any,
-      createStubDatabaseService(),
-      createStubClient(),
-      createStubTokenManager(),
-      createStubSessionManager(),
-      createStubGitOps(),
-      createStubModelHandler(),
-      undefined
-    );
+      sessionController: createStubSessionController(),
+      settingsHandler: createStubSettingsHandler(),
+      agentExecutor: createStubAgentExecutor(),
+      exploreExecutor: exploreExecutor as any,
+      databaseService: createStubDatabaseService(),
+      client: createStubClient(),
+      tokenManager: createStubTokenManager(),
+      sessionManager: createStubSessionManager(),
+      gitOps: createStubGitOps(),
+      modelHandler: createStubModelHandler(),
+      reviewService: undefined
+    });
 
     await handler.handle({ type: 'sendMessage', text: 'Plan auth implementation' });
     assert.strictEqual(capturedMode, 'plan', 'mode should be "plan"');
@@ -467,27 +467,27 @@ suite('ChatMessageHandler – explore/plan/review dispatch', () => {
 
     let capturedMode = '';
     const exploreExecutor = {
-      execute: async (_task: string, _config: any, _token: any, _sessionId: string, _model: string, mode: string) => {
-        capturedMode = mode;
+      execute: async (params: any) => {
+        capturedMode = params.mode;
         return { summary: 'Chat response', assistantMessage: {} };
       }
     };
 
-    const handler = new ChatMessageHandler(
+    const handler = new ChatMessageHandler({
       state,
       emitter,
-      createStubSessionController(),
-      createStubSettingsHandler(),
-      createStubAgentExecutor(),
-      exploreExecutor as any,
-      createStubDatabaseService(),
-      createStubClient(),
-      createStubTokenManager(),
-      createStubSessionManager(),
-      createStubGitOps(),
-      createStubModelHandler(),
-      undefined
-    );
+      sessionController: createStubSessionController(),
+      settingsHandler: createStubSettingsHandler(),
+      agentExecutor: createStubAgentExecutor(),
+      exploreExecutor: exploreExecutor as any,
+      databaseService: createStubDatabaseService(),
+      client: createStubClient(),
+      tokenManager: createStubTokenManager(),
+      sessionManager: createStubSessionManager(),
+      gitOps: createStubGitOps(),
+      modelHandler: createStubModelHandler(),
+      reviewService: undefined
+    });
 
     await handler.handle({ type: 'sendMessage', text: 'Review security of auth module' });
     // review is no longer a valid user mode — falls through to chat (which uses ExploreExecutor with mode='chat')
@@ -508,21 +508,21 @@ suite('ChatMessageHandler – explore/plan/review dispatch', () => {
       execute: async () => { exploreCalled = true; return { summary: '', assistantMessage: {} }; }
     };
 
-    const handler = new ChatMessageHandler(
+    const handler = new ChatMessageHandler({
       state,
       emitter,
-      createStubSessionController(),
-      createStubSettingsHandler(),
-      createStubAgentExecutor(),
-      exploreExecutor as any,
-      createStubDatabaseService(),
-      createStubClient(),
-      createStubTokenManager(),
-      createStubSessionManager(),
-      createStubGitOps(),
-      createStubModelHandler(),
-      undefined
-    );
+      sessionController: createStubSessionController(),
+      settingsHandler: createStubSettingsHandler(),
+      agentExecutor: createStubAgentExecutor(),
+      exploreExecutor: exploreExecutor as any,
+      databaseService: createStubDatabaseService(),
+      client: createStubClient(),
+      tokenManager: createStubTokenManager(),
+      sessionManager: createStubSessionManager(),
+      gitOps: createStubGitOps(),
+      modelHandler: createStubModelHandler(),
+      reviewService: undefined
+    });
 
     await handler.handle({ type: 'sendMessage', text: 'Create a file' });
     assert.ok(!exploreCalled, 'explore executor should NOT be called in agent mode');
@@ -546,21 +546,21 @@ suite('ChatMessageHandler – /review slash command', () => {
       }
     };
 
-    const handler = new ChatMessageHandler(
+    const handler = new ChatMessageHandler({
       state,
       emitter,
-      createStubSessionController(),
-      createStubSettingsHandler(),
-      createStubAgentExecutor(),
-      exploreExecutor as any,
-      createStubDatabaseService(),
-      createStubClient(),
-      createStubTokenManager(),
-      createStubSessionManager(),
-      createStubGitOps(),
-      createStubModelHandler(),
-      undefined
-    );
+      sessionController: createStubSessionController(),
+      settingsHandler: createStubSettingsHandler(),
+      agentExecutor: createStubAgentExecutor(),
+      exploreExecutor: exploreExecutor as any,
+      databaseService: createStubDatabaseService(),
+      client: createStubClient(),
+      tokenManager: createStubTokenManager(),
+      sessionManager: createStubSessionManager(),
+      gitOps: createStubGitOps(),
+      modelHandler: createStubModelHandler(),
+      reviewService: undefined
+    });
 
     await handler.handle({ type: 'sendMessage', text: '/review' });
     // The /review command should route to the explore executor (review mode)
@@ -581,21 +581,21 @@ suite('ChatMessageHandler – /review slash command', () => {
       execute: async () => { exploreCalled = true; return { summary: '', assistantMessage: {} }; }
     };
 
-    const handler = new ChatMessageHandler(
+    const handler = new ChatMessageHandler({
       state,
       emitter,
-      createStubSessionController(),
-      createStubSettingsHandler(),
-      createStubAgentExecutor(),
-      exploreExecutor as any,
-      createStubDatabaseService(),
-      createStubClient(),
-      createStubTokenManager(),
-      createStubSessionManager(),
-      createStubGitOps(),
-      createStubModelHandler(),
-      undefined
-    );
+      sessionController: createStubSessionController(),
+      settingsHandler: createStubSettingsHandler(),
+      agentExecutor: createStubAgentExecutor(),
+      exploreExecutor: exploreExecutor as any,
+      databaseService: createStubDatabaseService(),
+      client: createStubClient(),
+      tokenManager: createStubTokenManager(),
+      sessionManager: createStubSessionManager(),
+      gitOps: createStubGitOps(),
+      modelHandler: createStubModelHandler(),
+      reviewService: undefined
+    });
 
     await handler.handle({ type: 'sendMessage', text: '/security-review check for XSS' });
     assert.ok(exploreCalled, '/security-review should route to explore executor');
@@ -609,27 +609,27 @@ suite('ChatMessageHandler – /review slash command', () => {
 
     let capturedMode = '';
     const exploreExecutor = {
-      execute: async (_task: string, _config: any, _token: any, _sessionId: string, _model: string, mode: string) => {
-        capturedMode = mode;
+      execute: async (params: any) => {
+        capturedMode = params.mode;
         return { summary: 'Deep explored', assistantMessage: {} };
       }
     };
 
-    const handler = new ChatMessageHandler(
+    const handler = new ChatMessageHandler({
       state,
       emitter,
-      createStubSessionController(),
-      createStubSettingsHandler(),
-      createStubAgentExecutor(),
-      exploreExecutor as any,
-      createStubDatabaseService(),
-      createStubClient(),
-      createStubTokenManager(),
-      createStubSessionManager(),
-      createStubGitOps(),
-      createStubModelHandler(),
-      undefined
-    );
+      sessionController: createStubSessionController(),
+      settingsHandler: createStubSettingsHandler(),
+      agentExecutor: createStubAgentExecutor(),
+      exploreExecutor: exploreExecutor as any,
+      databaseService: createStubDatabaseService(),
+      client: createStubClient(),
+      tokenManager: createStubTokenManager(),
+      sessionManager: createStubSessionManager(),
+      gitOps: createStubGitOps(),
+      modelHandler: createStubModelHandler(),
+      reviewService: undefined
+    });
 
     await handler.handle({ type: 'sendMessage', text: '/deep-explore trace all functions in src/main.ts' });
     assert.strictEqual(capturedMode, 'deep-explore', '/deep-explore should route with mode="deep-explore"');
@@ -643,27 +643,27 @@ suite('ChatMessageHandler – /review slash command', () => {
 
     let capturedMode = '';
     const exploreExecutor = {
-      execute: async (_task: string, _config: any, _token: any, _sessionId: string, _model: string, mode: string) => {
-        capturedMode = mode;
+      execute: async (params: any) => {
+        capturedMode = params.mode;
         return { summary: 'Chat response', assistantMessage: {} };
       }
     };
 
-    const handler = new ChatMessageHandler(
+    const handler = new ChatMessageHandler({
       state,
       emitter,
-      createStubSessionController(),
-      createStubSettingsHandler(),
-      createStubAgentExecutor(),
-      exploreExecutor as any,
-      createStubDatabaseService(),
-      createStubClient(),
-      createStubTokenManager(),
-      createStubSessionManager(),
-      createStubGitOps(),
-      createStubModelHandler(),
-      undefined
-    );
+      sessionController: createStubSessionController(),
+      settingsHandler: createStubSettingsHandler(),
+      agentExecutor: createStubAgentExecutor(),
+      exploreExecutor: exploreExecutor as any,
+      databaseService: createStubDatabaseService(),
+      client: createStubClient(),
+      tokenManager: createStubTokenManager(),
+      sessionManager: createStubSessionManager(),
+      gitOps: createStubGitOps(),
+      modelHandler: createStubModelHandler(),
+      reviewService: undefined
+    });
 
     await handler.handle({ type: 'sendMessage', text: 'What does handleRequest do?' });
     assert.strictEqual(capturedMode, 'chat', 'Chat mode should route through ExploreExecutor with mode="chat"');

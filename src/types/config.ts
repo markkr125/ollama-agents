@@ -1,3 +1,5 @@
+import type { FilePatternMap } from '../utils/fileSensitivity';
+
 // Configuration types
 
 export interface ModeConfig {
@@ -12,7 +14,7 @@ export interface AgentConfig {
   maxIterations: number;
   toolTimeout: number;
   maxActiveSessions: number;
-  sensitiveFilePatterns: Record<string, boolean>;
+  sensitiveFilePatterns: FilePatternMap;
   enableThinking: boolean;
   continuationStrategy: ContinuationStrategy;
   keepAlive: string;

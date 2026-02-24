@@ -1,8 +1,8 @@
 import * as vscode from 'vscode';
 import { DatabaseService } from '../../../services/database/databaseService';
 import { OllamaClient } from '../../../services/model/ollamaClient';
-import { MessageRecord } from '../../../types/session';
-import { WebviewMessageEmitter } from '../../../views/chatTypes';
+import { MessageRecord, Session } from '../../../types/session';
+import { AgentEventEmitter } from '../agentEventEmitter';
 
 // ---------------------------------------------------------------------------
 // AgentSummaryBuilder — post-loop summary generation, final message
@@ -15,11 +15,17 @@ export interface SummaryResult {
 }
 
 export class AgentSummaryBuilder {
+  private events!: AgentEventEmitter;
+
   constructor(
     private readonly client: OllamaClient,
-    private readonly databaseService: DatabaseService,
-    private readonly emitter: WebviewMessageEmitter
+    private readonly databaseService: DatabaseService
   ) {}
+
+  /** Bind the event emitter for the current session. Called once per execute() cycle. */
+  bindEmitter(events: AgentEventEmitter): void {
+    this.events = events;
+  }
 
   /**
    * Build the final assistant summary after the agent loop exits.
@@ -33,7 +39,7 @@ export class AgentSummaryBuilder {
   async finalize(
     sessionId: string,
     model: string,
-    agentSession: any,
+    agentSession: Session,
     accumulatedExplanation: string,
     hasPersistedIterationText: boolean,
     currentCheckpointId: string | undefined,
@@ -119,16 +125,15 @@ export class AgentSummaryBuilder {
     const finalMessageContent = hasPersistedIterationText ? (summaryPrefix.trim() || '') : summary;
     const cleanedFinal = (finalMessageContent || '').replace(/\[TASK_COMPLETE\]/gi, '').trim();
     if (cleanedFinal) {
-      this.emitter.postMessage({ type: 'finalMessage', content: cleanedFinal, model, sessionId });
+      this.events.post('finalMessage', { content: cleanedFinal, model });
     }
 
     // Persist + post filesChanged
     if (filesChangedPayload) {
-      await this.persistUiEvent(sessionId, 'filesChanged', filesChangedPayload);
-      this.emitter.postMessage({ type: 'filesChanged', ...filesChangedPayload, sessionId });
+      await this.events.emit('filesChanged', filesChangedPayload);
     }
 
-    this.emitter.postMessage({ type: 'hideThinking', sessionId });
+    this.events.post('hideThinking', {});
 
     // Clean up scratch directory if it exists
     await this.cleanupScratchDirectory();
@@ -146,11 +151,11 @@ export class AgentSummaryBuilder {
    */
   private async generateFallbackSummary(
     model: string,
-    agentSession: any,
+    agentSession: Session,
     sessionId: string,
     lastThinkingContent?: string
   ): Promise<string> {
-    this.emitter.postMessage({ type: 'showThinking', message: 'Working...', sessionId });
+    this.events.post('showThinking', { message: 'Working...' });
 
     const toolResults = (agentSession.toolCalls || [])
       .slice(-6)
@@ -192,23 +197,7 @@ export class AgentSummaryBuilder {
     } catch {
       return '';
     } finally {
-      this.emitter.postMessage({ type: 'hideThinking', sessionId });
-    }
-  }
-
-  private async persistUiEvent(
-    sessionId: string | undefined,
-    eventType: string,
-    payload: Record<string, any>
-  ): Promise<void> {
-    if (!sessionId) return;
-    try {
-      await this.databaseService.addMessage(sessionId, 'tool', '', {
-        toolName: '__ui__',
-        toolOutput: JSON.stringify({ eventType, payload })
-      });
-    } catch (error) {
-      console.warn('[persistUiEvent] Failed to persist UI event:', error);
+      this.events.post('hideThinking', {});
     }
   }
 

@@ -7,15 +7,16 @@ import { ReviewDecorationManager } from './reviewDecorationManager';
 import { ReviewNavigator } from './reviewNavigator';
 import { ReviewSessionBuilder } from './reviewSessionBuilder';
 import type {
-  ChangePosition,
-  FileHunkStatsEvent,
-  FileReviewResolvedEvent,
-  FileReviewState,
-  ReviewSession
+    ChangePosition,
+    FileHunkStatsEvent,
+    FileReviewResolvedEvent,
+    FileReviewState,
+    ReviewPhase,
+    ReviewSession
 } from './reviewTypes';
 
 // Re-export types so existing consumers don't need to change imports.
-export type { FileHunkStatsEvent, FileReviewResolvedEvent, FileReviewState, ReviewHunk } from './reviewTypes';
+export type { FileHunkStatsEvent, FileReviewResolvedEvent, FileReviewState, ReviewHunk, ReviewPhase } from './reviewTypes';
 
 // =============================================================================
 // PendingEditReviewService — thin facade that composes:
@@ -31,6 +32,7 @@ export type { FileHunkStatsEvent, FileReviewResolvedEvent, FileReviewState, Revi
 
 export class PendingEditReviewService implements vscode.Disposable {
   private activeSession: ReviewSession | null = null;
+  private _phase: ReviewPhase = 'idle';
   private disposables: vscode.Disposable[] = [];
 
   // Sub-components
@@ -58,11 +60,40 @@ export class PendingEditReviewService implements vscode.Disposable {
 
     this.disposables.push(
       vscode.window.onDidChangeActiveTextEditor(editor => {
-        if (editor && this.activeSession) {
-          this.decorationMgr.applyDecorationsForEditor(this.activeSession, editor);
+        if (editor && this.activeSession && this._phase === 'active') {
+          const idx = this.decorationMgr.applyDecorationsForEditor(this.activeSession, editor);
+          if (idx !== undefined) {
+            this.activeSession.currentFileIndex = idx;
+          }
         }
       })
     );
+  }
+
+  // ---------------------------------------------------------------------------
+  // Phase tracking — explicit state machine (see ReviewPhase in reviewTypes.ts)
+  // ---------------------------------------------------------------------------
+
+  /** Current lifecycle phase. */
+  getPhase(): ReviewPhase {
+    return this._phase;
+  }
+
+  /**
+   * Transition to a new phase with validation.
+   * Warns (but does not throw) on invalid transitions to avoid crashing
+   * during edge-case races.
+   */
+  private transition(to: ReviewPhase): void {
+    const from = this._phase;
+    const valid =
+      (from === 'idle' && to === 'building') ||
+      (from === 'building' && (to === 'active' || to === 'idle')) ||
+      (from === 'active' && (to === 'building' || to === 'idle'));
+    if (!valid) {
+      console.warn(`[ReviewService] Invalid phase transition: ${from} → ${to}`);
+    }
+    this._phase = to;
   }
 
   // ---------------------------------------------------------------------------
@@ -166,7 +197,7 @@ export class PendingEditReviewService implements vscode.Disposable {
   }
 
   removeFileFromReview(filePath: string): void {
-    if (!this.activeSession) return;
+    if (!this.activeSession || this._phase !== 'active') return;
 
     const idx = this.activeSession.files.findIndex(f => f.filePath === filePath);
     if (idx < 0) return;
@@ -189,7 +220,10 @@ export class PendingEditReviewService implements vscode.Disposable {
   }
 
   closeReview(): void {
-    if (!this.activeSession) return;
+    if (!this.activeSession) {
+      this._phase = 'idle';
+      return;
+    }
 
     for (const fileState of this.activeSession.files) {
       fileState.addedDecoration.dispose();
@@ -204,6 +238,7 @@ export class PendingEditReviewService implements vscode.Disposable {
     }
 
     this.activeSession = null;
+    this._phase = 'idle';
     vscode.commands.executeCommand('setContext', 'ollamaCopilot.reviewActive', false);
     this._onDidChangeReviewState.fire();
   }
@@ -213,7 +248,7 @@ export class PendingEditReviewService implements vscode.Disposable {
   // ---------------------------------------------------------------------------
 
   async navigateFile(direction: 'prev' | 'next'): Promise<void> {
-    if (!this.activeSession || this.activeSession.files.length === 0) return;
+    if (!this.activeSession || this._phase !== 'active' || this.activeSession.files.length === 0) return;
 
     this.activeSession.currentFileIndex =
       this.navigator.computeFileNavigation(this.activeSession, direction);
@@ -294,116 +329,124 @@ export class PendingEditReviewService implements vscode.Disposable {
   // Hunk operations — keep/undo
   // ---------------------------------------------------------------------------
 
-  keepHunk(filePath: string, hunkIndex: number): void {
-    const fileState = this.findFileByPath(filePath);
-    if (!fileState || hunkIndex < 0 || hunkIndex >= fileState.hunks.length) return;
+  async keepHunk(filePath: string, hunkIndex: number): Promise<void> {
+    await this.mutex.runExclusive(async () => {
+      if (this._phase !== 'active') return;
 
-    fileState.hunks.splice(hunkIndex, 1);
+      const fileState = this.findFileByPath(filePath);
+      if (!fileState || hunkIndex < 0 || hunkIndex >= fileState.hunks.length) return;
 
-    if (fileState.hunks.length === 0) {
-      fileState.currentHunkIndex = 0;
-    } else if (fileState.currentHunkIndex >= fileState.hunks.length) {
-      fileState.currentHunkIndex = fileState.hunks.length - 1;
-    }
+      fileState.hunks.splice(hunkIndex, 1);
 
-    this.decorationMgr.refreshDecorationsForFile(fileState);
-    this.emitHunkStats(fileState);
-    this.checkFileFullyReviewed(fileState);
+      if (fileState.hunks.length === 0) {
+        fileState.currentHunkIndex = 0;
+      } else if (fileState.currentHunkIndex >= fileState.hunks.length) {
+        fileState.currentHunkIndex = fileState.hunks.length - 1;
+      }
 
-    if (fileState.hunks.length > 0) {
-      this.decorationMgr.scrollToHunk(fileState);
-    } else {
-      this.decorationMgr.clearGutterArrow();
-    }
+      this.decorationMgr.refreshDecorationsForFile(fileState);
+      this.emitHunkStats(fileState);
+      await this.checkFileFullyReviewed(fileState);
+
+      if (fileState.hunks.length > 0) {
+        this.decorationMgr.scrollToHunk(fileState);
+      } else {
+        this.decorationMgr.clearGutterArrow();
+      }
+    });
   }
 
   async undoHunk(filePath: string, hunkIndex: number): Promise<void> {
-    const fileState = this.findFileByPath(filePath);
-    if (!fileState || hunkIndex < 0 || hunkIndex >= fileState.hunks.length) return;
+    await this.mutex.runExclusive(async () => {
+      if (this._phase !== 'active') return;
 
-    const hunk = fileState.hunks[hunkIndex];
-    const editor = vscode.window.activeTextEditor;
-    if (!editor || editor.document.uri.toString() !== fileState.uri.toString()) return;
+      const fileState = this.findFileByPath(filePath);
+      if (!fileState || hunkIndex < 0 || hunkIndex >= fileState.hunks.length) return;
 
-    const doc = editor.document;
+      const hunk = fileState.hunks[hunkIndex];
+      const editor = vscode.window.activeTextEditor;
+      if (!editor || editor.document.uri.toString() !== fileState.uri.toString()) return;
 
-    const success = await editor.edit(editBuilder => {
-      if (hunk.addedLines.length > 0 && !hunk.originalText) {
-        const firstLine = hunk.addedLines[0];
-        const lastLine = hunk.addedLines[hunk.addedLines.length - 1];
+      const doc = editor.document;
 
-        if (lastLine + 1 < doc.lineCount) {
-          editBuilder.delete(new vscode.Range(firstLine, 0, lastLine + 1, 0));
-        } else if (firstLine > 0) {
-          const prevEnd = doc.lineAt(firstLine - 1).range.end;
-          const lastEnd = doc.lineAt(lastLine).range.end;
-          editBuilder.delete(new vscode.Range(prevEnd, lastEnd));
-        } else {
-          const lastEnd = doc.lineAt(lastLine).range.end;
-          editBuilder.delete(new vscode.Range(0, 0, lastEnd.line, lastEnd.character));
-        }
-      } else if (hunk.addedLines.length > 0 && hunk.originalText) {
-        const firstLine = hunk.addedLines[0];
-        const lastLine = hunk.addedLines[hunk.addedLines.length - 1];
+      const success = await editor.edit(editBuilder => {
+        if (hunk.addedLines.length > 0 && !hunk.originalText) {
+          const firstLine = hunk.addedLines[0];
+          const lastLine = hunk.addedLines[hunk.addedLines.length - 1];
 
-        if (lastLine + 1 < doc.lineCount) {
-          editBuilder.replace(
-            new vscode.Range(firstLine, 0, lastLine + 1, 0),
+          if (lastLine + 1 < doc.lineCount) {
+            editBuilder.delete(new vscode.Range(firstLine, 0, lastLine + 1, 0));
+          } else if (firstLine > 0) {
+            const prevEnd = doc.lineAt(firstLine - 1).range.end;
+            const lastEnd = doc.lineAt(lastLine).range.end;
+            editBuilder.delete(new vscode.Range(prevEnd, lastEnd));
+          } else {
+            const lastEnd = doc.lineAt(lastLine).range.end;
+            editBuilder.delete(new vscode.Range(0, 0, lastEnd.line, lastEnd.character));
+          }
+        } else if (hunk.addedLines.length > 0 && hunk.originalText) {
+          const firstLine = hunk.addedLines[0];
+          const lastLine = hunk.addedLines[hunk.addedLines.length - 1];
+
+          if (lastLine + 1 < doc.lineCount) {
+            editBuilder.replace(
+              new vscode.Range(firstLine, 0, lastLine + 1, 0),
+              hunk.originalText + '\n'
+            );
+          } else {
+            editBuilder.replace(
+              new vscode.Range(firstLine, 0, lastLine, doc.lineAt(lastLine).text.length),
+              hunk.originalText
+            );
+          }
+        } else if (hunk.deletedCount > 0 && hunk.addedLines.length === 0) {
+          editBuilder.insert(
+            new vscode.Position(hunk.startLine, 0),
             hunk.originalText + '\n'
           );
-        } else {
-          editBuilder.replace(
-            new vscode.Range(firstLine, 0, lastLine, doc.lineAt(lastLine).text.length),
-            hunk.originalText
-          );
         }
-      } else if (hunk.deletedCount > 0 && hunk.addedLines.length === 0) {
-        editBuilder.insert(
-          new vscode.Position(hunk.startLine, 0),
-          hunk.originalText + '\n'
-        );
+      });
+
+      if (!success) return;
+
+      await editor.document.save();
+
+      const addedLineCount = hunk.addedLines.length;
+      const originalLineCount = hunk.originalText ? hunk.originalText.split('\n').length : 0;
+      const delta = originalLineCount - addedLineCount;
+
+      fileState.hunks.splice(hunkIndex, 1);
+
+      for (let i = hunkIndex; i < fileState.hunks.length; i++) {
+        const h = fileState.hunks[i];
+        h.startLine += delta;
+        h.endLine += delta;
+        h.addedLines = h.addedLines.map(l => l + delta);
+      }
+
+      if (fileState.hunks.length === 0) {
+        fileState.currentHunkIndex = 0;
+      } else {
+        fileState.currentHunkIndex = Math.min(hunkIndex, fileState.hunks.length - 1);
+      }
+
+      this.decorationMgr.refreshDecorationsForFile(fileState);
+      this.emitHunkStats(fileState);
+      await this.checkFileFullyReviewed(fileState);
+
+      if (fileState.hunks.length > 0) {
+        this.decorationMgr.scrollToHunk(fileState);
+      } else {
+        this.decorationMgr.clearGutterArrow();
       }
     });
-
-    if (!success) return;
-
-    await editor.document.save();
-
-    const addedLineCount = hunk.addedLines.length;
-    const originalLineCount = hunk.originalText ? hunk.originalText.split('\n').length : 0;
-    const delta = originalLineCount - addedLineCount;
-
-    fileState.hunks.splice(hunkIndex, 1);
-
-    for (let i = hunkIndex; i < fileState.hunks.length; i++) {
-      const h = fileState.hunks[i];
-      h.startLine += delta;
-      h.endLine += delta;
-      h.addedLines = h.addedLines.map(l => l + delta);
-    }
-
-    if (fileState.hunks.length === 0) {
-      fileState.currentHunkIndex = 0;
-    } else {
-      fileState.currentHunkIndex = Math.min(hunkIndex, fileState.hunks.length - 1);
-    }
-
-    this.decorationMgr.refreshDecorationsForFile(fileState);
-    this.emitHunkStats(fileState);
-    this.checkFileFullyReviewed(fileState);
-
-    if (fileState.hunks.length > 0) {
-      this.decorationMgr.scrollToHunk(fileState);
-    } else {
-      this.decorationMgr.clearGutterArrow();
-    }
   }
 
-  keepCurrentHunk(): void {
+  async keepCurrentHunk(): Promise<void> {
     if (!this.activeSession) return;
     const fileState = this.activeSession.files[this.activeSession.currentFileIndex];
     if (!fileState || fileState.hunks.length === 0) return;
-    this.keepHunk(fileState.filePath, fileState.currentHunkIndex);
+    await this.keepHunk(fileState.filePath, fileState.currentHunkIndex);
   }
 
   async undoCurrentHunk(): Promise<void> {
@@ -491,16 +534,54 @@ export class PendingEditReviewService implements vscode.Disposable {
   // ---------------------------------------------------------------------------
 
   /**
-   * Close the current session and build a new one from the given checkpoint IDs.
-   * Registers the CodeLens provider and fires state-changed event.
+   * Build or incrementally merge a review session from the given checkpoint IDs.
+   *
+   * **Incremental merge** (pitfall 17/24 fix): When the current session already
+   * exists and the requested IDs are a strict superset, only the NEW checkpoint's
+   * files are built and appended — `currentFileIndex` is preserved.
+   *
+   * **Full rebuild**: When checkpoint IDs overlap (re-edit case) or no session
+   * exists, the old session is closed and a fresh one is built from scratch.
    */
   private async rebuildSession(checkpointIds: string[]): Promise<void> {
+    // --- Incremental merge path ---
+    if (this.activeSession) {
+      const existingIds = new Set(this.activeSession.checkpointIds);
+      const newIds = checkpointIds.filter(id => !existingIds.has(id));
+
+      if (newIds.length > 0 && checkpointIds.length > existingIds.size) {
+        // Adding new checkpoints — merge without destroying session
+        this.transition('building');
+        const partial = await this.sessionBuilder.buildSession(newIds);
+        if (partial) {
+          this.activeSession.checkpointIds = [
+            ...new Set([...this.activeSession.checkpointIds, ...newIds])
+          ];
+          this.activeSession.files.push(...partial.files);
+        }
+        this.transition('active');
+        this._onDidChangeReviewState.fire();
+        return;
+      }
+
+      if (newIds.length === 0) {
+        // Same checkpoints — re-edit case. Fall through to full rebuild
+        // to pick up changed snapshot content.
+      }
+    }
+
+    // --- Full rebuild path ---
     this.closeReview();
+    this.transition('building');
 
     const session = await this.sessionBuilder.buildSession(checkpointIds);
-    if (!session) return;
+    if (!session) {
+      this._phase = 'idle';
+      return;
+    }
 
     this.activeSession = session;
+    this.transition('active');
 
     vscode.commands.executeCommand('setContext', 'ollamaCopilot.reviewActive', true);
 

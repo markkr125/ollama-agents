@@ -82,19 +82,19 @@ export class ReviewDecorationManager {
 
   /**
    * Re-apply decorations when the active editor changes (tab switch).
-   * Also updates `currentFileIndex` to match the newly focused editor.
+   * Returns the matched file index so the facade can update `currentFileIndex`
+   * — this method does NOT mutate session state directly.
    */
-  applyDecorationsForEditor(session: ReviewSession, editor: vscode.TextEditor): void {
+  applyDecorationsForEditor(session: ReviewSession, editor: vscode.TextEditor): number | undefined {
     const fileState = session.files.find(
       f => f.uri.toString() === editor.document.uri.toString()
     );
     if (fileState) {
       this.applyDecorations(editor, fileState);
       const idx = session.files.indexOf(fileState);
-      if (idx >= 0) {
-        session.currentFileIndex = idx;
-      }
+      if (idx >= 0) return idx;
     }
+    return undefined;
   }
 
   /**

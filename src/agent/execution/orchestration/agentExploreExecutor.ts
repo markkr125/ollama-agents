@@ -1,36 +1,94 @@
 import * as vscode from 'vscode';
 import { getConfig } from '../../../config/settings';
 import { DatabaseService } from '../../../services/database/databaseService';
-import { extractContextLength, ModelCapabilities } from '../../../services/model/modelCompatibility';
+import { ModelCapabilities } from '../../../services/model/modelCompatibility';
 import { OllamaClient } from '../../../services/model/ollamaClient';
 import { ExecutorConfig } from '../../../types/agent';
-import { ChatRequest } from '../../../types/ollama';
 import { MessageRecord } from '../../../types/session';
-import { extractToolCalls, removeToolCalls } from '../../../utils/toolCallParser';
+import { removeToolCalls } from '../../../utils/toolCallParser';
 import { WebviewMessageEmitter } from '../../../views/chatTypes';
 import { getProgressGroupTitle, getToolActionInfo, getToolSuccessInfo } from '../../../views/toolUIFormatter';
 import { ToolRegistry } from '../../toolRegistry';
+import { AgentEventEmitter, FilteredAgentEventEmitter, SUB_AGENT_ALLOWED_TYPES } from '../agentEventEmitter';
+import {
+    buildAndEmitFatalError,
+    buildAndPersistAssistantToolMessage,
+    buildChatRequest,
+    compactAndEmit,
+    computeEffectiveContextWindow,
+    deduplicateThinkingEcho,
+    emitTokenUsage,
+    logIterationState, logRequestPayload,
+    parseToolCalls,
+    persistCancellationThinking, persistThinkingBlock,
+    recoverToolCallFromError,
+    resolveContextWindow,
+    trackPromptTokens
+} from '../agentLoopHelpers';
+import { ConversationHistory } from '../conversationHistory';
 import { AgentPromptBuilder } from '../prompts/agentPromptBuilder';
-import { AgentContextCompactor, estimateTokensByCategory } from '../streaming/agentContextCompactor';
-import { buildToolCallSummary, checkNoToolCompletion, computeDynamicNumCtx } from '../streaming/agentControlPlane';
+import { AgentContextCompactor } from '../streaming/agentContextCompactor';
+import { buildToolCallSummary, checkNoToolCompletion } from '../streaming/agentControlPlane';
 import { AgentStreamProcessor } from '../streaming/agentStreamProcessor';
 
 // ---------------------------------------------------------------------------
 // Read-only tool names — only these tools are allowed in explore/plan modes.
 // ---------------------------------------------------------------------------
 
-const READ_ONLY_TOOLS = new Set([
-  'read_file', 'search_workspace', 'list_files', 'get_diagnostics',
-  'get_document_symbols', 'find_definition', 'find_references',
-  'find_implementations', 'find_symbol', 'get_hover_info',
-  'get_call_hierarchy', 'get_type_hierarchy',
-]);
+import { getToolsForMode } from '../toolSets';
 
-// Deep explore adds run_subagent for delegating independent exploration branches
-const DEEP_EXPLORE_TOOLS = new Set([...READ_ONLY_TOOLS, 'run_subagent']);
+// ---------------------------------------------------------------------------
+// Standalone helper — exported for testability
+// ---------------------------------------------------------------------------
 
-// Analyze-with-write: deep exploration + write_file for documentation/report output
-const ANALYZE_WRITE_TOOLS = new Set([...DEEP_EXPLORE_TOOLS, 'write_file']);
+/**
+ * Build a summary from tool results in conversation messages.
+ * Used as a fallback when a sub-agent produces no text or thinking
+ * output (e.g., non-thinking models that output only tool calls).
+ *
+ * For read_file, search_workspace, and LSP tool results, includes the
+ * FULL content (capped per-tool) so the parent agent gets actionable data
+ * even when the sub-agent model doesn't produce analysis text.
+ */
+export function buildToolResultsSummary(messages: any[]): string {
+  const toolEntries: string[] = [];
+  // Tools whose output should be passed through in full (they contain the
+  // data the parent needs). Others get first-line summaries.
+  const FULL_CONTENT_TOOLS = new Set([
+    'read_file', 'search_workspace', 'get_document_symbols',
+    'find_definition', 'find_references', 'find_symbol',
+    'get_hover_info', 'get_call_hierarchy', 'find_implementations', 'get_type_hierarchy'
+  ]);
+  const MAX_PER_TOOL = 4000;
+
+  for (const m of messages) {
+    if (m.role !== 'tool' || !m.tool_name || m.tool_name === '__ui__') continue;
+    const content = (m.content || '').trim();
+    if (!content) continue;
+
+    const name = m.tool_name;
+
+    if (FULL_CONTENT_TOOLS.has(name)) {
+      // Include full tool output — this IS the data the parent needs
+      if (content.length > MAX_PER_TOOL) {
+        toolEntries.push(`- ${name}:\n${content.substring(0, MAX_PER_TOOL)}\n[... ${content.length - MAX_PER_TOOL} chars truncated]`);
+      } else {
+        toolEntries.push(`- ${name}:\n${content}`);
+      }
+    } else {
+      // Brief summary for other tools
+      const firstLine = content.split('\n')[0].substring(0, 120);
+      toolEntries.push(`- ${name}: ${firstLine}`);
+    }
+  }
+  if (toolEntries.length === 0) return 'Exploration completed.';
+  // Cap total at 8K chars — the parent orchestrator (typically 128K+ context)
+  // can handle this, and it's far more useful than a one-line summary.
+  const joined = `Tool results summary:\n${toolEntries.join('\n')}`;
+  return joined.length > 8000
+    ? joined.substring(0, 8000) + '\n[Summary truncated]'
+    : joined;
+}
 
 // ---------------------------------------------------------------------------
 // AgentExploreExecutor — read-only exploration agent. Same streaming loop
@@ -43,6 +101,25 @@ export type ExploreMode = 'explore' | 'plan' | 'review' | 'deep-explore' | 'deep
 export interface ExploreResult {
   summary: string;
   assistantMessage: MessageRecord;
+}
+
+/**
+ * Parameter object for AgentExploreExecutor.execute() — replaces 13 positional params.
+ */
+export interface ExploreExecuteParams {
+  task: string;
+  config: ExecutorConfig;
+  token: vscode.CancellationToken;
+  sessionId: string;
+  model: string;
+  mode?: ExploreMode;
+  capabilities?: ModelCapabilities;
+  conversationHistory?: MessageRecord[];
+  isSubagent?: boolean;
+  primaryWorkspaceHint?: vscode.WorkspaceFolder;
+  subagentTitle?: string;
+  subagentContextHint?: string;
+  subagentDescription?: string;
 }
 
 export class AgentExploreExecutor {
@@ -65,42 +142,23 @@ export class AgentExploreExecutor {
   /**
    * Run the read-only exploration loop.
    *
-   * @param mode - 'explore' for general exploration, 'plan' for structured planning, 'review' for security review
+   * @param params - Exploration parameters (task, config, model, mode, etc.)
    */
-  async execute(
-    task: string,
-    config: ExecutorConfig,
-    token: vscode.CancellationToken,
-    sessionId: string,
-    model: string,
-    mode: ExploreMode = 'explore',
-    capabilities?: ModelCapabilities,
-    conversationHistory?: MessageRecord[],
-    isSubagent = false,
-    primaryWorkspaceHint?: vscode.WorkspaceFolder,
-    subagentTitle?: string,
-    subagentContextHint?: string,
-    subagentDescription?: string
-  ): Promise<ExploreResult> {
+  async execute(params: ExploreExecuteParams): Promise<ExploreResult> {
+    const {
+      task, config, token, sessionId, model,
+      mode = 'explore', capabilities: rawCapabilities,
+      conversationHistory, isSubagent = false,
+      primaryWorkspaceHint, subagentTitle, subagentContextHint, subagentDescription
+    } = params;
+    let capabilities = rawCapabilities;
     const allFolders = vscode.workspace.workspaceFolders || [];
     const primaryWorkspace = primaryWorkspaceHint || allFolders[0];
     const useNativeTools = !!capabilities?.tools;
     const { agent: agentConfig } = getConfig();
 
     // Resolve context window: capabilities DB > live /api/show > user config > Ollama default
-    if (!capabilities?.contextLength) {
-      try {
-        const showResp = await this.client.showModel(model);
-        const detected = extractContextLength(showResp);
-        if (detected) {
-          if (!capabilities) capabilities = { chat: true, fim: false, tools: useNativeTools, vision: false, embedding: false };
-          capabilities.contextLength = detected;
-          this.outputChannel.appendLine(`[AgentExploreExecutor] Live /api/show detected context_length=${detected} for ${model}`);
-        }
-      } catch {
-        this.outputChannel.appendLine(`[AgentExploreExecutor] Live /api/show failed for ${model} — using config default num_ctx`);
-      }
-    }
+    capabilities = await resolveContextWindow(this.client, model, capabilities, useNativeTools, this.outputChannel, 'AgentExploreExecutor');
 
     // Sub-agent mode: suppress text streaming, thinking, final message, AND
     // per-iteration progress group events. The sub-agent gets ONE wrapper
@@ -108,20 +166,27 @@ export class AgentExploreExecutor {
     // actions and thinking. Internal startProgressGroup/finishProgressGroup
     // are suppressed so actions funnel into the wrapper group.
     const subLabel = subagentTitle ? `Sub-agent: ${subagentTitle}` : 'Sub-agent';
-    const emit = isSubagent
-      ? (msg: any) => {
-          const TOOL_UI_TYPES = new Set([
-            'showToolAction',
-            'showError', 'showWarningBanner', 'subagentThinking',
-          ]);
-          if (TOOL_UI_TYPES.has(msg.type)) {
-            this.emitter.postMessage(msg);
+
+    // Unified event emitter — guarantees every UI event is persisted + posted.
+    // Sub-agent mode uses FilteredAgentEventEmitter to suppress internal
+    // startProgressGroup/finishProgressGroup from the webview (the wrapper
+    // group handles those).
+    const events = isSubagent
+      ? new FilteredAgentEventEmitter(sessionId, this.databaseService, this.emitter)
+      : new AgentEventEmitter(sessionId, this.databaseService, this.emitter);
+
+    // Stream processor emitter: sub-agents suppress streaming text events.
+    const silentStreamEmitter: WebviewMessageEmitter = isSubagent
+      ? {
+          postMessage: (msg: any) => {
+            if (SUB_AGENT_ALLOWED_TYPES.has(msg.type)) {
+              this.emitter.postMessage(msg);
+            }
           }
         }
-      : (msg: any) => this.emitter.postMessage(msg);
-    const silentEmitter: WebviewMessageEmitter = { postMessage: emit };
+      : this.emitter;
     const activeStreamProcessor = isSubagent
-      ? new AgentStreamProcessor(this.client, silentEmitter)
+      ? new AgentStreamProcessor(this.client, silentStreamEmitter)
       : this.streamProcessor;
 
     // Build mode-specific system prompt
@@ -132,51 +197,29 @@ export class AgentExploreExecutor {
     // CRITICAL: Include role:'tool' messages so the model sees its own prior
     // tool calls and results. Without these, the model loses memory of what
     // it already did and will restate plans and re-do searches each turn.
-    const historyMessages = (conversationHistory || [])
-      .filter(m => {
-        if (m.tool_name === '__ui__') return false;
-        if (m.role === 'tool') return !!m.content.trim();
-        if (m.role === 'user' || m.role === 'assistant') return !!m.content.trim() || !!m.tool_calls;
-        return false;
-      })
-      .map(m => {
-        if (m.role === 'tool') {
-          return { role: 'tool' as const, content: m.content, tool_name: m.tool_name || 'unknown' };
-        }
-        const msg: any = { role: m.role as 'user' | 'assistant', content: m.content };
-        if (m.role === 'assistant' && m.tool_calls) {
-          try {
-            msg.tool_calls = JSON.parse(m.tool_calls);
-          } catch { /* ignore malformed JSON */ }
-        }
-        return msg;
-      });
-
-    const messages: any[] = [
-      { role: 'system', content: systemContent },
-      ...historyMessages,
-      { role: 'user', content: task }
-    ];
+    const history = new ConversationHistory({
+      systemPrompt: systemContent,
+      conversationHistory: conversationHistory || [],
+      userTask: task,
+      useNativeTools
+    });
+    const messages = history.messages;
 
     if (!useNativeTools) {
-      emit({
-        type: 'showWarningBanner',
-        message: 'This model doesn\'t natively support tool calling. Using text-based tool parsing.',
-        sessionId
+      events.post('showWarningBanner', {
+        message: 'This model doesn\'t natively support tool calling. Using text-based tool parsing.'
       });
     }
 
     // Sub-agent wrapper group: single group containing all sub-agent actions
     if (isSubagent) {
-      await this.persistUiEvent(sessionId, 'startProgressGroup', { title: subLabel, isSubagent: true });
-      this.emitter.postMessage({ type: 'startProgressGroup', title: subLabel, isSubagent: true, sessionId });
+      await events.emit('startProgressGroup', { title: subLabel, isSubagent: true });
 
       // Emit description as the first action inside the group so it isn't empty
       // while the sub-agent is starting up. Transitions to ✓ when group finishes.
       if (subagentDescription) {
         const descPayload = { status: 'running', icon: '📋', text: subagentDescription };
-        await this.persistUiEvent(sessionId, 'showToolAction', descPayload);
-        emit({ type: 'showToolAction', ...descPayload, sessionId });
+        await events.emit('showToolAction', descPayload);
       }
     }
 
@@ -194,63 +237,19 @@ export class AgentExploreExecutor {
       iteration++;
 
       // Diagnostic: log conversation state at each iteration start
-      const totalContentChars = messages.reduce((sum: number, m: any) => sum + (m.content?.length || 0), 0);
-      const roleCounts = messages.reduce((acc: Record<string, number>, m: any) => {
-        acc[m.role] = (acc[m.role] || 0) + 1;
-        return acc;
-      }, {});
-      const roleBreakdown = Object.entries(roleCounts).map(([r, c]) => `${r}:${c}`).join(', ');
-      this.outputChannel.appendLine(`[Explore Iteration ${iteration}] Messages: ${messages.length} (${roleBreakdown}) — ~${Math.round(totalContentChars / 4)} est. tokens`);
-
-      // DIAGNOSTIC: Dump full messages array structure so we can verify
-      // tool results are actually being accumulated across iterations
-      for (let mi = 0; mi < messages.length; mi++) {
-        const m = messages[mi];
-        const contentPreview = (m.content || '').substring(0, 120).replace(/\n/g, '\\n');
-        const toolCallsInfo = m.tool_calls ? ` tool_calls:[${m.tool_calls.length}]` : '';
-        const toolNameInfo = m.tool_name ? ` tool_name:${m.tool_name}` : '';
-        this.outputChannel.appendLine(`  [msg ${mi}] role=${m.role}${toolNameInfo}${toolCallsInfo} content(${(m.content || '').length})="${contentPreview}"`);
-      }
+      logIterationState(this.outputChannel, `Explore`, iteration, messages);
 
       let phase = 'preparing request';
 
       try {
         // Context compaction for long explorations
-        // contextWindow: the model's EFFECTIVE context limit — used for compaction decisions.
-        // numCtx: the DYNAMIC value sent to Ollama — sized to the actual payload.
-        const detectedContextWindow = capabilities?.contextLength;
-        const userContextWindow = getConfig().contextWindow || 16000;
-        const rawContextWindow = detectedContextWindow || userContextWindow;
-        // Two-tier cap: per-model override → global setting (default 64K)
-        const globalCap = getConfig().agent.maxContextWindow;
-        const effectiveCap = capabilities?.maxContext ?? globalCap;
-        const contextWindow = Math.min(rawContextWindow, effectiveCap);
+        const contextWindow = computeEffectiveContextWindow(capabilities);
         if (iteration > 1) {
-          const compacted = await this.contextCompactor.compactIfNeeded(messages, contextWindow, model, lastPromptTokens);
-          if (compacted) {
-            this.outputChannel.appendLine(`[${mode}][Iteration ${iteration}] Context compacted — ${compacted.summarizedMessages} messages summarized.`);
-            // Show visible indicator in the chat UI (skip for sub-agents)
-            if (!isSubagent) {
-              const savedTokens = compacted.tokensBefore - compacted.tokensAfter;
-              const savedK = savedTokens >= 1000 ? `${(savedTokens / 1000).toFixed(1)}K` : String(savedTokens);
-              await this.persistUiEvent(sessionId, 'startProgressGroup', { title: 'Summarizing conversation' });
-              emit({ type: 'startProgressGroup', title: 'Summarizing conversation', sessionId });
-              const action = { status: 'success' as const, icon: '📝', text: `Condensed ${compacted.summarizedMessages} messages — freed ~${savedK} tokens`, detail: `${compacted.tokensBefore} → ${compacted.tokensAfter} tokens` };
-              await this.persistUiEvent(sessionId, 'showToolAction', action);
-              emit({ type: 'showToolAction', ...action, sessionId });
-              await this.persistUiEvent(sessionId, 'finishProgressGroup', {});
-              emit({ type: 'finishProgressGroup', sessionId });
-            }
-          }
+          await compactAndEmit(this.contextCompactor, messages, contextWindow, model, lastPromptTokens, events, this.outputChannel, mode, iteration, { isSubagent });
         }
 
         // DEFENSIVE: Strip thinking from ALL history messages before sending.
-        // Per Ollama #10448 / Qwen3 docs: "No Thinking Content in History".
-        for (const msg of messages) {
-          if ('thinking' in msg) {
-            delete (msg as any).thinking;
-          }
-        }
+        history.prepareForRequest();
 
         // Build chat request — pick the mode-specific config for temperature/maxTokens
         const modeConfigMap: Record<string, 'chatMode' | 'planMode' | 'agentMode'> = {
@@ -258,62 +257,25 @@ export class AgentExploreExecutor {
           'deep-explore': 'agentMode', review: 'agentMode',
         };
         const modeConfig = getConfig()[modeConfigMap[mode] || 'agentMode'];
-
-        // Estimate payload tokens for dynamic num_ctx sizing
-        const payloadChars = messages.reduce((s: number, m: any) => s + (m.content?.length || 0), 0);
         const toolDefsForMode = useNativeTools ? this.getToolDefinitions(mode) : undefined;
-        const toolDefCharsForCtx = toolDefsForMode ? JSON.stringify(toolDefsForMode).length : 0;
-        const payloadEstTokens = Math.round((payloadChars + toolDefCharsForCtx) / 4);
-        const numCtx = computeDynamicNumCtx(payloadEstTokens, modeConfig.maxTokens, contextWindow);
 
-        const chatRequest: ChatRequest = {
-          model,
-          messages,
-          ...(agentConfig.keepAlive ? { keep_alive: agentConfig.keepAlive } : {}),
-          options: {
-            temperature: modeConfig.temperature,
-            num_predict: modeConfig.maxTokens,
-            num_ctx: numCtx,
-            stop: ['[TASK_COMPLETE]'],
-          },
-        };
-        if (useNativeTools) {
-          chatRequest.tools = toolDefsForMode;
-        }
+        const chatRequest = buildChatRequest(
+          model, messages, modeConfig, contextWindow, useNativeTools,
+          toolDefsForMode, agentConfig.keepAlive
+        );
 
         // --- Diagnostic: log request payload sizes for debugging slow models ---
-        {
-          const sysMsg = messages[0]?.role === 'system' ? messages[0].content : '';
-          const sysChars = sysMsg.length;
-          const sysEstTokens = Math.round(sysChars / 4);
-          const toolDefCount = chatRequest.tools?.length || 0;
-          const toolDefChars = chatRequest.tools ? JSON.stringify(chatRequest.tools).length : 0;
-          const toolDefEstTokens = Math.round(toolDefChars / 4);
-          const totalChars = messages.reduce((s: number, m: any) => s + (m.content?.length || 0), 0);
-          const totalEstTokens = Math.round(totalChars / 4);
-          this.outputChannel.appendLine(
-            `[${mode}][Iteration ${iteration}] Request payload: system_prompt=${sysEstTokens}tok(${sysChars}ch), ` +
-            `tool_defs=${toolDefEstTokens}tok(${toolDefChars}ch, ${toolDefCount} tools), ` +
-            `total_messages=${totalEstTokens}tok(${totalChars}ch), ` +
-            `num_ctx=${numCtx} (dynamic, model_max=${contextWindow}), num_predict=${modeConfig.maxTokens}, temp=${modeConfig.temperature}`
-          );
-          // On first iteration, dump the full system prompt so users can review it
-          if (iteration === 1) {
-            this.outputChannel.appendLine(`[${mode}][Iteration 1] === SYSTEM PROMPT START ===`);
-            this.outputChannel.appendLine(sysMsg);
-            this.outputChannel.appendLine(`[${mode}][Iteration 1] === SYSTEM PROMPT END (${sysChars} chars, ~${sysEstTokens} tokens) ===`);
-          }
-        }
+        logRequestPayload(this.outputChannel, mode, iteration, messages, chatRequest);
 
         if (iteration > 1) {
-          emit({ type: 'iterationBoundary', sessionId });
+          events.post('iterationBoundary', {});
         }
 
         phase = 'streaming response from model';
         const thinkingStartTime = Date.now();
         const streamResult = await activeStreamProcessor.streamIteration(
             chatRequest, sessionId, model, iteration, useNativeTools, token, thinkingStartTime,
-            useNativeTools ? undefined : this.toolRegistry.getToolNames()
+            this.toolRegistry.getToolNames()
           );
 
         let { response } = streamResult;
@@ -326,7 +288,7 @@ export class AgentExploreExecutor {
         if (toolParseErrors.length > 0 && useNativeTools) {
           this.outputChannel.appendLine(`[${mode}][Iteration ${iteration}] Ollama tool-parse error(s) detected — attempting recovery`);
           for (const errText of toolParseErrors) {
-            const recovered = this.recoverToolCallFromError(errText, nativeToolCalls, mode, iteration);
+            const recovered = recoverToolCallFromError(errText, nativeToolCalls, this.outputChannel, mode, iteration);
             if (recovered) {
               recoveredToolCalls.push(recovered);
             }
@@ -334,53 +296,25 @@ export class AgentExploreExecutor {
         }
 
         // Update real token counts for context compactor (used next iteration)
-        if (streamResult.promptTokens != null) {
-          lastPromptTokens = streamResult.promptTokens;
-          // Truncation detection: compare what we sent vs what the model actually processed
-          const sentChars = messages.reduce((sum, m) => sum + (m.content?.length || 0), 0);
-          const sentEstTokens = Math.round(sentChars / 4);
-          const sentMsgCount = messages.length;
-          const actualPrompt = streamResult.promptTokens;
-          const ratio = sentEstTokens > 0 ? (actualPrompt / sentEstTokens) : 1;
-          let truncationWarning = '';
-          if (ratio < 0.5 && sentEstTokens > 1000) {
-            truncationWarning = ` ⚠️ POSSIBLE TRUNCATION: sent ~${sentEstTokens} est. tokens (${sentMsgCount} msgs, ${sentChars} chars) but model only processed ${actualPrompt} prompt tokens (ratio=${ratio.toFixed(2)}). The server may be silently dropping messages!`;
-          }
-          this.outputChannel.appendLine(`[${mode}][Iteration ${iteration}] Token usage: prompt=${actualPrompt}, completion=${streamResult.completionTokens ?? '?'}, context_window=${contextWindow}, sent_est=${sentEstTokens}, sent_msgs=${sentMsgCount}, ratio=${ratio.toFixed(2)}${truncationWarning}`);
+        const tokenResult = trackPromptTokens(
+          messages, streamResult.promptTokens, streamResult.completionTokens,
+          contextWindow, this.outputChannel, mode, iteration
+        );
+        if (tokenResult.lastPromptTokens != null) {
+          lastPromptTokens = tokenResult.lastPromptTokens;
         }
 
         // Emit token usage to the webview for the live indicator
         if (!isSubagent) {
           const toolDefCount = useNativeTools ? this.getToolDefinitions(mode).length : 0;
-          const categories = estimateTokensByCategory(messages, toolDefCount, lastPromptTokens);
-          const tokenPayload = {
-            promptTokens: lastPromptTokens ?? categories.total,
-            completionTokens: streamResult.completionTokens,
-            contextWindow,
-            categories
-          };
-          emit({
-            type: 'tokenUsage',
-            sessionId,
-            ...tokenPayload
-          });
-          // Persist to DB so session history shows the last token usage state
-          await this.persistUiEvent(sessionId, 'tokenUsage', tokenPayload);
+          await emitTokenUsage(events, messages, toolDefCount, lastPromptTokens, streamResult.completionTokens, contextWindow);
         }
 
         if (token.isCancellationRequested) {
           // Persist any accumulated thinking content before breaking so it
           // survives session restore.
           if (!isSubagent) {
-            const cancelThinking = thinkingContent.replace(/\[TASK_COMPLETE\]/gi, '').trim();
-            if (cancelThinking) {
-              const thinkingEndTime = streamResult.lastThinkingTimestamp || Date.now();
-              const durationSeconds = Math.round((thinkingEndTime - thinkingStartTime) / 1000);
-              await this.persistUiEvent(sessionId, 'thinkingBlock', { content: cancelThinking, durationSeconds });
-              if (!streamResult.thinkingCollapsed) {
-                emit({ type: 'collapseThinking', sessionId, durationSeconds });
-              }
-            }
+            await persistCancellationThinking(events, thinkingContent, thinkingStartTime, streamResult.lastThinkingTimestamp, streamResult.thinkingCollapsed);
           }
           break;
         }
@@ -389,54 +323,35 @@ export class AgentExploreExecutor {
         this.outputChannel.appendLine(`\n[${mode}][Iteration ${iteration}] Response: ${response.substring(0, 300)}...`);
 
         // De-duplicate thinking echo
-        if (thinkingContent.trim() && response.trim()) {
-          const thinkTrimmed = thinkingContent.trim();
-          const respTrimmed = response.trim();
-          if (respTrimmed === thinkTrimmed || respTrimmed.startsWith(thinkTrimmed) || thinkTrimmed.startsWith(respTrimmed)) {
-            response = '';
-          }
-        }
+        response = deduplicateThinkingEcho(response, thinkingContent);
 
         // Persist thinking block (skip for sub-agents — their thinking is internal)
-        if (!isSubagent) {
-          const displayThinking = thinkingContent.replace(/\[TASK_COMPLETE\]/gi, '').trim();
-          if (displayThinking) {
-            const thinkingEndTime = streamResult.lastThinkingTimestamp || Date.now();
-            const durationSeconds = Math.round((thinkingEndTime - thinkingStartTime) / 1000);
-            await this.persistUiEvent(sessionId, 'thinkingBlock', { content: displayThinking, durationSeconds });
-            if (!streamResult.thinkingCollapsed) {
-              emit({ type: 'collapseThinking', sessionId, durationSeconds });
-            }
-
-          }
-        } else {
-          // Sub-agent thinking: emit as subagentThinking so the parent's
-          // webview can show it inside the sub-agent's progress group.
-          const displayThinking = thinkingContent.replace(/\[TASK_COMPLETE\]/gi, '').trim();
-          if (displayThinking) {
-            // Accumulate thinking so we can return it to the parent if the
-            // model never produces text output (common with thinking models).
-            if (accumulatedSubagentThinking) accumulatedSubagentThinking += '\n\n';
-            accumulatedSubagentThinking += displayThinking;
-
-            const thinkingEndTime = streamResult.lastThinkingTimestamp || Date.now();
-            const durationSeconds = Math.round((thinkingEndTime - thinkingStartTime) / 1000);
-            const thinkingPayload = { content: displayThinking, durationSeconds };
-            await this.persistUiEvent(sessionId, 'subagentThinking', thinkingPayload);
-            emit({ type: 'subagentThinking', ...thinkingPayload, sessionId });
-          }
+        const thinkResult = await persistThinkingBlock(
+          events, thinkingContent, thinkingStartTime,
+          streamResult.lastThinkingTimestamp, streamResult.thinkingCollapsed,
+          { isSubagent, accumulatedSubagentThinking }
+        );
+        if (thinkResult.accumulatedSubagentThinking !== undefined) {
+          accumulatedSubagentThinking = thinkResult.accumulatedSubagentThinking;
         }
 
-        // Process text
-        const cleanedText = useNativeTools ? response.trim() : removeToolCalls(response);
-        const iterationDelta = cleanedText.replace(/\[TASK_COMPLETE\]/gi, '').trim();
+        // Process text — ALWAYS strip tool call patterns from the response,
+        // even in native mode. Some models (e.g. Qwen2.5-Coder) output tool
+        // call JSON as text in the content field even when native tool_calls
+        // are also present. Without stripping, the raw JSON leaks into
+        // accumulatedExplanation and becomes the sub-agent output to the parent.
+        const cleanedText = removeToolCalls(response);
+        const iterationDelta = cleanedText
+          .replace(/\[TASK_COMPLETE\]/gi, '')
+          .replace(/\[END_OF_EXPLORATION\]/gi, '')
+          .trim();
 
         if (iterationDelta) {
           if (accumulatedExplanation) accumulatedExplanation += '\n\n';
           accumulatedExplanation += iterationDelta;
 
           if (!isSubagent) {
-            emit({ type: 'streamChunk', content: iterationDelta, model, sessionId });
+            events.post('streamChunk', { content: iterationDelta, model });
             if (sessionId) {
               await this.databaseService.addMessage(sessionId, 'assistant', iterationDelta, { model });
               hasPersistedIterationText = true;
@@ -444,15 +359,18 @@ export class AgentExploreExecutor {
           }
         }
 
-        // Check for completion — also check thinkingContent for thinking models
+        // Check for completion — also check thinkingContent for thinking models.
+        // ONLY accept [TASK_COMPLETE]. Do NOT accept loose variants like
+        // 'task is complete' or '[end_of_exploration]' — models use these to
+        // escape the loop after 0 tool calls.
         const completionSignal = (response + ' ' + thinkingContent).toLowerCase();
-        if (completionSignal.includes('[task_complete]') || completionSignal.includes('task is complete') || completionSignal.includes('[end_of_exploration]')) {
+        if (completionSignal.includes('[task_complete]')) {
           break;
         }
 
         // Extract tool calls
         phase = 'parsing tool calls';
-        let toolCalls = this.parseToolCalls(response, nativeToolCalls, useNativeTools);
+        let toolCalls = parseToolCalls(response, nativeToolCalls, useNativeTools, this.toolRegistry.getToolNames());
 
         // Merge in any tool calls recovered from Ollama parse errors
         if (toolCalls.length === 0 && recoveredToolCalls.length > 0) {
@@ -461,10 +379,7 @@ export class AgentExploreExecutor {
         }
 
         // Filter out any non-read-only tools that the model might try to call
-        const allowedSet = mode === 'review' ? this.getSecurityReviewToolNames()
-          : mode === 'deep-explore-write' ? ANALYZE_WRITE_TOOLS
-          : mode === 'deep-explore' ? DEEP_EXPLORE_TOOLS
-          : READ_ONLY_TOOLS;
+        const allowedSet = getToolsForMode(mode);
         let filteredToolCalls = toolCalls.filter(tc => allowedSet.has(tc.name));
 
         if (filteredToolCalls.length < toolCalls.length) {
@@ -474,19 +389,16 @@ export class AgentExploreExecutor {
 
         if (filteredToolCalls.length === 0) {
           consecutiveNoToolIterations++;
-          // NO THINKING IN HISTORY: Per Ollama issue #10448 and Qwen3 docs.
-          // Use response content or '[Reasoning completed]' marker to prevent
-          // blank-turn amnesia without re-injecting thinking content.
-          const noToolMsg: any = { role: 'assistant', content: response || (thinkingContent ? '[Reasoning completed]' : '') };
-          messages.push(noToolMsg);
+          history.addAssistantMessage(response, thinkingContent);
 
           // Smart completion detection (pure function — see agentControlPlane.ts).
-          // Explore executor doesn't track hasWrittenFiles directly — for
-          // deep-explore-write mode, an empty response is still a strong
-          // done signal, so we pass hasWrittenFiles=true to trigger
-          // break_implicit on truly empty responses in all modes.
+          // Sub-agents are read-only and never write files — passing
+          // hasWrittenFiles=true would cause break_implicit on the first
+          // empty response, killing sub-agents before they can retry.
+          // Non-sub-agent explore modes pass true so empty responses
+          // (common after completion) trigger immediate termination.
           const completionAction = checkNoToolCompletion({
-            response, thinkingContent, hasWrittenFiles: true, consecutiveNoToolIterations
+            response, thinkingContent, hasWrittenFiles: !isSubagent, consecutiveNoToolIterations
           });
 
           if (completionAction !== 'continue') {
@@ -495,10 +407,7 @@ export class AgentExploreExecutor {
           }
 
           if (iteration < maxIterations - 1) {
-            messages.push({
-              role: 'user',
-              content: 'If you are done, respond with [TASK_COMPLETE]. Otherwise, continue using tools.'
-            });
+            history.addContinuation('If you are done, respond with [TASK_COMPLETE]. Otherwise, continue using tools.');
           }
           continue;
         }
@@ -519,8 +428,7 @@ export class AgentExploreExecutor {
         const groupTitle = getProgressGroupTitle(filteredToolCalls);
         // Sub-agents: skip internal per-iteration groups — actions go into the wrapper group
         if (!isSubagent) {
-          emit({ type: 'startProgressGroup', title: groupTitle, sessionId });
-          await this.persistUiEvent(sessionId, 'startProgressGroup', { title: groupTitle });
+          await events.emit('startProgressGroup', { title: groupTitle });
         }
 
         // NO thinking field in history — see Ollama issue #10448.
@@ -529,22 +437,11 @@ export class AgentExploreExecutor {
         // keeping it in history causes the model to see its own plan and
         // restate it every iteration (see Pitfall #38).
         const toolSummary = buildToolCallSummary(filteredToolCalls);
-        const assistantContent = toolSummary || response || (thinkingContent ? '[Reasoning completed]' : '');
-        const assistantMsg: any = { role: 'assistant', content: assistantContent };
-        if (useNativeTools) assistantMsg.tool_calls = nativeToolCalls;
-        messages.push(assistantMsg);
-
-        // Persist assistant message with tool_calls metadata for multi-turn history.
-        // IMPORTANT: Persist original `response`, NOT `historyContent`.
-        // Thinking is already persisted as a separate `thinkingBlock` UI event.
-        // iterationDelta (clean text) is already persisted above.
-        if (useNativeTools && nativeToolCalls.length > 0 && sessionId) {
-          const serializedToolCalls = JSON.stringify(nativeToolCalls);
-          const persistContent = hasPersistedIterationText ? '' : (response.trim() || '');
-          await this.databaseService.addMessage(sessionId, 'assistant', persistContent, {
-            model, toolCalls: serializedToolCalls
-          });
-        }
+        await buildAndPersistAssistantToolMessage(
+          filteredToolCalls, nativeToolCalls, response, thinkingContent,
+          useNativeTools, messages, sessionId, this.databaseService,
+          hasPersistedIterationText, model, toolSummary
+        );
 
         const context = {
           workspace: primaryWorkspace,
@@ -574,7 +471,7 @@ export class AgentExploreExecutor {
         // Show all local tools as "running" at once
         for (const { idx } of localCalls) {
           const { actionText, actionDetail, actionIcon } = toolMeta[idx];
-          emit({ type: 'showToolAction', status: 'running', icon: actionIcon, text: actionText, detail: actionDetail, sessionId });
+          events.post('showToolAction', { status: 'running', icon: actionIcon, text: actionText, detail: actionDetail });
         }
 
         // Helper: execute one tool and emit its result UI
@@ -599,14 +496,13 @@ export class AgentExploreExecutor {
             };
             // Sub-agent creates its own wrapper progress group — skip redundant success action
             if (toolCall.name !== 'run_subagent') {
-              emit({ type: 'showToolAction', ...successPayload, sessionId });
+              events.post('showToolAction', successPayload);
             }
-            await this.persistUiEvent(sessionId, 'showToolAction', successPayload);
+            await events.persist('showToolAction', successPayload);
             return { toolCall, idx, output, error: undefined as string | undefined };
           } catch (error: any) {
             const errorPayload = { status: 'error' as const, icon: actionIcon, text: actionText, detail: error.message };
-            emit({ type: 'showToolAction', ...errorPayload, sessionId });
-            await this.persistUiEvent(sessionId, 'showToolAction', errorPayload);
+            await events.emit('showToolAction', errorPayload);
             return { toolCall, idx, output: '', error: error.message as string | undefined };
           }
         };
@@ -623,7 +519,7 @@ export class AgentExploreExecutor {
           const { actionText, actionDetail, actionIcon } = toolMeta[idx];
           // Sub-agent creates its own wrapper progress group — skip redundant running action
           if (toolCall.name !== 'run_subagent') {
-            emit({ type: 'showToolAction', status: 'running', icon: actionIcon, text: actionText, detail: actionDetail, sessionId });
+            events.post('showToolAction', { status: 'running', icon: actionIcon, text: actionText, detail: actionDetail });
           }
           seqResults.push(await executeSingle(toolCall, idx));
         }
@@ -656,49 +552,44 @@ export class AgentExploreExecutor {
 
         // Sub-agents: skip internal per-iteration group close
         if (!isSubagent) {
-          emit({ type: 'finishProgressGroup', sessionId });
-          await this.persistUiEvent(sessionId, 'finishProgressGroup', {});
+          await events.emit('finishProgressGroup', {});
         }
 
         // Feed results back. NO task reminder — the full task is in messages[1].
         // Adding a truncated preview caused models to fixate on the incomplete
         // snippet instead of referencing the original user message.
         if (useNativeTools) {
-          messages.push(...toolResults);
-
-          messages.push({
-            role: 'user',
-            content: `Proceed with tool calls or [TASK_COMPLETE].`
-          });
+          history.addNativeToolResults(toolResults);
+          history.addContinuation('Proceed with tool calls or [TASK_COMPLETE].');
         } else if (xmlResults.length > 0) {
-          messages.push({
-            role: 'user',
-            content: xmlResults.join('\n\n') + `\n\nProceed with tool calls or [TASK_COMPLETE].`
-          });
+          history.addXmlToolResults(xmlResults, 'Proceed with tool calls or [TASK_COMPLETE].');
         }
       } catch (error: any) {
-        const errMsg = error.message || String(error);
-        const errorClass = error.name && error.name !== 'Error' ? `[${error.name}] ` : '';
-        const statusInfo = error.statusCode ? ` (HTTP ${error.statusCode})` : '';
-        this.outputChannel.appendLine(`[AgentExploreExecutor] Fatal error at iteration ${iteration}/${maxIterations} (phase: ${phase}): ${errorClass}${errMsg}${statusInfo}`);
-        const displayError = `${errorClass}${errMsg}${statusInfo}\n_(model: ${model}, mode: ${mode}, phase: ${phase}, iteration ${iteration}/${maxIterations})_`;
-        await this.persistUiEvent(sessionId, 'showError', { message: displayError });
-        emit({ type: 'showError', message: displayError, sessionId });
+        await buildAndEmitFatalError(
+          events, error, model, `${mode}: ${phase}`, iteration, maxIterations,
+          this.outputChannel, 'AgentExploreExecutor', messages
+        );
         break;
       }
     }
 
     // Close sub-agent wrapper group
     if (isSubagent) {
-      await this.persistUiEvent(sessionId, 'finishProgressGroup', {});
-      this.emitter.postMessage({ type: 'finishProgressGroup', sessionId });
+      await events.emit('finishProgressGroup', {});
     }
 
     // Build final result — for sub-agents, fall back to thinking content
     // (thinking models put analysis in thinking field, not response) and
     // then to a tool results summary so the parent gets useful data.
     let summary: string;
-    if (accumulatedExplanation) {
+    if (isSubagent && accumulatedExplanation) {
+      // Sub-agents: narration alone is usually vague ("I will read...").
+      // Append tool results summary so the parent gets actionable data.
+      const toolSummary = buildToolResultsSummary(messages);
+      summary = (toolSummary && toolSummary !== 'Exploration completed.')
+        ? accumulatedExplanation + '\n\n' + toolSummary
+        : accumulatedExplanation;
+    } else if (accumulatedExplanation) {
       summary = accumulatedExplanation;
     } else if (isSubagent && accumulatedSubagentThinking) {
       // Thinking models: analysis is in thinking field. Cap at 4K chars
@@ -709,7 +600,7 @@ export class AgentExploreExecutor {
         : accumulatedSubagentThinking;
     } else if (isSubagent) {
       // No text and no thinking — build summary from tool results
-      summary = this.buildToolResultsSummary(messages);
+      summary = buildToolResultsSummary(messages);
     } else {
       summary = 'Exploration completed.';
     }
@@ -745,20 +636,20 @@ export class AgentExploreExecutor {
       // shown in the webview via streamChunk — sending it again in
       // finalMessage would duplicate the text (handleFinalMessage appends).
       if (!hasPersistedIterationText) {
-        const finalContent = summary.replace(/\[TASK_COMPLETE\]/gi, '').trim();
+        const finalContent = summary.replace(/\[TASK_COMPLETE\]/gi, '').replace(/\[END_OF_EXPLORATION\]/gi, '').trim();
         if (finalContent) {
-          emit({ type: 'finalMessage', content: finalContent, model, sessionId });
+          events.post('finalMessage', { content: finalContent, model });
         }
       } else {
         // Text already streamed — just signal generation end via empty finalMessage.
         // This resets currentStreamIndex in the webview so the next user
         // message starts a fresh assistant thread (Critical Rule #3).
-        emit({ type: 'finalMessage', content: '', model, sessionId });
+        events.post('finalMessage', { content: '', model });
       }
-      emit({ type: 'hideThinking', sessionId });
+      events.post('hideThinking', {});
     }
 
-    const cleanedSummary = summary.replace(/\[TASK_COMPLETE\]/gi, '').trim();
+    const cleanedSummary = summary.replace(/\[TASK_COMPLETE\]/gi, '').replace(/\[END_OF_EXPLORATION\]/gi, '').trim();
     return { summary: cleanedSummary, assistantMessage };
   }
 
@@ -795,44 +686,17 @@ export class AgentExploreExecutor {
     // thinking, finalMessage, iterationBoundary, and DB assistant message persistence.
     // The title is used to prefix sub-agent progress groups in the UI.
     // contextHint is injected into the system prompt for focused exploration.
-    const result = await this.execute(task, config, token, sessionId, model, mode, capabilities, undefined, /* isSubagent */ true, primaryWorkspaceHint, title, contextHint, description);
+    const result = await this.execute({
+      task, config, token, sessionId, model, mode, capabilities,
+      isSubagent: true, primaryWorkspaceHint,
+      subagentTitle: title, subagentContextHint: contextHint, subagentDescription: description
+    });
     return result.summary || 'Sub-agent completed with no findings.';
   }
 
   // -------------------------------------------------------------------------
   // Private helpers
   // -------------------------------------------------------------------------
-
-  /**
-   * Build a brief summary from tool results in the conversation messages.
-   * Used as a last resort when the sub-agent produces no text or thinking
-   * output (e.g., non-thinking models that output only tool calls).
-   */
-  private buildToolResultsSummary(messages: any[]): string {
-    const toolEntries: string[] = [];
-    for (const m of messages) {
-      if (m.role !== 'tool' || !m.tool_name || m.tool_name === '__ui__') continue;
-      const content = (m.content || '').trim();
-      if (!content) continue;
-
-      const name = m.tool_name;
-      // Extract a one-line summary from the tool output
-      const firstLine = content.split('\n')[0].substring(0, 120);
-      toolEntries.push(`- ${name}: ${firstLine}`);
-
-      // Include the full output for read_file (truncated) since it's the
-      // most valuable for the parent agent
-      if (name === 'read_file' && content.length > 150) {
-        toolEntries[toolEntries.length - 1] += ` (${content.length} chars)`;
-      }
-    }
-    if (toolEntries.length === 0) return 'Exploration completed.';
-    // Cap at 3K chars to keep parent context manageable
-    const joined = `Tool results summary:\n${toolEntries.join('\n')}`;
-    return joined.length > 3000
-      ? joined.substring(0, 3000) + '\n[Summary truncated]'
-      : joined;
-  }
 
   private buildSystemPrompt(
     mode: ExploreMode,
@@ -875,81 +739,4 @@ export class AgentExploreExecutor {
     return this.promptBuilder.getReadOnlyToolDefinitions();
   }
 
-  private getSecurityReviewToolNames(): Set<string> {
-    return new Set([...READ_ONLY_TOOLS, 'run_terminal_command']);
-  }
-
-  /**
-   * Recover a tool call from an Ollama tool-parse error message.
-   * See agentChatExecutor.recoverToolCallFromError for full docs.
-   */
-  private recoverToolCallFromError(
-    errText: string,
-    nativeToolCalls: Array<{ function?: { name?: string; arguments?: any } }>,
-    mode: string,
-    iteration: number
-  ): { name: string; args: any } | null {
-    const rawMatch = errText.match(/raw='(\{[\s\S]*?\})'/) || errText.match(/raw='(\{[\s\S]*?)' *err=/) || errText.match(/raw='(\{[\s\S]*\})/);
-    if (!rawMatch) {
-      this.outputChannel.appendLine(`[${mode}][Iteration ${iteration}] Recovery: no raw JSON found in error text`);
-      return null;
-    }
-    const fixed = rawMatch[1].replace(/[\u201C\u201D\u201E\u201F\u2018\u2019\u201A\u201B\uFF02\u00AB\u00BB\u2039\u203A\u300C\u300D\u300E\u300F\uFE41\uFE42\uFE43\uFE44]/g, '"');
-    try {
-      const parsed = JSON.parse(fixed);
-      let name = parsed?.name || parsed?.function?.name;
-      let args = parsed?.arguments || parsed?.function?.arguments;
-      if (!name) {
-        args = parsed;
-        const lastPartial = nativeToolCalls[nativeToolCalls.length - 1];
-        name = lastPartial?.function?.name;
-      }
-      if (!name && args) {
-        if ('query' in args && !('symbolName' in args)) name = 'search_workspace';
-        else if ('path' in args && 'content' in args) name = 'write_file';
-        else if ('command' in args) name = 'run_terminal_command';
-        else if ('symbolName' in args && 'path' in args) name = 'find_definition';
-        else if ('path' in args) name = 'read_file';
-      }
-      if (name && args) {
-        this.outputChannel.appendLine(`[${mode}][Iteration ${iteration}] Recovered tool call: ${name}(${JSON.stringify(args)})`);
-        return { name, args };
-      }
-      this.outputChannel.appendLine(`[${mode}][Iteration ${iteration}] Recovery: could not determine tool name`);
-      return null;
-    } catch (e) {
-      this.outputChannel.appendLine(`[${mode}][Iteration ${iteration}] Recovery JSON parse failed: ${e}`);
-      return null;
-    }
-  }
-
-  private parseToolCalls(
-    response: string,
-    nativeToolCalls: Array<{ function?: { name?: string; arguments?: any } }>,
-    useNativeTools: boolean
-  ): Array<{ name: string; args: any }> {
-    if (useNativeTools && nativeToolCalls.length > 0) {
-      return nativeToolCalls.map(tc => ({
-        name: tc.function?.name || '',
-        args: tc.function?.arguments || {}
-      }));
-    }
-    return extractToolCalls(response);
-  }
-
-  private async persistUiEvent(
-    sessionId: string | undefined,
-    eventType: string,
-    payload: Record<string, any>
-  ): Promise<void> {
-    if (!sessionId) return;
-    try {
-      await this.databaseService.addMessage(sessionId, 'tool', '', {
-        toolName: '__ui__',
-        toolOutput: JSON.stringify({ eventType, payload })
-      });
-    } catch (error) {
-      console.warn('[persistUiEvent] Failed to persist UI event:', error);
-    }
-  }
 }

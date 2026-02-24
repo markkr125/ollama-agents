@@ -3,14 +3,15 @@ import * as fs from 'fs/promises';
 import * as os from 'os';
 import * as path from 'path';
 import * as vscode from 'vscode';
+import { AgentEventEmitter } from '../../../../src/agent/execution/agentEventEmitter';
 import { AgentFileEditHandler } from '../../../../src/agent/execution/approval/agentFileEditHandler';
 import { WebviewMessageEmitter } from '../../../../src/views/chatTypes';
 
 /**
  * Integration tests for AgentFileEditHandler.
  *
- * These tests verify the EXACT sequence of postMessage and persistUiEvent
- * calls emitted during file write operations. The primary regression they
+ * These tests verify the EXACT sequence of events emitted during file write
+ * operations via the unified AgentEventEmitter. The primary regression they
  * catch is the "duplicate action lines" bug — where multiple
  * showToolAction(running) events were emitted for the same file write.
  *
@@ -39,12 +40,26 @@ function createStubEmitter(): { emitter: WebviewMessageEmitter; messages: Captur
   };
 }
 
-function createStubPersist(): { persist: any; calls: CapturedPersistCall[] } {
-  const calls: CapturedPersistCall[] = [];
-  const persist = async (sessionId: string | undefined, eventType: string, payload: Record<string, any>) => {
-    calls.push({ sessionId, eventType, payload });
+/**
+ * Create a stub DatabaseService that captures `__ui__` persist calls.
+ */
+function stubDatabaseService(sessionOverrides: Record<string, any> = {}): any {
+  const persistCalls: CapturedPersistCall[] = [];
+  return {
+    getSession: async () => ({
+      auto_approve_sensitive_edits: false,
+      sensitive_file_patterns: null,
+      ...sessionOverrides
+    }),
+    addMessage: async (_sessionId: string, _role: string, _content: string, opts?: any) => {
+      if (opts?.toolName === '__ui__') {
+        const parsed = JSON.parse(opts.toolOutput);
+        persistCalls.push({ sessionId: _sessionId, eventType: parsed.eventType, payload: parsed.payload });
+      }
+    },
+    persistUiEvent: async () => {},
+    _persistCalls: persistCalls
   };
-  return { persist, calls };
 }
 
 function stubToolRegistry(writeOutput = 'File written successfully'): any {
@@ -55,18 +70,6 @@ function stubToolRegistry(writeOutput = 'File written successfully'): any {
       output: writeOutput,
       timestamp: Date.now()
     })
-  };
-}
-
-function stubDatabaseService(sessionOverrides: Record<string, any> = {}): any {
-  return {
-    getSession: async () => ({
-      auto_approve_sensitive_edits: false,
-      sensitive_file_patterns: null,
-      ...sessionOverrides
-    }),
-    addMessage: async () => {},
-    persistUiEvent: async () => {}
   };
 }
 
@@ -118,6 +121,43 @@ function makeContext(workspacePath: string): any {
   };
 }
 
+/**
+ * Create a handler + emitter setup for testing. Returns the handler
+ * pre-bound to an AgentEventEmitter, plus the captured messages
+ * (posted to webview) and persist calls (stored to DB).
+ */
+function createTestHandler(options: {
+  toolRegistry?: any;
+  databaseService?: any;
+  editManager?: any;
+  approvalManager?: any;
+  outputChannel?: any;
+  client?: any;
+  sessionId?: string;
+} = {}): {
+  handler: AgentFileEditHandler;
+  messages: CapturedMessage[];
+  calls: CapturedPersistCall[];
+} {
+  const dbService = options.databaseService || stubDatabaseService();
+  const { emitter, messages } = createStubEmitter();
+  const handler = new AgentFileEditHandler(
+    options.toolRegistry || stubToolRegistry(),
+    dbService,
+    options.editManager || stubEditManager(),
+    options.approvalManager || stubApprovalManager(),
+    options.outputChannel || stubOutputChannel(),
+    options.client || stubOllamaClient()
+  );
+  const events = new AgentEventEmitter(
+    options.sessionId || 'session-1',
+    dbService,
+    emitter
+  );
+  handler.bindEmitter(events);
+  return { handler, messages, calls: dbService._persistCalls };
+}
+
 suite('AgentFileEditHandler', () => {
   let tempDir: string;
 
@@ -134,19 +174,7 @@ suite('AgentFileEditHandler', () => {
   suite('single running action emission (no duplicates)', () => {
 
     test('new file: emits exactly ONE showToolAction(running) with "Creating" verb', async () => {
-      const { emitter, messages } = createStubEmitter();
-      const { persist, calls } = createStubPersist();
-
-      const handler = new AgentFileEditHandler(
-        stubToolRegistry(),
-        stubDatabaseService(),
-        stubEditManager(),
-        emitter,
-        stubApprovalManager(),
-        persist,
-        stubOutputChannel(),
-        stubOllamaClient()
-      );
+      const { handler, messages, calls } = createTestHandler();
 
       const args = { path: 'src/brand-new.ts', content: 'export const x = 1;' };
       const context = makeContext(tempDir);
@@ -181,24 +209,12 @@ suite('AgentFileEditHandler', () => {
     });
 
     test('existing file: emits exactly ONE showToolAction(running) with "Editing" verb', async () => {
-      const { emitter, messages } = createStubEmitter();
-      const { persist, calls: _calls } = createStubPersist();
-
       // Create existing file first
       const filePath = path.join(tempDir, 'src');
       await fs.mkdir(filePath, { recursive: true });
       await fs.writeFile(path.join(filePath, 'existing.ts'), 'export const old = true;');
 
-      const handler = new AgentFileEditHandler(
-        stubToolRegistry(),
-        stubDatabaseService(),
-        stubEditManager(),
-        emitter,
-        stubApprovalManager(),
-        persist,
-        stubOutputChannel(),
-        stubOllamaClient()
-      );
+      const { handler, messages } = createTestHandler();
 
       const args = { path: 'src/existing.ts', content: 'export const updated = true;' };
       const context = makeContext(tempDir);
@@ -221,19 +237,9 @@ suite('AgentFileEditHandler', () => {
     });
 
     test('sensitive file with auto-approve: still only ONE showToolAction(running)', async () => {
-      const { emitter, messages } = createStubEmitter();
-      const { persist, calls: _calls2 } = createStubPersist();
-
-      const handler = new AgentFileEditHandler(
-        stubToolRegistry(),
-        stubDatabaseService({ auto_approve_sensitive_edits: true }),
-        stubEditManager(),
-        emitter,
-        stubApprovalManager(),
-        persist,
-        stubOutputChannel(),
-        stubOllamaClient()
-      );
+      const { handler, messages } = createTestHandler({
+        databaseService: stubDatabaseService({ auto_approve_sensitive_edits: true })
+      });
 
       // .env files are sensitive by default patterns
       const args = { path: '.env.local', content: 'SECRET=abc' };
@@ -253,19 +259,9 @@ suite('AgentFileEditHandler', () => {
     });
 
     test('sensitive file with manual approve: only ONE running + ONE pending, no extra running', async () => {
-      const { emitter, messages } = createStubEmitter();
-      const { persist, calls: _calls3 } = createStubPersist();
-
-      const handler = new AgentFileEditHandler(
-        stubToolRegistry(),
-        stubDatabaseService({ auto_approve_sensitive_edits: false }),
-        stubEditManager(),
-        emitter,
-        stubApprovalManager(), // auto-approves for the test
-        persist,
-        stubOutputChannel(),
-        stubOllamaClient()
-      );
+      const { handler, messages } = createTestHandler({
+        databaseService: stubDatabaseService({ auto_approve_sensitive_edits: false })
+      });
 
       const args = { path: '.env.local', content: 'SECRET=abc' };
       const context = makeContext(tempDir);
@@ -294,19 +290,7 @@ suite('AgentFileEditHandler', () => {
   suite('_isNew flag on args', () => {
 
     test('sets _isNew=true for non-existent file', async () => {
-      const { emitter } = createStubEmitter();
-      const { persist } = createStubPersist();
-
-      const handler = new AgentFileEditHandler(
-        stubToolRegistry(),
-        stubDatabaseService(),
-        stubEditManager(),
-        emitter,
-        stubApprovalManager(),
-        persist,
-        stubOutputChannel(),
-        stubOllamaClient()
-      );
+      const { handler } = createTestHandler();
 
       const args: any = { path: 'brand-new.ts', content: 'new file' };
       await handler.execute(
@@ -319,21 +303,9 @@ suite('AgentFileEditHandler', () => {
     });
 
     test('sets _isNew=false for existing file', async () => {
-      const { emitter } = createStubEmitter();
-      const { persist } = createStubPersist();
-
       await fs.writeFile(path.join(tempDir, 'exists.ts'), 'content');
 
-      const handler = new AgentFileEditHandler(
-        stubToolRegistry(),
-        stubDatabaseService(),
-        stubEditManager(),
-        emitter,
-        stubApprovalManager(),
-        persist,
-        stubOutputChannel(),
-        stubOllamaClient()
-      );
+      const { handler } = createTestHandler();
 
       const args: any = { path: 'exists.ts', content: 'updated' };
       await handler.execute(
@@ -351,19 +323,7 @@ suite('AgentFileEditHandler', () => {
   suite('postMessage and persistUiEvent parity', () => {
 
     test('every postMessage has a matching persistUiEvent in same order', async () => {
-      const { emitter, messages } = createStubEmitter();
-      const { persist, calls } = createStubPersist();
-
-      const handler = new AgentFileEditHandler(
-        stubToolRegistry(),
-        stubDatabaseService(),
-        stubEditManager(),
-        emitter,
-        stubApprovalManager(),
-        persist,
-        stubOutputChannel(),
-        stubOllamaClient()
-      );
+      const { handler, messages, calls } = createTestHandler();
 
       const args = { path: 'test.ts', content: 'hello' };
       await handler.execute(
@@ -386,19 +346,9 @@ suite('AgentFileEditHandler', () => {
     });
 
     test('sensitive file with approval: persist calls match postMessage calls for all event types', async () => {
-      const { emitter, messages } = createStubEmitter();
-      const { persist, calls } = createStubPersist();
-
-      const handler = new AgentFileEditHandler(
-        stubToolRegistry(),
-        stubDatabaseService({ auto_approve_sensitive_edits: false }),
-        stubEditManager(),
-        emitter,
-        stubApprovalManager(),
-        persist,
-        stubOutputChannel(),
-        stubOllamaClient()
-      );
+      const { handler, messages, calls } = createTestHandler({
+        databaseService: stubDatabaseService({ auto_approve_sensitive_edits: false })
+      });
 
       const args = { path: '.env.local', content: 'SECRET=abc' };
       await handler.execute(
@@ -427,9 +377,6 @@ suite('AgentFileEditHandler', () => {
   suite('deferred content generation', () => {
 
     test('uses description to generate content when content is missing', async () => {
-      const { emitter } = createStubEmitter();
-      const { persist } = createStubPersist();
-
       let executedArgs: any = null;
       const registry = {
         execute: async (_name: string, args: any, _context: any) => {
@@ -438,16 +385,7 @@ suite('AgentFileEditHandler', () => {
         }
       };
 
-      const handler = new AgentFileEditHandler(
-        registry as any,
-        stubDatabaseService(),
-        stubEditManager(),
-        emitter,
-        stubApprovalManager(),
-        persist,
-        stubOutputChannel(),
-        stubOllamaClient()
-      );
+      const { handler } = createTestHandler({ toolRegistry: registry });
 
       const args: any = { path: 'gen.ts', description: 'A utility module for string formatting' };
       // Note: no `content` field
@@ -464,9 +402,6 @@ suite('AgentFileEditHandler', () => {
     });
 
     test('uses provided content directly when content exists', async () => {
-      const { emitter } = createStubEmitter();
-      const { persist } = createStubPersist();
-
       let executedArgs: any = null;
       const registry = {
         execute: async (_name: string, args: any, _context: any) => {
@@ -475,16 +410,7 @@ suite('AgentFileEditHandler', () => {
         }
       };
 
-      const handler = new AgentFileEditHandler(
-        registry as any,
-        stubDatabaseService(),
-        stubEditManager(),
-        emitter,
-        stubApprovalManager(),
-        persist,
-        stubOutputChannel(),
-        stubOllamaClient()
-      );
+      const { handler } = createTestHandler({ toolRegistry: registry });
 
       const args: any = { path: 'direct.ts', content: 'const x = 42;', description: 'a number' };
       await handler.execute(

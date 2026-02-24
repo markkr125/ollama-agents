@@ -167,11 +167,12 @@ export function isCompletionSignaled(response: string, thinkingContent?: string)
   const completionSignal = `${response} ${thinkingContent || ''}`;
   const declaredState = parseControlState(completionSignal);
   const lower = completionSignal.toLowerCase();
+  // ONLY accept the canonical [TASK_COMPLETE] signal.
+  // Do NOT accept loose variants like 'task is complete' or '[end_of_exploration]'
+  // — models use these to escape the loop after 0 tool calls.
   return (
     declaredState === 'complete' ||
-    lower.includes('[task_complete]') ||
-    lower.includes('task is complete') ||
-    lower.includes('[end_of_exploration]')
+    lower.includes('[task_complete]')
   );
 }
 
@@ -281,21 +282,21 @@ export function buildToolCallSummary(
       case 'get_diagnostics':
         return `checked diagnostics${a.path ? ` for ${shortPath(a.path)}` : ''}`;
       case 'get_document_symbols':
-        return `got symbols in ${shortPath(a.path || a.file)}`;
+        return `checked symbols for ${shortPath(a.path || a.file)}`;
       case 'find_definition':
-        return `found definition of ${a.symbol || a.name || '?'}`;
+        return `looked up definition of ${a.symbol || a.name || '?'}`;
       case 'find_references':
-        return `found references to ${a.symbol || a.name || '?'}`;
+        return `looked up references to ${a.symbol || a.name || '?'}`;
       case 'find_symbol':
         return `searched symbols for "${truncate(a.query || a.name, 40)}"`;
       case 'get_hover_info':
-        return `got hover info for ${a.symbol || a.name || '?'}`;
+        return `checked hover info for ${a.symbol || a.name || '?'}`;
       case 'get_call_hierarchy':
-        return `got call hierarchy for ${a.symbol || a.name || '?'}`;
+        return `checked call hierarchy for ${a.symbol || a.name || '?'}`;
       case 'find_implementations':
-        return `found implementations of ${a.symbol || a.name || '?'}`;
+        return `looked up implementations of ${a.symbol || a.name || '?'}`;
       case 'get_type_hierarchy':
-        return `got type hierarchy for ${a.symbol || a.name || '?'}`;
+        return `checked type hierarchy for ${a.symbol || a.name || '?'}`;
       case 'run_subagent':
         return `delegated a sub-task`;
       default:

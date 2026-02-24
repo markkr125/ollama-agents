@@ -13,6 +13,10 @@ The agent execution logic lives in `src/agent/execution/` and follows a **strict
 
 ```
 src/agent/execution/
+├── agentEventEmitter.ts            # Unified emit-and-persist (guarantees postMessage↔persistUiEvent pairing). Exports SUB_AGENT_ALLOWED_TYPES
+├── agentLoopHelpers.ts             # Shared utility functions for both executors (avoids duplication)
+├── conversationHistory.ts          # Typed messages[] wrapper — addAssistantToolMessage(), Ollama protocol enforcement
+├── toolSets.ts                     # Centralised tool set definitions + getToolsForMode() resolver
 ├── titleGenerator.ts              # Fire-and-forget LLM session title generation with timeout
 ├── streamingFileWriter.ts          # Streaming file write helper
 ├── orchestration/                  # Core loop + intent routing
@@ -28,7 +32,7 @@ src/agent/execution/
 │   ├── agentPromptBuilder.ts          # Modular system prompt assembly (native + XML + mode-specific)
 │   └── projectContext.ts              # Auto-discovers project files + git context at session start
 ├── toolExecution/                  # Tool batch execution + lifecycle
-│   ├── agentToolRunner.ts             # Tool batch execution — routing, UI events, diff stats, contextual reminders
+│   ├── agentToolRunner.ts             # Tool batch execution via ToolBatchRequest — routing, UI events, diff stats, contextual reminders
 │   ├── agentSummaryBuilder.ts          # Post-loop — summary generation, final message, filesChanged, scratch cleanup
 │   └── checkpointManager.ts           # Checkpoints — snapshotting, keep/undo, diff computation
 └── approval/                       # Approval flow + safety
@@ -51,7 +55,9 @@ src/agent/execution/
 | Change file edit sensitivity/approval/diff preview | `agentFileEditHandler.ts` | `agentToolRunner.ts` |
 | Change checkpoint snapshotting, keep/undo, diff computation | `checkpointManager.ts` | `agentChatExecutor.ts` |
 | Change approval promise lifecycle (wait/resolve) | `approvalManager.ts` | handler files |
-| Change loop flow, iteration logic, conversation history | `agentChatExecutor.ts` | sub-handler files |
+| Change loop flow, iteration logic | `agentChatExecutor.ts` | sub-handler files |
+| Change conversation history protocol, message types | `conversationHistory.ts` | executor files |
+| Change tool set composition (which tools each mode gets) | `toolSets.ts` | `agentPromptBuilder.ts` or executor files |
 | Change system prompt wording, sections, mode prompts | `agentPromptBuilder.ts` | `agentChatExecutor.ts` |
 | Change conversation compaction/summarization | `agentContextCompactor.ts` | `agentChatExecutor.ts` |
 | Change session memory tracking | `agentSessionMemory.ts` | `agentChatExecutor.ts` |
@@ -63,11 +69,13 @@ src/agent/execution/
 **This class MUST stay thin.** It owns:
 - Constructor wiring of sub-handlers
 - The main `execute()` while-loop (iteration orchestration)
-- `persistUiEvent()` — the shared persist-to-DB helper
+- `AgentEventEmitter` instance — unified emit-and-persist (replaces raw `persistUiEvent()`)
 - `persistGitBranchAction()` — git branch UI event sequence
 - Session memory injection into system prompt
 - `parseToolCalls()` — native vs XML extraction dispatch
 - `logIterationResponse()` — debug output channel logging
+- `prepareIteration()` — per-iteration housekeeping (compaction, stale notes, external file detection, IDE focus tracking)
+- `feedToolResultsToHistory()` — feeds tool results back into conversation history (native or XML mode)
 - Pass-through delegates to `checkpointManager` and `approvalManager`
 - `buildContinuationMessage()` — **REMOVED** — replaced by `agentControlPlane.buildLoopContinuationMessage()` (see Conversation History Protocol below)
 - Post-task verification gate — diagnostics check on modified files before accepting `[TASK_COMPLETE]`
@@ -81,7 +89,7 @@ src/agent/execution/
 The orchestrator (agent mode executor) is restricted to **only 3 tools**: `write_file`, `run_terminal_command`, and `run_subagent`. All other tools (read_file, search_workspace, LSP tools, etc.) are filtered out and only available to sub-agents via the explore executor.
 
 **Implementation:**
-- `AgentPromptBuilder` has a static `ORCHESTRATOR_TOOLS` set: `{'write_file', 'run_terminal_command', 'run_subagent'}`
+- `ORCHESTRATOR_TOOLS` is defined in `toolSets.ts`: `{'write_file', 'run_terminal_command', 'run_subagent'}`
 - `getOrchestratorToolDefinitions()` filters `getOllamaToolDefinitions()` by this set → used for native tool mode
 - `buildOrchestratorToolDefinitions_XML()` filters tool descriptions → used for XML fallback mode
 - `agentChatExecutor.ts` uses `getOrchestratorToolDefinitions()` for both the chat request `tools[]` array and token estimation
@@ -116,7 +124,7 @@ After tool calls are parsed each iteration, the executor deduplicates them:
 
 #### Conversation History Protocol
 
-The executor follows strict Ollama API conventions to prevent models from repeating actions and losing context. This was redesigned to eliminate 7 sources of redundancy (see Pitfall #37).
+The executor follows strict Ollama API conventions to prevent models from repeating actions and losing context.
 
 ##### Native Tool Calling Mode (`useNativeTools = true`)
 
@@ -218,8 +226,8 @@ Handles explore, plan, review, deep-explore, and chat modes. Key differences fro
 - **Tool filtering** — blocks any non-read-only tools the model attempts to call
 - **Per-mode iteration caps** — `{ review: 15, 'deep-explore': 20, plan: 10, chat: 10, explore: 10 }` (vs 25 for agent mode)
 - **Mode-specific prompts** via `AgentPromptBuilder.buildExplorePrompt()` / `buildPlanPrompt()` / `buildSecurityReviewPrompt()` / `buildDeepExplorePrompt()` / `buildChatPrompt()`
-- Review mode additionally allows `run_terminal_command` (restricted to git read commands in the prompt)
-- Deep-explore mode additionally allows `run_subagent` (13 tools total: 12 read-only + run_subagent)
+- Review mode additionally allows `run_terminal_command` (see `SECURITY_REVIEW_TOOLS` in `toolSets.ts`)
+- Deep-explore mode additionally allows `run_subagent` (see `DEEP_EXPLORE_TOOLS` in `toolSets.ts`)
 
 **It does NOT own** streaming, tool execution, diff stats, summary generation, terminal safety, or file sensitivity. Those are in the sub-handlers.
 
@@ -253,9 +261,11 @@ When `execute()` is called with `isSubagent=true` (via `executeSubagent()`), the
 - `tokenUsage` — Would overwrite the parent's token usage indicator with the sub-agent's counts.
 - `iterationBoundary` — Would corrupt the parent's `blockBaseContent` tracking for multi-iteration streaming.
 
-**Sub-agent text return:** The sub-agent's accumulated text is returned as a string to the `run_subagent` tool, which passes it back to the parent agent as a tool result. The parent can then act on the findings.
+**Sub-agent text return:** The sub-agent's accumulated text is returned as a string to the `run_subagent` tool, which passes it back to the parent agent as a tool result. The parent can then act on the findings. When the sub-agent produces narration text (e.g. "I will read the file..."), the explore executor **appends** `buildToolResultsSummary()` output so the parent gets actionable tool data alongside the narration — not just vague planning text.
 
-**Prompt enforcement:** `buildExplorePrompt()` tells the sub-agent it is read-only and its output goes to the calling agent (not the user). `toolUsagePolicy()` tells the parent agent that sub-agent results are returned only to it and the user doesn't see them — the parent must act on the findings itself.
+**Sub-agent completion detection:** The explore executor passes `hasWrittenFiles: false` for sub-agents in `checkNoToolCompletion()`. This prevents `break_implicit` from killing sub-agents on the first empty response — sub-agents are read-only and never write files, so the "done because files were written" heuristic doesn't apply. Without this, small models that produce near-empty responses get terminated prematurely instead of getting a retry chance.
+
+**Prompt enforcement:** `buildExplorePrompt()` tells the sub-agent it is read-only and its output goes to the calling agent (not the user). `toolUsagePolicy()` tells the parent agent that sub-agent results are returned only to it and the user doesn't see them — the parent must act on the findings itself. The orchestrator delegation strategy also instructs the model to **forward exact file paths** from user context to sub-agents, preventing wasted discovery iterations.
 
 #### Sub-Agent UI Rendering
 
@@ -367,7 +377,7 @@ Called once after the while-loop exits. Handles:
 - Final assistant message persistence to DB
 - `finalMessage` emission to webview
 - `filesChanged` final emission with checkpoint
-- Has its own `persistUiEvent` (does not share the executor's instance)
+- Has its own `AgentEventEmitter` instance (does not share the executor's instance)
 
 ### `AgentSessionMemory` — Structured Notes Across Iterations
 
@@ -420,34 +430,22 @@ Builds the system prompt from modular sections. Key design principle: **for nati
 
 **Orchestrator prompt architecture**: The orchestrator (agent mode) prompt explicitly excludes `projectContextBlock` — project context auto-discovery is deferred to sub-agents via their explore/review prompts. This keeps the orchestrator prompt slim and focused on delegation.
 
-**Native tool prompt sections** (`buildOrchestratorNativePrompt()`):
-- `identity()`, `workspaceInfo()`, `toneAndStyle()`, `doingTasksOrchestrator()`, `orchestratorDelegationStrategy()`, `orchestratorToolPolicy()`, `executingWithCare()`, `userProvidedContext()`, `scratchpadDirectory()`, `completionSignal()`
-- Does NOT include `projectContextBlock`, `codeNavigationStrategy()`, or `searchTips()` — these are for sub-agents
-- `doingTasksOrchestrator()` focuses on delegation (no references to read_file/search_workspace), unlike `doingTasks()` which includes "Read before writing" guidance
-- `orchestratorToolPolicy()` references only the 3 orchestrator tools, unlike `toolUsagePolicy()` which lists all tool alternatives
+**Orchestrator prompt** (`buildOrchestratorNativePrompt()` / `buildOrchestratorXmlPrompt()`):
+- Sections: `identity`, `workspaceInfo`, `toneAndStyle`, `doingTasksOrchestrator`, `orchestratorDelegationStrategy`, `orchestratorToolPolicy`, `executingWithCare`, `userProvidedContext`, `scratchpadDirectory`, `completionSignal`
+- Excludes `projectContextBlock`, `codeNavigationStrategy`, `searchTips` (sub-agent only)
+- XML variant adds `buildOrchestratorToolDefinitions_XML()`, `toolCallFormat()`, `searchTips()`
+- `doingTasksOrchestrator` focuses on delegation (no read/search refs); `orchestratorToolPolicy` references only the 3 orchestrator tools
+- Deprecated aliases: `buildNativeToolPrompt()` / `buildXmlFallbackPrompt()` delegate to orchestrator variants
 
-**XML fallback prompt** (`buildOrchestratorXmlPrompt()`):
-- Includes ALL of the above PLUS `buildOrchestratorToolDefinitions_XML()`, `toolCallFormat()`, `searchTips()` — because XML models don't receive `tools[]`
-- Also excludes `projectContextBlock`
-
-**Deprecated aliases**: `buildNativeToolPrompt()` and `buildXmlFallbackPrompt()` delegate to the orchestrator variants — kept for backward compatibility.
-
-**Orchestrator-only sections:**
-| Section | Purpose |
-|---------|---------|
-| `orchestratorDelegationStrategy()` | SCOUT→EXPLORE→WRITE→VERIFY workflow, sub-agent best practices |
-| `doingTasksOrchestrator()` | Task execution rules focused on delegation — no read/search tool references |
-| `orchestratorToolPolicy()` | Tool usage rules referencing only the 3 orchestrator tools |
-| `getOrchestratorToolDefinitions()` | Filters `tools[]` to only `write_file`, `run_terminal_command`, `run_subagent` |
-| `buildOrchestratorToolDefinitions_XML()` | Same filter for XML fallback mode |
+**Key prompt sections** (shared between orchestrator and sub-agent):
 
 | Section | Key Rules |
-|---------|-----------|
-| `toneAndStyle()` | PROFESSIONAL OBJECTIVITY (technical accuracy over validation, investigate truth rather than confirming), no sycophantic openers, no time estimates |
-| `doingTasks()` | Read before writing, match scope to request, keep it simple (no premature abstractions), verify with get_diagnostics, complete each step end-to-end |
-| `toolUsagePolicy()` | Parallel tool calls, specialized tools over terminal, sub-agent delegation for complex research, auto-diagnostics after writes |
-| `executingWithCare()` | Reversibility assessment, investigate before destroying, read error output before fixing |
-| `completionSignal()` | Verify work compiles/lints cleanly before `[TASK_COMPLETE]`, include brief summary |
+|---------|----------|
+| `toneAndStyle()` | PROFESSIONAL OBJECTIVITY, no sycophantic openers, no time estimates |
+| `doingTasks()` | Read before writing, match scope, keep simple, verify with diagnostics |
+| `toolUsagePolicy()` | Parallel calls, specialized tools over terminal, sub-agent delegation |
+| `executingWithCare()` | Reversibility assessment, investigate before destroying |
+| `completionSignal()` | Verify compiles/lints cleanly before `[TASK_COMPLETE]` |
 
 Mode-specific prompts:
 - **Plan mode** — includes PLAN QUALITY RULES section (estimated complexity, concrete plans, risk callouts), EXPLORATION STRATEGY references all 12 tools
@@ -457,7 +455,7 @@ Mode-specific prompts:
 
 ### Shared Types Location
 
-All core agent types (`Tool`, `ToolContext`, `ExecutorConfig`, `PersistUiEventFn`) live in `src/types/agent.ts`. Both `toolRegistry.ts` and `agentTerminalHandler.ts` re-export them for backward compatibility, but new code should import from `types/agent` directly.
+All core agent types (`Tool`, `ToolContext`, `ExecutorConfig`, `PersistUiEventFn`, `AgentExecuteParams`) live in `src/types/agent.ts`. Both `toolRegistry.ts` and `agentTerminalHandler.ts` re-export them for backward compatibility, but new code should import from `types/agent` directly.
 
 ### Sub-Handler Dependency Pattern
 
@@ -725,45 +723,20 @@ Parses tool calls from LLM responses. This is critical for agent functionality a
 
 ### Robustness Features
 
-The parser handles various LLM quirks that smaller models (like devstral-small) may produce:
+The parser handles various LLM quirks (especially smaller models like devstral-small):
 
-1. **Balanced JSON Extraction** - Uses brace counting instead of regex to properly extract nested JSON:
-   ```typescript
-   // WRONG: /<tool_call>\s*(\{[\s\S]*?\})\s*<\/tool_call>/  (stops at first })
-   // RIGHT: extractBalancedJson() counts { and } to find matching close
-   ```
+| Feature | What it handles |
+|---------|----------------|
+| Balanced JSON extraction | Brace counting instead of regex — handles nested `{}` correctly |
+| Multiple argument fields | Accepts `arguments`, `args`, `params`, or `parameters` |
+| Top-level arguments | Args at root level (e.g. `{"name":"read_file","path":"file.ts"}`) |
+| Multiple tool name fields | Accepts `name`, `tool`, or `function` |
+| Incomplete tool calls | Repairs cut-off JSON by adding missing closing braces |
+| Bare JSON fallback | Extracts raw JSON tool calls (no XML/bracket wrapping) — only when primary parsers found zero calls. Also extracts from code fences. |
 
-2. **Multiple Argument Field Names** - Accepts `arguments`, `args`, `params`, or `parameters`:
-   ```json
-   {"name": "read_file", "args": {"path": "file.ts"}}  // works
-   {"name": "read_file", "arguments": {"path": "file.ts"}}  // works
-   ```
+**`knownToolNames` validation:** `extractToolCalls()` accepts optional `knownToolNames: Set<string>`. The bare JSON fallback only accepts tool calls whose `name` is in the set — prevents false positives. XML/bracket-format calls are NOT filtered. Both executors pass `toolRegistry.getToolNames()` in XML mode.
 
-3. **Top-Level Arguments** - Accepts args at root level instead of nested:
-   ```json
-   {"name": "read_file", "path": "file.ts"}  // works (path extracted from top level)
-   ```
-
-4. **Multiple Tool Name Fields** - Accepts `name`, `tool`, or `function`:
-   ```json
-   {"tool": "read_file", "arguments": {"path": "file.ts"}}  // works
-   ```
-
-5. **Incomplete Tool Calls** - Handles LLM getting cut off mid-response:
-   ```xml
-   <tool_call>{"name": "write_file", "arguments": {"path": "x.ts", "content": "...
-   ```
-   The parser attempts to repair by adding missing closing braces.
-
-6. **Bare JSON Fallback** - When no XML `<tool_call>` or bracket `[TOOL_CALLS]` format is detected, the parser falls back to extracting bare JSON objects that match the tool call schema:
-   ```json
-   {"name": "read_file", "arguments": {"path": "src/main.ts"}}
-   ```
-   This handles models (like Qwen2.5-Coder) that sometimes emit raw JSON tool calls without any wrapping format. The bare JSON is also extracted from code fences (`` ```json ... ``` ``). This fallback only activates when the primary parsers found zero tool calls — it never interferes with properly formatted output.
-
-   **`knownToolNames` validation:** The `extractToolCalls()` function accepts an optional `knownToolNames: Set<string>` parameter. When provided, the bare JSON fallback only accepts tool calls whose `name` field is in the set — this prevents false positives from JSON snippets in the response that happen to match the tool call schema. XML and bracket-format calls are NOT filtered by `knownToolNames`. Both executors pass `toolRegistry.getToolNames()` when in XML mode (native tool mode doesn't need it since tool calls come from the API, not text parsing).
-
-   **`stripBareJsonToolCalls()`:** Companion function that removes bare JSON tool call objects from a response string so they don't leak into user-visible assistant text. Used by `agentStreamProcessor.ts` when bare JSON pre-scan detects a known tool name in the streaming text.
+**`stripBareJsonToolCalls()`:** Removes bare JSON tool calls from response text so they don't leak into assistant output. Used by `agentStreamProcessor.ts` during streaming.
 
 #### Over-Eager Tool Mitigation
 
@@ -851,15 +824,7 @@ The agent has 8 tools that delegate to VS Code's built-in Language Server Protoc
 
 ### Why LSP Tools Matter
 
-Without LSP tools, the agent can only do text search (`search_workspace`) and manual file reading (`read_file`). With them:
-- **`get_document_symbols`** gives the agent a file's structure (classes, functions, line ranges) in one call vs reading the entire file
-- **`find_definition`** lets the agent follow function calls across files — the single most important tool for deep code understanding
-- **`find_references`** shows impact surface before modifying shared code
-- **`find_symbol`** finds a class/function by name without knowing which file it's in (uses the language server's semantic index, not raw text search)
-- **`get_hover_info`** gives type signatures + JSDoc without navigating to definition files
-- **`get_call_hierarchy`** traces call chains — incoming (who calls this?) and outgoing (what does this call?)
-- **`find_implementations`** finds concrete classes implementing an interface
-- **`get_type_hierarchy`** shows inheritance chains — supertypes and subtypes
+Without LSP tools, the agent is limited to text search + manual file reading. LSP tools give it semantic code understanding — definition following, reference graphs, call hierarchies, type info, and symbol search — across any language with VS Code LSP support. `find_definition` (cross-file navigation) and `get_document_symbols` (file structure in one call) are the most impactful.
 
 ### Shared Position Resolution (`symbolResolver.ts`)
 
@@ -1005,7 +970,8 @@ In multi-root workspaces, `relativePath` includes the workspace folder name pref
 ## Streaming Behavior
 
 ### First-Chunk Gate
-The executor uses a 32ms throttle for streaming text to the UI. The **first chunk** requires ≥8 word characters before the spinner is replaced with text. This prevents partial markdown fragments like `**What` from flashing on screen. After the first chunk, any content with ≥1 word character is shown.
+
+> See `ui-messages.instructions.md` → "First-Chunk Gate" for the canonical rule (≥8 word chars gate, 32ms throttle).
 
 ### `[TASK_COMPLETE]` Stripping
 The control signal `[TASK_COMPLETE]` is stripped from all displayed content:
