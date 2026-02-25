@@ -9,18 +9,19 @@
  *
  * | Mode                | Set                  | Count | Extras vs READ_ONLY          |
  * |---------------------|----------------------|-------|------------------------------|
- * | explore / plan / chat | READ_ONLY_TOOLS    | 12    | — (baseline)                 |
- * | review (security)   | SECURITY_REVIEW_TOOLS| 13    | + run_terminal_command        |
- * | deep-explore        | DEEP_EXPLORE_TOOLS   | 13    | + run_subagent                |
- * | deep-explore-write  | ANALYZE_WRITE_TOOLS  | 14    | + run_subagent + write_file   |
+ * | explore / plan / chat | READ_ONLY_TOOLS    | 13    | — (baseline)                 |
+ * | review (security)   | SECURITY_REVIEW_TOOLS| 14    | + run_terminal_command        |
+ * | deep-explore        | DEEP_EXPLORE_TOOLS   | 14    | + run_subagent                |
+ * | deep-explore-write  | ANALYZE_WRITE_TOOLS  | 15    | + run_subagent + write_file   |
  * | agent (orchestrator)| ORCHESTRATOR_TOOLS   | 3     | write_file, run_terminal_command, run_subagent only |
  */
 
-/** 12 read-only code intelligence tools — baseline for explore/plan/chat modes. */
+/** 13 read-only code intelligence tools — baseline for explore/plan/chat modes. */
 export const READ_ONLY_TOOLS = new Set([
   'read_file',
   'search_workspace',
   'list_files',
+  'find_files',
   'get_diagnostics',
   'get_document_symbols',
   'find_definition',

@@ -254,7 +254,7 @@ Consider reversibility before every action. Reading files, editing code, searchi
    */
   private deepExplorationReminder(): string {
     return `DEEP EXPLORATION:
-When asked to trace, explore, scan, or document code in depth — use find_definition and get_call_hierarchy to follow every function call recursively. Do not stop at one level. Prefer get_document_symbols + targeted read_file over reading entire files.`;
+When asked to trace, explore, scan, or document code in depth — use find_definition and get_call_hierarchy to follow every function call recursively. Do not stop at one level. Prefer get_document_symbols + targeted read_file(startLine/endLine) over reading entire files. Use find_files to locate files by name pattern.`;
   }
 
   /**
@@ -274,6 +274,16 @@ WORKFLOW:
 3. WRITE — Use write_file to implement changes based on sub-agent findings.
 4. VERIFY — Use run_terminal_command to build/test, or launch a sub-agent to review your changes.
 
+SUB-AGENT EFFICIENCY:
+- The SYMBOL MAP already resolved where definitions are. Pass it to the sub-agent.
+- Launch ONE comprehensive sub-agent for deep analysis, not 5 sequential narrow ones.
+- Include the user's code + symbol map in the sub-agent task so it starts immediately.
+- Only launch a second sub-agent if the first missed specific areas.
+- For tasks that trace imports, analyze call chains, or do deep function analysis,
+  use mode: "deep-explore" (gives the sub-agent 20 iterations instead of 10).
+- NEVER launch a sub-agent just to "find" a file when the file path is already
+  in your conversation or in the SYMBOL MAP.
+
 SUB-AGENT BEST PRACTICES:
 - Give each sub-agent a descriptive title (3-5 words): "Analyze auth middleware", "Find test patterns"
 - Use context_hint to narrow their search: "start from src/services/auth/"
@@ -281,7 +291,6 @@ SUB-AGENT BEST PRACTICES:
 - ALWAYS include exact file paths from the user's context in the sub-agent task. If the user provided code from "src/controllers/search/SearchController.ts", tell the sub-agent: "Read src/controllers/search/SearchController.ts and analyze...". Do NOT make sub-agents rediscover files you already know about.
 - Sub-agents are read-only — they CANNOT write files or run commands
 - Sub-agent results are NOT shown to the user — YOU must summarize or act on their findings
-- Prefer multiple focused sub-agents over one broad one
 
 VALIDATE SUB-AGENT OUTPUT:
 - Sub-agents (especially smaller models) can hallucinate. Cross-check their output:
@@ -294,15 +303,17 @@ VALIDATE SUB-AGENT OUTPUT:
   private codeNavigationStrategy(): string {
     return `CODE NAVIGATION STRATEGY:
 - Use get_document_symbols to get a file's outline (classes, functions, methods with line ranges) before reading the whole file.
+- Use read_file with startLine/endLine to read specific functions instead of entire files. Example: read_file(path="src/foo.ts", startLine=120, endLine=200).
 - Use find_definition to follow a function/method call to its source — this works across files.
 - Use find_references to find all usages of a symbol before modifying it.
 - Use find_symbol to search for a class or function by name when you don't know which file it's in.
+- Use find_files to locate files by name or glob pattern (e.g. find_files(pattern="**/SearchController*.ts")). Use this instead of search_workspace when looking for files by name.
 - Use get_hover_info to inspect the type or signature of a symbol without reading definition files.
 - Use get_call_hierarchy to trace call chains — who calls a function, and what does it call.
 - Use find_implementations to find concrete classes that implement an interface or abstract method.
 - Use get_type_hierarchy to understand inheritance chains — what a class extends and what extends it.
-- Use search_workspace for text/regex search with line numbers and context.
-- Prefer get_document_symbols + targeted read_file over reading entire large files.
+- Use search_workspace for text/regex search with line numbers and context (searches file CONTENTS, not names).
+- Prefer get_document_symbols + targeted read_file(startLine/endLine) over reading entire large files.
 
 DEBUGGING STRATEGY:
 When investigating bugs, errors, or unexpected behavior, follow this systematic approach:
@@ -447,18 +458,31 @@ REPORT YOUR FINDINGS:
 - Before writing [TASK_COMPLETE], you MUST write a text summary of what you discovered.
 - Your text output IS the report to the caller — if you produce no text, the caller gets nothing.
 - Include: key facts, function signatures, code structure, relevant snippets with file:line references.
-- NEVER output just [TASK_COMPLETE] with no analysis text. Always describe what you found first.
-
-OUTPUT BUDGET:
-Keep your final response under 1500 words. Focus on facts, code references, and concrete findings. Omit general advice or disclaimers.`,
+- NEVER output just [TASK_COMPLETE] with no analysis text. Always describe what you found first.`,
       this.workspaceInfo(workspaceFolders, primaryWorkspace),
-      `EXPLORATION:
-- Use parallel tool calls aggressively — don't search one thing at a time.
-- Use get_document_symbols before reading entire files.
-- Use find_definition to follow calls across files.
-- Use search_workspace with regex alternation for multi-symbol lookups.
-- Use find_references, get_call_hierarchy, find_implementations for cross-cutting analysis.
-- Return file paths as workspace-relative paths.`,
+      `EXPLORATION WORKFLOW:
+1. A SYMBOL MAP may be provided with pre-resolved definition locations. USE IT.
+   Do NOT call find_definition for symbols already in the map — read them directly.
+2. Use read_file with startLine/endLine to read ONLY the relevant function.
+   Example: "ProcessSearch.executeSearch → lines 120-999" → read_file(path, startLine=120, endLine=250)
+3. For symbols NOT in the map, use find_definition to locate them.
+4. Use get_document_symbols to find line ranges before reading a new file.
+5. For nested calls found WITHIN read functions, use find_definition to trace deeper.
+6. Use find_files to locate files by filename pattern (NOT search_workspace).
+7. Use search_workspace to find text patterns INSIDE file contents.
+8. Call multiple tools in parallel when they don't depend on each other.
+
+TOKEN EFFICIENCY:
+- ALWAYS prefer targeted reads (startLine/endLine) over full-file reads.
+- For a 500-line file, reading only lines 120-200 saves 80% of tokens.
+- Read in ~100-150 line chunks. If the function is 800 lines, start with the first 150.
+
+REPORT FORMAT:
+Structure your final report with these sections:
+- FUNCTIONS TRACED: list each function with file:line and a 1-2 sentence summary
+- CALL GRAPH: show the call tree (indented) from entry point to leaf nodes
+- KEY DATA STRUCTURES: classes/interfaces with their properties
+- IMPORTANT LOGIC: notable algorithms, validations, error handling patterns`,
       `COMPLETION:
 Your LAST line must be exactly: [TASK_COMPLETE]
 Do not use variants like [END_OF_EXPLORATION], [task_complete], or "Task is complete". Only [TASK_COMPLETE] is recognized.`,
@@ -491,8 +515,10 @@ SPEED: You are meant to be a FAST agent that returns output as quickly as possib
       this.workspaceInfo(workspaceFolders, primaryWorkspace),
       `EXPLORATION STRATEGY:
 - Use list_files to discover project structure and find relevant directories.
-- Use search_workspace to find specific code patterns, function names, or string literals. When looking for multiple symbols, use ONE call with regex alternation: search_workspace(query="funcA|funcB|funcC", isRegex=true).
+- Use find_files to locate files by name or glob pattern. Use this instead of search_workspace when looking for files by name.
+- Use search_workspace to find specific code patterns, function names, or string literals INSIDE files. When looking for multiple symbols, use ONE call with regex alternation: search_workspace(query="funcA|funcB|funcC", isRegex=true).
 - Use get_document_symbols to understand a file's structure before reading it entirely.
+- Use read_file with startLine/endLine for targeted reads instead of reading entire files.
 - Use find_definition to follow function calls to their implementations.
 - Use find_references to find all places a symbol is used.
 - Use find_implementations to find concrete implementations of interfaces.

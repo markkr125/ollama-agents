@@ -60,12 +60,14 @@ export async function readFileChunk(absPath: string, startLine: number, endLine:
  */
 export const readFileTool: Tool = {
   name: 'read_file',
-  description: 'Read the contents of a file. Output is capped per-chunk and large files generate a summary with line ranges for follow-up reads. When you need multiple files, call read_file for each in parallel — do NOT read them sequentially. Do NOT use run_terminal_command with cat/head/tail to read files — always use this tool instead. All file paths are relative to the workspace root.',
+  description: 'Read the contents of a file. Output is capped per-chunk and large files generate a summary with line ranges for follow-up reads. Use startLine/endLine to read specific line ranges (1-based, inclusive). Combine with the SYMBOL MAP or get_document_symbols to read only the function you need instead of the whole file. When you need multiple files, call read_file for each in parallel — do NOT read them sequentially. Do NOT use run_terminal_command with cat/head/tail to read files — always use this tool instead. All file paths are relative to the workspace root.',
   schema: {
     type: 'object',
     properties: {
       path: { type: 'string', description: 'File path relative to workspace' },
-      file: { type: 'string', description: 'Alternative: file path relative to workspace' }
+      file: { type: 'string', description: 'Alternative: file path relative to workspace' },
+      startLine: { type: 'number', description: 'Start line (1-based, inclusive). Omit to read from beginning.' },
+      endLine: { type: 'number', description: 'End line (1-based, inclusive). Omit to read to end.' }
     },
     required: []
   },

@@ -18,19 +18,19 @@ import { ToolRegistry } from '../../toolRegistry';
 import { resolveMultiRootPath } from '../../tools/filesystem/pathUtils';
 import { AgentEventEmitter } from '../agentEventEmitter';
 import {
-    buildAndEmitFatalError,
-    buildAndPersistAssistantToolMessage,
-    buildChatRequest,
-    compactAndEmit,
-    computeEffectiveContextWindow,
-    deduplicateThinkingEcho,
-    emitTokenUsage,
-    logIterationState, logRequestPayload,
-    parseToolCalls,
-    persistCancellationThinking, persistThinkingBlock,
-    recoverToolCallFromError,
-    resolveContextWindow,
-    trackPromptTokens
+  buildAndEmitFatalError,
+  buildAndPersistAssistantToolMessage,
+  buildChatRequest,
+  compactAndEmit,
+  computeEffectiveContextWindow,
+  deduplicateThinkingEcho,
+  emitTokenUsage,
+  logIterationState, logRequestPayload,
+  parseToolCalls,
+  persistCancellationThinking, persistThinkingBlock,
+  recoverToolCallFromError,
+  resolveContextWindow,
+  trackPromptTokens
 } from '../agentLoopHelpers';
 import { AgentFileEditHandler } from '../approval/agentFileEditHandler';
 import { AgentTerminalHandler } from '../approval/agentTerminalHandler';
@@ -39,12 +39,12 @@ import { ConversationHistory } from '../conversationHistory';
 import { AgentPromptBuilder } from '../prompts/agentPromptBuilder';
 import { AgentContextCompactor } from '../streaming/agentContextCompactor';
 import {
-    buildLoopContinuationMessage,
-    buildToolCallSummary,
-    checkNoToolCompletion,
-    formatTextToolResults,
-    isCompletionSignaled,
-    type AgentLoopEvent
+  buildLoopContinuationMessage,
+  buildToolCallSummary,
+  checkNoToolCompletion,
+  formatTextToolResults,
+  isCompletionSignaled,
+  type AgentLoopEvent
 } from '../streaming/agentControlPlane';
 import { AgentSessionMemory } from '../streaming/agentSessionMemory';
 import { AgentStreamProcessor } from '../streaming/agentStreamProcessor';
@@ -298,6 +298,8 @@ export class AgentChatExecutor {
     //   "User's selected code from folder/src/Foo.ts:L10-L50 (already provided...)"
     //   "Contents of folder/src/Bar.ts (already provided...)"
     const userContextPaths = extractUserContextPaths(agentSession.task);
+    const userContextBlocks = extractUserContextBlocks(agentSession.task);
+    const symbolMap = extractSymbolMap(agentSession.task);
 
     const context = {
       workspace: agentSession.workspace,
@@ -313,11 +315,21 @@ export class AgentChatExecutor {
             const explorerCaps = explorerModel !== model
               ? await this.resolveExplorerCapabilities(explorerModel)
               : capabilities;
-            // Auto-inject user-provided file paths into sub-agent tasks so they
-            // don't waste iterations guessing wrong paths or searching.
-            const enrichedTask = userContextPaths.length > 0
-              ? `${task}\n\nKNOWN FILE PATHS (from user context — use these exact paths, do not guess or search for them):\n${userContextPaths.map(p => `- ${p}`).join('\n')}`
-              : task;
+            // Auto-inject user-provided context into sub-agent tasks:
+            // 1. Known file paths so they don't waste iterations searching
+            // 2. Selected code content so they start with the code in-hand
+            // 3. Symbol map so they know where every definition lives
+            let enrichedTask = task;
+            if (userContextPaths.length > 0) {
+              enrichedTask += `\n\nKNOWN FILE PATHS (from user context — use these exact paths, do not guess or search for them):\n${userContextPaths.map(p => `- ${p}`).join('\n')}`;
+            }
+            if (userContextBlocks) {
+              enrichedTask += `\n\n${userContextBlocks}`;
+            }
+            if (symbolMap) {
+              enrichedTask += `\n\n${symbolMap}`;
+            }
+            this.outputChannel.appendLine(`[runSubagent] Enrichment: paths=${userContextPaths.length}, codeBlocks=${userContextBlocks ? userContextBlocks.length : 0}ch, symbolMap=${symbolMap ? symbolMap.length : 0}ch → task=${enrichedTask.length}ch`);
             // Forward the detected primary workspace so sub-agents know which
             // folder to scope their exploration to (fixes multi-root workspaces).
             return this._exploreExecutor!.executeSubagent(enrichedTask, token, sessionId, explorerModel, mode, explorerCaps, contextHint, title, agentSession.workspace, description);
@@ -1035,4 +1047,33 @@ export function extractUserContextPaths(prompt: string): string[] {
     }
   }
   return paths;
+}
+
+/**
+ * Extract user-provided code blocks from the prompt so sub-agents receive
+ * the selected code content directly without needing to call read_file.
+ * Captures text between "User's selected code from..." markers including
+ * the code fence. No size cap — the orchestrator's context compaction
+ * handles overflow gracefully.
+ */
+export function extractUserContextBlocks(prompt: string): string {
+  const blocks: string[] = [];
+  // Match code blocks labeled with "User's selected code from" or "Contents of"
+  const blockRegex = /((?:User's selected code from|Contents of)\s+\S+?\s*\(already provided[^)]*\):\s*\n```[\s\S]*?```)/g;
+  let match: RegExpExecArray | null;
+  while ((match = blockRegex.exec(prompt)) !== null) {
+    blocks.push(match[1]);
+  }
+  return blocks.length > 0
+    ? `USER CODE (provided — do not re-read these files):\n${blocks.join('\n\n')}`
+    : '';
+}
+
+/**
+ * Extract the SYMBOL MAP block from the prompt so sub-agents receive
+ * pre-resolved definition locations without needing to call find_definition.
+ */
+export function extractSymbolMap(prompt: string): string {
+  const match = prompt.match(/(SYMBOL MAP \(pre-resolved via language server[^)]*\):\n(?:- .+\n?)+)/);
+  return match ? match[1].trim() : '';
 }

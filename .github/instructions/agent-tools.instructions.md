@@ -252,7 +252,14 @@ When `execute()` is called with `isSubagent=true` (via `executeSubagent()`), the
 
 **Sub-agent thinking (`subagentThinking`):** When a sub-agent produces thinking content, the explore executor emits a `subagentThinking` message (only allowed through the filtered emitter) and persists it via `persistUiEvent`. The webview attaches this thinking to the last progress group as a collapsible `<details>` block. This lets the user optionally inspect the sub-agent's reasoning without cluttering the timeline. Handled by `handleSubagentThinking()` in `progress.ts` (live) and `timelineBuilder.ts` (session restore).
 
-**Sub-agent context hint (`subagentContextHint`):** The `execute()` method accepts an optional `subagentContextHint: string` parameter. When running as a sub-agent, this hint is forwarded via `executeSubagent()` from the `run_subagent` tool and passed to `buildSubAgentExplorePrompt()` in `agentPromptBuilder.ts`. The prompt includes a "FOCUS AREA" section with the hint, helping the sub-agent narrow its investigation scope. The sub-agent prompt also enforces an output budget ("Keep your final response under 1500 words") and compact exploration strategy.
+**Sub-agent context hint (`subagentContextHint`):** The `execute()` method accepts an optional `subagentContextHint: string` parameter. When running as a sub-agent, this hint is forwarded via `executeSubagent()` from the `run_subagent` tool and passed to `buildSubAgentExplorePrompt()` in `agentPromptBuilder.ts`. The prompt includes a "FOCUS AREA" section with the hint, helping the sub-agent narrow its investigation scope. The sub-agent prompt includes a structured EXPLORATION WORKFLOW (8-step methodology), TOKEN EFFICIENCY guidelines, and a REPORT FORMAT template (FUNCTIONS TRACED, CALL GRAPH, KEY DATA STRUCTURES, IMPORTANT LOGIC).
+
+**Sub-agent context forwarding:** The `runSubagent` closure in `agentChatExecutor.ts` uses three helpers to extract and forward user-provided context to sub-agents:
+- `extractUserContextPaths(prompt)` — extracts file paths from context markers (pre-existing)
+- `extractUserContextBlocks(prompt)` — captures code content between `User's selected code from...` markers (capped at ~4000 chars)
+- `extractSymbolMap(prompt)` — extracts the `SYMBOL MAP (pre-resolved...` section with pre-resolved LSP definitions
+
+This ensures sub-agents receive the user's code and pre-resolved symbol definitions without needing to re-discover them.
 
 **Why each suppression matters:**
 - `finalMessage` — Resets `currentStreamIndex` in the webview, which causes the parent's next `streamChunk` to create a NEW assistant thread instead of continuing the existing one (Pitfall #34).
@@ -263,7 +270,7 @@ When `execute()` is called with `isSubagent=true` (via `executeSubagent()`), the
 
 **Sub-agent text return:** The sub-agent's accumulated text is returned as a string to the `run_subagent` tool, which passes it back to the parent agent as a tool result. The parent can then act on the findings. When the sub-agent produces narration text (e.g. "I will read the file..."), the explore executor **appends** `buildToolResultsSummary()` output so the parent gets actionable tool data alongside the narration — not just vague planning text.
 
-**Sub-agent completion detection:** The explore executor passes `hasWrittenFiles: false` for sub-agents in `checkNoToolCompletion()`. This prevents `break_implicit` from killing sub-agents on the first empty response — sub-agents are read-only and never write files, so the "done because files were written" heuristic doesn't apply. Without this, small models that produce near-empty responses get terminated prematurely instead of getting a retry chance.
+**Sub-agent completion detection:** The explore executor passes `hasWrittenFiles: false` and `isSubagent: true` for sub-agents in `checkNoToolCompletion()`. The `isSubagent` flag increases the consecutive-no-tool threshold from 2 to 3, giving sub-agents (especially smaller models) an extra retry chance before being terminated. This prevents `break_implicit` from killing sub-agents on the first empty response — sub-agents are read-only and never write files, so the "done because files were written" heuristic doesn't apply. Without this, small models that produce near-empty responses get terminated prematurely instead of getting a retry chance.
 
 **Prompt enforcement:** `buildExplorePrompt()` tells the sub-agent it is read-only and its output goes to the calling agent (not the user). `toolUsagePolicy()` tells the parent agent that sub-agent results are returned only to it and the user doesn't see them — the parent must act on the findings itself. The orchestrator delegation strategy also instructs the model to **forward exact file paths** from user context to sub-agents, preventing wasted discovery iterations.
 
@@ -352,7 +359,9 @@ The diagnostic utilities live in `src/utils/diagnosticWaiter.ts`:
 
 All `read_file` calls are intercepted **before** the normal tool execution path and routed through `executeChunkedRead()`. This prevents loading entire files into memory.
 
-**Flow:**
+**Targeted range reads:** When the LLM provides `startLine` and/or `endLine` parameters (1-based, inclusive), `executeChunkedRead()` reads only that range in a single operation (no chunking). This enables efficient targeted reads of specific function definitions or sections without reading the entire file.
+
+**Full-file flow (no startLine/endLine):**
 1. `isReadFile` check at top of loop → `executeChunkedRead()` → `continue`
 2. Resolve path via `resolveWorkspacePath()`
 3. Count total lines via streaming (`countFileLines()`)
@@ -365,7 +374,7 @@ All `read_file` calls are intercepted **before** the normal tool execution path 
 6. Return combined content to LLM
 
 **Key design decisions:**
-- `readFile.ts` schema exposes only `path`/`file` — **no `startLine`/`endLine`** — so the LLM cannot bypass chunking
+- `readFile.ts` schema exposes `path`/`file` and optional `startLine`/`endLine` (1-based) for targeted reads
 - Each chunk gets its own UI action with `filePath` and `startLine` for click-to-open navigation
 - Chunk actions have `filePath` but **no `checkpointId`** — this is critical for `ProgressGroup.vue`'s `isCompletedFileGroup` guard (only file edits with checkpointId render flat)
 
@@ -650,9 +659,10 @@ src/agent/tools/
 ├── runSubagent.ts        # run_subagent tool (sub-agent launcher)
 ├── filesystem/           # File system tools + path resolution
 │   ├── pathUtils.ts          # resolveWorkspacePath(), resolveMultiRootPath() shared utility
-│   ├── readFile.ts           # read_file tool
+│   ├── readFile.ts           # read_file tool (supports optional startLine/endLine for targeted reads)
 │   ├── writeFile.ts          # write_file tool
-│   └── listFiles.ts          # list_files tool
+│   ├── listFiles.ts          # list_files tool
+│   └── findFiles.ts          # find_files tool (glob-based file search)
 └── lsp/                  # LSP-powered code intelligence tools
     ├── symbolResolver.ts     # Shared position resolution for LSP tools
     ├── getDiagnostics.ts     # get_diagnostics tool
@@ -676,14 +686,15 @@ All core agent types are centralised in `src/types/agent.ts`:
 
 `toolRegistry.ts` and `agentTerminalHandler.ts` re-export these types for backward compatibility.
 
-**Built-in Tools (14 total):**
+**Built-in Tools (15 total):**
 
 *Core tools:*
 | Tool | Description |
 |------|-------------|
-| `read_file` | Read file contents (streaming, chunked in 100-line blocks via `countFileLines` + `readFileChunk`; see `src/agent/tools/filesystem/readFile.ts`) |
+| `read_file` | Read file contents (streaming, chunked in 100-line blocks; supports optional `startLine`/`endLine` for targeted range reads — see `src/agent/tools/filesystem/readFile.ts`) |
 | `write_file` | Write/create file (handles both) |
 | `list_files` | List directory contents (output includes `basePath` for click handling) |
+| `find_files` | Find files by glob pattern via `vscode.workspace.findFiles()`. Parameters: `pattern` (required), `exclude` (optional). Max 50 results. |
 | `search_workspace` | Search for text or regex patterns in files (ripgrep-based; supports `isRegex` flag, optional `directory` param to scope to a specific workspace folder or subdirectory) |
 | `run_terminal_command` | Execute shell commands |
 | `get_diagnostics` | Get file errors/warnings |
@@ -861,7 +872,7 @@ LSP results depend on having an active language server for the file type:
 
 `getProgressGroupTitle()` in `toolUIFormatter.ts` categorizes LSP tool batches:
 - `find_definition`, `find_references`, `find_implementations`, `get_hover_info`, `get_call_hierarchy`, `get_type_hierarchy` → **"Analyzing code"**
-- `find_symbol` (grouped with `search_workspace`) → **"Searching codebase"**
+- `find_symbol` (grouped with `search_workspace`, `find_files`) → **"Searching codebase"**
 - `get_document_symbols` (without writes) → **"Inspecting file structure"**
 
 ### System Prompt Guidance
@@ -875,9 +886,11 @@ Both native tool-calling and XML fallback system prompts include two key guidanc
 - Use `find_definition` to follow function calls
 - Use `find_references` before modifying shared code
 - Use `find_symbol` when you don't know which file a symbol is in
+- Use `find_files` to discover files by glob pattern when you know the naming convention
 - Use `get_hover_info` for type/signature inspection
 - Use `get_call_hierarchy` for call chain tracing
 - Use `find_implementations` for interface/abstract implementations
+- Use `read_file` with `startLine`/`endLine` to read specific function definitions efficiently
 - Use `get_type_hierarchy` for inheritance chains
 
 This guidance is in `buildAgentSystemPrompt()` in `agentChatExecutor.ts`.
@@ -965,7 +978,7 @@ In multi-root workspaces, `relativePath` includes the workspace folder name pref
 | `src/webview/scripts/core/actions/input.ts` | `handleSend()` — builds context array, uses relativePath for fileNames |
 | `src/webview/scripts/core/actions/implicitContext.ts` | `pinSelection()` — stores content + relativePath-based fileName |
 | `src/views/messageHandlers/chatMessageHandler.ts` | Resolves `__implicit_file__` markers, formats contextStr with descriptive labels |
-| `src/agent/execution/orchestration/agentChatExecutor.ts` | `buildAgentSystemPrompt()` — includes USER-PROVIDED CONTEXT section |
+| `src/agent/execution/orchestration/agentChatExecutor.ts` | `buildAgentSystemPrompt()` — includes USER-PROVIDED CONTEXT section. Also exports `extractUserContextBlocks()` + `extractSymbolMap()` for sub-agent context forwarding |
 
 ## Streaming Behavior
 

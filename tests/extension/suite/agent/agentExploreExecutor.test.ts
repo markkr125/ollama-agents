@@ -232,14 +232,14 @@ suite('buildToolResultsSummary — REGRESSION: must include full tool content', 
     assert.ok(!result.includes('(89 chars)'), 'Must NOT use the old "(N chars)" format that discarded content');
   });
 
-  test('read_file: large content is capped at 4K chars per tool', () => {
+  test('read_file: large content is passed through in full (no truncation)', () => {
     const bigContent = 'x'.repeat(5000);
     const messages = [
       { role: 'tool', tool_name: 'read_file', content: bigContent },
     ];
     const result = buildToolResultsSummary(messages);
-    assert.ok(result.includes('[... 1000 chars truncated]'), `Should show truncation notice: ${result.substring(result.length - 100)}`);
-    assert.ok(result.length < 5000, `Should be capped, got ${result.length} chars`);
+    assert.ok(result.includes('x'.repeat(5000)), 'Full content should be present without truncation');
+    assert.ok(!result.includes('chars truncated'), 'Should NOT show truncation notice');
   });
 
   test('search_workspace content is included in full (not just first line)', () => {
@@ -295,15 +295,18 @@ suite('buildToolResultsSummary — REGRESSION: must include full tool content', 
     assert.strictEqual(buildToolResultsSummary([{ role: 'user', content: 'hi' }]), 'Exploration completed.');
   });
 
-  test('total output is capped at 8K chars', () => {
+  test('total output is passed through in full (no cap)', () => {
     const messages = [
       { role: 'tool', tool_name: 'read_file', content: 'a'.repeat(3500) },
       { role: 'tool', tool_name: 'read_file', content: 'b'.repeat(3500) },
       { role: 'tool', tool_name: 'read_file', content: 'c'.repeat(3500) },
     ];
     const result = buildToolResultsSummary(messages);
-    assert.ok(result.length <= 8100, `Should be capped at ~8K, got ${result.length}`);
-    assert.ok(result.includes('[Summary truncated]'), 'Should show truncation notice');
+    // All three tool outputs should be present in full
+    assert.ok(result.includes('a'.repeat(3500)), 'First tool output should be present in full');
+    assert.ok(result.includes('b'.repeat(3500)), 'Second tool output should be present in full');
+    assert.ok(result.includes('c'.repeat(3500)), 'Third tool output should be present in full');
+    assert.ok(!result.includes('[Summary truncated]'), 'Should NOT show truncation notice');
   });
 
   test('the exact scenario from the bug: read_file returns 11K chars', () => {
@@ -319,9 +322,9 @@ suite('buildToolResultsSummary — REGRESSION: must include full tool content', 
     ];
     const result = buildToolResultsSummary(messages);
     // OLD behavior: "Tool results summary:\n- read_file: import http = require(\"http\") (11313 chars)"
-    // NEW behavior: must include actual content (capped)
+    // NEW behavior: must include actual content in full (no truncation)
     assert.ok(result.length > 500, `Summary must include substantial content, got only ${result.length} chars`);
     assert.ok(!result.includes('(11313 chars)'), 'Must NOT use the old "(N chars)" placeholder format');
-    assert.ok(!result.includes('(11313 chars)'), 'Must include actual content, not just a char count');
+    assert.ok(result.includes('import http = require("http")'), 'Must include actual file content');
   });
 });

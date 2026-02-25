@@ -187,7 +187,7 @@ src/
 │   │   ├── toolExecution/   # Tool batch execution + lifecycle
 │   │   └── approval/        # Approval flow + safety
 │   └── tools/            # Individual tool implementations
-│       ├── filesystem/       # File system tools + path resolution
+│       ├── filesystem/       # File system tools + path resolution (includes findFiles.ts for glob search)
 │       └── lsp/              # LSP-powered code intelligence tools
 ├── completion/           # Inline code completion (FIM)
 ├── config/               # Configuration helpers
@@ -400,6 +400,7 @@ npx tsc -p tsconfig.test.json --noEmit
 | Checkpoint/snapshot management | `src/services/database/sessionIndexService.ts` (tables) + `src/agent/execution/toolExecution/checkpointManager.ts` (lifecycle) | `database-rules` + `agent-tools` instructions |
 | Agent path resolution | `src/agent/tools/filesystem/pathUtils.ts` (`resolveMultiRootPath`, `resolveWorkspacePath`) | `agent-tools` instructions |
 | User-provided context pipeline | `src/views/editorContextTracker.ts` → `src/webview/scripts/core/actions/input.ts` → `src/views/messageHandlers/chatMessageHandler.ts` → `src/agent/execution/orchestration/agentChatExecutor.ts` (`buildAgentSystemPrompt`) | `agent-tools` instructions → "User-Provided Context Pipeline" |
+| LSP pre-analysis + symbol map | `src/views/messageHandlers/chatMessageHandler.ts` (LSP resolution) → `src/agent/execution/orchestration/agentChatExecutor.ts` (`extractSymbolMap`, `extractUserContextBlocks`) | `agent-tools` instructions |
 | LSP code intelligence tools | `src/agent/tools/lsp/{findDefinition,findReferences,findSymbol,getDocumentSymbols,getHoverInfo,getCallHierarchy,findImplementations,getTypeHierarchy}.ts` | `agent-tools` instructions |
 | LSP symbol position resolution | `src/agent/tools/lsp/symbolResolver.ts` (`resolveSymbolPosition`, `formatLocation`) | `agent-tools` instructions |
 | UI file opening from tool results | `src/views/messageHandlers/fileChangeMessageHandler.ts` (`handleOpenWorkspaceFile`, `stripFolderPrefix`) + `src/webview/components/chat/components/timeline/ProgressGroup.vue` (click handlers) | `webview-ui` instructions |

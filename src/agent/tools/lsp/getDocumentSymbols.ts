@@ -71,10 +71,12 @@ function formatDocumentSymbols(symbols: vscode.DocumentSymbol[], indent: number 
 
 function formatSymbolInformation(symbols: vscode.SymbolInformation[]): string[] {
   return symbols.map(s => {
-    const loc = `L${s.location.range.start.line + 1}`;
+    const startLine = s.location.range.start.line + 1;
+    const endLine = s.location.range.end.line + 1;
+    const range = startLine === endLine ? `L${startLine}` : `L${startLine}-${endLine}`;
     const kind = symbolKindName(s.kind);
     const container = s.containerName ? ` (in ${s.containerName})` : '';
-    return `${kind} ${s.name} ${loc}${container}`;
+    return `${kind} ${s.name} (${range})${container}`;
   });
 }
 

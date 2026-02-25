@@ -63,8 +63,9 @@ Sub-agents spawned by `run_subagent` have access to the full read-only tool set:
 
 | Tool | Description |
 |------|-------------|
-| `read_file` | Read file contents |
+| `read_file` | Read file contents (supports optional `startLine`/`endLine` for targeted range reads) |
 | `list_files` | List directory contents |
+| `find_files` | Find files by glob pattern (e.g., `**/*.service.ts`). Max 50 results. |
 | `search_workspace` | Search for text or regex patterns in files (supports case-insensitive matching, alternatives, wildcards via `isRegex` flag; optional `directory` param to scope to a folder) |
 | `get_diagnostics` | Get TypeScript/ESLint errors for a file |
 | `get_document_symbols` | Get a file's outline — classes, functions, variables with line ranges |
@@ -111,7 +112,7 @@ Uses a read-only tool set (same tools as Agent mode except no `write_file`, `run
 
 ## Chat Mode
 
-General Q&A about code with access to read-only tools. Chat mode routes through the exploration engine, giving the model access to all 12 read-only code intelligence tools (same as Plan mode) so it can look up definitions, search the codebase, and check types to give accurate answers.
+General Q&A about code with access to read-only tools. Chat mode routes through the exploration engine, giving the model access to all 13 read-only code intelligence tools (same as Plan mode) so it can look up definitions, search the codebase, and check types to give accurate answers.
 
 - Good for: explaining code, answering questions with tool-verified accuracy, quick code lookups
 - Uses the `chatMode.model` and temperature settings

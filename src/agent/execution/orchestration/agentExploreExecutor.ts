@@ -11,19 +11,19 @@ import { getProgressGroupTitle, getToolActionInfo, getToolSuccessInfo } from '..
 import { ToolRegistry } from '../../toolRegistry';
 import { AgentEventEmitter, FilteredAgentEventEmitter, SUB_AGENT_ALLOWED_TYPES } from '../agentEventEmitter';
 import {
-    buildAndEmitFatalError,
-    buildAndPersistAssistantToolMessage,
-    buildChatRequest,
-    compactAndEmit,
-    computeEffectiveContextWindow,
-    deduplicateThinkingEcho,
-    emitTokenUsage,
-    logIterationState, logRequestPayload,
-    parseToolCalls,
-    persistCancellationThinking, persistThinkingBlock,
-    recoverToolCallFromError,
-    resolveContextWindow,
-    trackPromptTokens
+  buildAndEmitFatalError,
+  buildAndPersistAssistantToolMessage,
+  buildChatRequest,
+  compactAndEmit,
+  computeEffectiveContextWindow,
+  deduplicateThinkingEcho,
+  emitTokenUsage,
+  logIterationState, logRequestPayload,
+  parseToolCalls,
+  persistCancellationThinking, persistThinkingBlock,
+  recoverToolCallFromError,
+  resolveContextWindow,
+  trackPromptTokens
 } from '../agentLoopHelpers';
 import { ConversationHistory } from '../conversationHistory';
 import { AgentPromptBuilder } from '../prompts/agentPromptBuilder';
@@ -55,11 +55,10 @@ export function buildToolResultsSummary(messages: any[]): string {
   // Tools whose output should be passed through in full (they contain the
   // data the parent needs). Others get first-line summaries.
   const FULL_CONTENT_TOOLS = new Set([
-    'read_file', 'search_workspace', 'get_document_symbols',
+    'read_file', 'search_workspace', 'find_files', 'get_document_symbols',
     'find_definition', 'find_references', 'find_symbol',
     'get_hover_info', 'get_call_hierarchy', 'find_implementations', 'get_type_hierarchy'
   ]);
-  const MAX_PER_TOOL = 4000;
 
   for (const m of messages) {
     if (m.role !== 'tool' || !m.tool_name || m.tool_name === '__ui__') continue;
@@ -69,12 +68,10 @@ export function buildToolResultsSummary(messages: any[]): string {
     const name = m.tool_name;
 
     if (FULL_CONTENT_TOOLS.has(name)) {
-      // Include full tool output — this IS the data the parent needs
-      if (content.length > MAX_PER_TOOL) {
-        toolEntries.push(`- ${name}:\n${content.substring(0, MAX_PER_TOOL)}\n[... ${content.length - MAX_PER_TOOL} chars truncated]`);
-      } else {
-        toolEntries.push(`- ${name}:\n${content}`);
-      }
+      // Include full tool output — this IS the data the parent needs.
+      // No truncation: the orchestrator model (typically 30B+ with 64K-262K context)
+      // has room, and context compaction handles overflow gracefully.
+      toolEntries.push(`- ${name}:\n${content}`);
     } else {
       // Brief summary for other tools
       const firstLine = content.split('\n')[0].substring(0, 120);
@@ -82,12 +79,9 @@ export function buildToolResultsSummary(messages: any[]): string {
     }
   }
   if (toolEntries.length === 0) return 'Exploration completed.';
-  // Cap total at 8K chars — the parent orchestrator (typically 128K+ context)
-  // can handle this, and it's far more useful than a one-line summary.
-  const joined = `Tool results summary:\n${toolEntries.join('\n')}`;
-  return joined.length > 8000
-    ? joined.substring(0, 8000) + '\n[Summary truncated]'
-    : joined;
+  // Return full content — let the orchestrator's context compaction
+  // handle overflow rather than preemptively destroying data.
+  return `Tool results summary:\n${toolEntries.join('\n')}`;
 }
 
 // ---------------------------------------------------------------------------
@@ -398,7 +392,8 @@ export class AgentExploreExecutor {
           // Non-sub-agent explore modes pass true so empty responses
           // (common after completion) trigger immediate termination.
           const completionAction = checkNoToolCompletion({
-            response, thinkingContent, hasWrittenFiles: !isSubagent, consecutiveNoToolIterations
+            response, thinkingContent, hasWrittenFiles: !isSubagent, consecutiveNoToolIterations,
+            isSubagent
           });
 
           if (completionAction !== 'continue') {
@@ -407,7 +402,11 @@ export class AgentExploreExecutor {
           }
 
           if (iteration < maxIterations - 1) {
-            history.addContinuation('If you are done, respond with [TASK_COMPLETE]. Otherwise, continue using tools.');
+            // Sub-agents: inject a targeted nudge to produce tool calls
+            const nudge = isSubagent
+              ? 'You described an action but didn\'t call a tool. Call the tool NOW (read_file, find_definition, get_document_symbols, find_files, etc.) or summarize your findings and write [TASK_COMPLETE].'
+              : 'If you are done, respond with [TASK_COMPLETE]. Otherwise, continue using tools.';
+            history.addContinuation(nudge);
           }
           continue;
         }
@@ -592,12 +591,9 @@ export class AgentExploreExecutor {
     } else if (accumulatedExplanation) {
       summary = accumulatedExplanation;
     } else if (isSubagent && accumulatedSubagentThinking) {
-      // Thinking models: analysis is in thinking field. Cap at 4K chars
-      // to prevent token flooding in the parent's context.
-      const maxChars = 4000;
-      summary = accumulatedSubagentThinking.length > maxChars
-        ? accumulatedSubagentThinking.substring(0, maxChars) + `\n\n[Thinking truncated — ${accumulatedSubagentThinking.length} chars total]`
-        : accumulatedSubagentThinking;
+      // Thinking models: analysis is in thinking field. Pass through in full —
+      // the orchestrator's context compaction handles overflow gracefully.
+      summary = accumulatedSubagentThinking;
     } else if (isSubagent) {
       // No text and no thinking — build summary from tool results
       summary = buildToolResultsSummary(messages);

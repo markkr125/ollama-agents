@@ -320,6 +320,32 @@ suite('checkNoToolCompletion — smart completion detection', () => {
       'break_implicit'
     );
   });
+
+  // --- isSubagent: higher threshold (3 vs 2) ---
+
+  test('isSubagent=true + 2 consecutive no-tool iterations → continue (not break)', () => {
+    // Sub-agents get threshold of 3, so 2 iterations should still continue
+    assert.strictEqual(
+      checkNoToolCompletion({ response: 'I will read the file...', thinkingContent: '', hasWrittenFiles: false, consecutiveNoToolIterations: 2, isSubagent: true }),
+      'continue'
+    );
+  });
+
+  test('isSubagent=true + 3 consecutive no-tool iterations → break_consecutive', () => {
+    // Sub-agents break at 3
+    assert.strictEqual(
+      checkNoToolCompletion({ response: 'Still narrating...', thinkingContent: '', hasWrittenFiles: false, consecutiveNoToolIterations: 3, isSubagent: true }),
+      'break_consecutive'
+    );
+  });
+
+  test('isSubagent=false (default) + 2 consecutive no-tool iterations → break_consecutive', () => {
+    // Regular agents break at 2 (unchanged behavior)
+    assert.strictEqual(
+      checkNoToolCompletion({ response: 'Some text', thinkingContent: '', hasWrittenFiles: false, consecutiveNoToolIterations: 2, isSubagent: false }),
+      'break_consecutive'
+    );
+  });
 });
 
 // ── computeDynamicNumCtx ──────────────────────────────────────────

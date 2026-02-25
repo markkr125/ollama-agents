@@ -89,7 +89,8 @@ export class AgentToolRunner {
    * results back into the conversation history in the appropriate format.
    */
   async executeBatch(request: ToolBatchRequest): Promise<ToolBatchResult> {
-    let { toolCalls, context, sessionId, model, groupTitle,
+    let { toolCalls } = request;
+    const { context, sessionId, model, groupTitle,
           currentCheckpointId, agentSession, useNativeTools, token, messages } = request;
     const nativeResults: ToolBatchResult['nativeResults'] = [];
     const xmlResults: string[] = [];
@@ -419,6 +420,52 @@ export class AgentToolRunner {
     const fileName = relativePath.split('/').pop() || relativePath;
     const totalLines = await countFileLines(absPath);
 
+    // Check for targeted line-range read (startLine/endLine params)
+    const requestedStart = typeof toolCall.args?.startLine === 'number' ? Math.max(1, toolCall.args.startLine) : undefined;
+    const requestedEnd = typeof toolCall.args?.endLine === 'number' ? Math.min(toolCall.args.endLine, totalLines) : undefined;
+
+    if (requestedStart !== undefined) {
+      // Targeted read: read only the requested range, no chunking
+      const rangeStart = requestedStart;
+      const rangeEnd = requestedEnd || totalLines;
+
+      const runPayload = {
+        status: 'running' as const,
+        icon: '📄',
+        text: `Reading ${fileName}`,
+        detail: `lines ${rangeStart}–${rangeEnd}`,
+        filePath: relativePath,
+        startLine: rangeStart
+      };
+      this.events.post('showToolAction', runPayload);
+
+      const content = await readFileChunk(absPath, rangeStart, rangeEnd);
+
+      const successPayload = {
+        status: 'success' as const,
+        icon: '📄',
+        text: `Read ${fileName}`,
+        detail: `lines ${rangeStart}–${rangeEnd} of ${totalLines}`,
+        filePath: relativePath,
+        startLine: rangeStart
+      };
+      await this.events.emit('showToolAction', successPayload);
+
+      // Persist the result to DB
+      if (sessionId) {
+        await this.databaseService.addMessage(sessionId, 'tool', content, {
+          model,
+          toolName: toolCall.name,
+          toolInput: JSON.stringify(toolCall.args),
+          toolOutput: content,
+          progressTitle: groupTitle
+        });
+      }
+
+      return content;
+    }
+
+    // Full-file chunked read (original behavior)
     const chunks: string[] = [];
     for (let start = 1; start <= totalLines; start += CHUNK_SIZE) {
       const end = Math.min(start + CHUNK_SIZE - 1, totalLines);

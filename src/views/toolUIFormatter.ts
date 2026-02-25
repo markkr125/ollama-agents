@@ -3,7 +3,7 @@ export function getProgressGroupTitle(toolCalls: Array<{ name: string; args: any
   const writeCalls = toolCalls.filter(t => t.name === 'write_file' || t.name === 'create_file');
   const hasRead = readCalls.length > 0;
   const hasWrite = writeCalls.length > 0;
-  const hasSearch = toolCalls.some(t => t.name === 'search_workspace' || t.name === 'find_symbol');
+  const hasSearch = toolCalls.some(t => t.name === 'search_workspace' || t.name === 'find_symbol' || t.name === 'find_files');
   const hasCommand = toolCalls.some(t => t.name === 'run_terminal_command' || t.name === 'run_command');
   const hasListFiles = toolCalls.some(t => t.name === 'list_files');
   const hasDiagnostics = toolCalls.some(t => t.name === 'get_diagnostics');
@@ -122,6 +122,12 @@ export function getToolActionInfo(
         actionText: `Definition of ${args?.symbolName || 'symbol'}`,
         actionDetail: path ? `in ${fileName}` : '',
         actionIcon: '🎯'
+      };
+    case 'find_files':
+      return {
+        actionText: `Find files "${args?.pattern || 'pattern'}"`,
+        actionDetail: '',
+        actionIcon: '🔍'
       };
     case 'find_references':
       return {
@@ -290,6 +296,14 @@ export function getToolSuccessInfo(
       return {
         actionText: hasResult ? 'Found definition' : 'No definition found',
         actionDetail: args?.symbolName || '',
+      };
+    }
+    case 'find_files': {
+      const fileMatch = output?.match(/Found (\d+) file/);
+      const foundCount = fileMatch ? fileMatch[1] : '0';
+      return {
+        actionText: `Found ${foundCount} file${foundCount !== '1' ? 's' : ''}`,
+        actionDetail: args?.pattern || '',
       };
     }
     case 'find_references': {

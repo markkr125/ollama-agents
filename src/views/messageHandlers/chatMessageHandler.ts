@@ -402,9 +402,9 @@ export class ChatMessageHandler implements IMessageHandler {
       }).join('\n\n');
 
       // LSP pre-analysis: analyze provided code to give the model a head start.
-      // Extract document symbols in the selection range so the model knows what
-      // functions/methods exist and can jump straight to tracing with find_definition
-      // instead of re-reading the file.
+      // 1. Extract document symbols in the selection range
+      // 2. Resolve definitions for referenced symbols via LSP
+      // 3. Build a SYMBOL MAP so sub-agents know exact file:line for every call
       const analysisBlocks = await Promise.all(resolved.map(async (c) => {
         try {
           // Extract base file path (strip :L10-L50 suffix)
@@ -417,6 +417,7 @@ export class ChatMessageHandler implements IMessageHandler {
           const uris = await vscode.workspace.findFiles(searchPattern, undefined, 1);
           if (uris.length === 0) return '';
           const uri = uris[0];
+          const doc = await vscode.workspace.openTextDocument(uri);
 
           // Get document symbols from the language server
           const symbols = await vscode.commands.executeCommand<vscode.DocumentSymbol[]>(
@@ -431,6 +432,7 @@ export class ChatMessageHandler implements IMessageHandler {
 
           // Collect symbols within the selection range (recursively)
           const relevant: string[] = [];
+          const callPositions: vscode.Position[] = [];
           const collectSymbols = (syms: vscode.DocumentSymbol[], depth: number) => {
             for (const sym of syms) {
               const symStart = sym.range.start.line;
@@ -440,6 +442,12 @@ export class ChatMessageHandler implements IMessageHandler {
                 const kindName = vscode.SymbolKind[sym.kind] || 'Unknown';
                 const indent = '  '.repeat(depth);
                 relevant.push(`${indent}${kindName}: ${sym.name} (lines ${symStart + 1}-${symEnd + 1})`);
+                // Collect positions of function/method/constructor calls for definition resolution
+                if (sym.kind === vscode.SymbolKind.Method || sym.kind === vscode.SymbolKind.Function ||
+                    sym.kind === vscode.SymbolKind.Constructor || sym.kind === vscode.SymbolKind.Class ||
+                    sym.kind === vscode.SymbolKind.Interface) {
+                  callPositions.push(new vscode.Position(sym.selectionRange.start.line, sym.selectionRange.start.character));
+                }
                 if (sym.children && sym.children.length > 0) {
                   collectSymbols(sym.children, depth + 1);
                 }
@@ -450,7 +458,154 @@ export class ChatMessageHandler implements IMessageHandler {
 
           if (relevant.length === 0) return '';
 
-          return `\nCode structure in ${c.fileName}:\n${relevant.join('\n')}\nUse find_definition and get_call_hierarchy to trace each function call to its source before writing any output.`;
+          // Phase 2: Resolve definitions for identifiers in the selected code.
+          // Extract identifiers referenced in the code (function calls, class refs)
+          // and resolve each via LSP to build a complete SYMBOL MAP.
+          const symbolMapEntries: string[] = [];
+          const resolvedPaths = new Set<string>(); // avoid duplicates
+
+          // Extract identifiers from the code content that look like function/method calls
+          const codeContent = c.content || '';
+          const identifierPattern = /\b([A-Z][a-zA-Z0-9]*(?:\.[a-zA-Z][a-zA-Z0-9]*)?)(?:\s*[<(])/g;
+          const methodCallPattern = /(?:this\.|(?:(?:await\s+)?))([a-zA-Z_][a-zA-Z0-9_]*)\s*\(/g;
+          const importPattern = /import\s+(?:\{([^}]+)\}|(\w+))\s+from\s+['"]([^'"]+)['"]/g;
+
+          const identifiersToResolve = new Set<string>();
+          let idMatch;
+          while ((idMatch = identifierPattern.exec(codeContent)) !== null) {
+            identifiersToResolve.add(idMatch[1]);
+          }
+          while ((idMatch = methodCallPattern.exec(codeContent)) !== null) {
+            identifiersToResolve.add(idMatch[1]);
+          }
+
+          // Extract import identifiers
+          const importedNames = new Set<string>();
+          let impMatch;
+          while ((impMatch = importPattern.exec(codeContent)) !== null) {
+            if (impMatch[1]) {
+              // Destructured imports: { A, B as C }
+              for (const name of impMatch[1].split(',')) {
+                const trimmed = name.trim().split(/\s+as\s+/)[0].trim();
+                if (trimmed) importedNames.add(trimmed);
+              }
+            }
+            if (impMatch[2]) {
+              importedNames.add(impMatch[2]);
+            }
+          }
+
+          // Resolve definitions: scan selected code for identifier positions
+          // and call LSP executeDefinitionProvider on each
+          const selectedText = doc.getText(new vscode.Range(
+            new vscode.Position(startLine, 0),
+            new vscode.Position(endLine === Infinity ? doc.lineCount - 1 : endLine, 99999)
+          ));
+
+          // Find positions of identifiers to resolve definitions for
+          const positionsToResolve: Array<{ name: string; position: vscode.Position }> = [];
+          for (const ident of [...identifiersToResolve, ...importedNames]) {
+            // Find the first occurrence in the selection
+            const idx = selectedText.indexOf(ident);
+            if (idx !== -1) {
+              // Convert to absolute position
+              let charsLeft = idx;
+              let lineOffset = 0;
+              const lines = selectedText.split('\n');
+              for (const line of lines) {
+                if (charsLeft <= line.length) {
+                  positionsToResolve.push({
+                    name: ident,
+                    position: new vscode.Position(startLine + lineOffset, charsLeft)
+                  });
+                  break;
+                }
+                charsLeft -= line.length + 1; // +1 for newline
+                lineOffset++;
+              }
+            }
+          }
+
+          // Resolve definitions in parallel (LSP calls are fast, ~5-20ms each)
+          const definitionResults = await Promise.all(
+            positionsToResolve.slice(0, 30).map(async ({ name, position }) => {
+              try {
+                const defs = await vscode.commands.executeCommand<(vscode.Location | vscode.LocationLink)[]>(
+                  'vscode.executeDefinitionProvider', uri, position
+                );
+                if (!defs || defs.length === 0) return null;
+
+                const def = defs[0];
+                const targetUri = 'targetUri' in def ? def.targetUri : def.uri;
+                const targetRange = 'targetRange' in def ? def.targetRange : def.range;
+
+                // Skip definitions in the same file at the same position (self-references)
+                if (targetUri.toString() === uri.toString() &&
+                    targetRange.start.line >= startLine && targetRange.start.line <= endLine) {
+                  return null;
+                }
+
+                const targetRelPath = vscode.workspace.asRelativePath(targetUri, false);
+                const defKey = `${targetRelPath}:${targetRange.start.line + 1}`;
+
+                if (resolvedPaths.has(defKey)) return null;
+                resolvedPaths.add(defKey);
+
+                // Check if it's an external package (node_modules, etc.)
+                if (targetUri.fsPath.includes('node_modules')) {
+                  return `- ${name} → (external package — skip)`;
+                }
+
+                // Get document symbols of the target file for line ranges
+                let kindName = 'Symbol';
+                let defEndLine = targetRange.end.line + 1;
+                try {
+                  const targetSymbols = await vscode.commands.executeCommand<vscode.DocumentSymbol[]>(
+                    'vscode.executeDocumentSymbolProvider', targetUri
+                  );
+                  if (targetSymbols) {
+                    // Find the symbol that contains the definition
+                    const findSymbol = (syms: vscode.DocumentSymbol[]): vscode.DocumentSymbol | undefined => {
+                      for (const sym of syms) {
+                        if (sym.selectionRange.start.line === targetRange.start.line ||
+                            (sym.range.start.line <= targetRange.start.line && sym.range.end.line >= targetRange.start.line)) {
+                          // Check children for more specific match
+                          const childMatch = sym.children ? findSymbol(sym.children) : undefined;
+                          return childMatch || sym;
+                        }
+                      }
+                      return undefined;
+                    };
+                    const targetSym = findSymbol(targetSymbols);
+                    if (targetSym) {
+                      kindName = vscode.SymbolKind[targetSym.kind] || 'Symbol';
+                      defEndLine = targetSym.range.end.line + 1;
+                    }
+                  }
+                } catch { /* symbol resolution failed — use defaults */ }
+
+                const startL = targetRange.start.line + 1;
+                const rangeStr = startL === defEndLine ? `line ${startL}` : `lines ${startL}-${defEndLine}`;
+                return `- ${name} → ${targetRelPath}:L${startL} (${kindName}, ${rangeStr})`;
+              } catch {
+                return null; // LSP failed for this symbol — skip silently
+              }
+            })
+          );
+
+          const validEntries = definitionResults.filter(Boolean) as string[];
+          if (validEntries.length > 0) {
+            symbolMapEntries.push(...validEntries);
+          }
+
+          let result = `\nCode structure in ${c.fileName}:\n${relevant.join('\n')}`;
+
+          if (symbolMapEntries.length > 0) {
+            result += `\n\nSYMBOL MAP (pre-resolved via language server — use these locations directly, do NOT call find_definition for them):\n${symbolMapEntries.join('\n')}`;
+          }
+
+          result += '\nUse find_definition and get_call_hierarchy to trace each function call to its source before writing any output.';
+          return result;
         } catch {
           return ''; // LSP not available — skip silently
         }

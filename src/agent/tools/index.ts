@@ -7,6 +7,7 @@
  */
 
 import { Tool } from '../../types/agent';
+import { findFilesTool } from './filesystem/findFiles';
 import { listFilesTool } from './filesystem/listFiles';
 import { readFileTool } from './filesystem/readFile';
 import { writeFileTool } from './filesystem/writeFile';
@@ -29,6 +30,7 @@ export const builtInTools: Tool[] = [
   writeFileTool,
   searchWorkspaceTool,
   listFilesTool,
+  findFilesTool,
   runTerminalCommandTool,
   getDiagnosticsTool,
   getDocumentSymbolsTool,
@@ -44,6 +46,7 @@ export const builtInTools: Tool[] = [
 
 export {
     findDefinitionTool,
+    findFilesTool,
     findImplementationsTool,
     findReferencesTool,
     findSymbolTool,

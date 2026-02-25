@@ -12,6 +12,8 @@ export interface CompletionCheckInput {
   thinkingContent: string;
   hasWrittenFiles: boolean;
   consecutiveNoToolIterations: number;
+  /** Sub-agents get a higher tolerance (3 vs 2) to avoid premature termination. */
+  isSubagent?: boolean;
 }
 
 export type CompletionAction = 'break_implicit' | 'break_consecutive' | 'continue';
@@ -21,7 +23,9 @@ export type CompletionAction = 'break_implicit' | 'break_consecutive' | 'continu
  *
  * Decision matrix:
  * - Truly empty (no text, no thinking) + files written → `break_implicit` (done)
- * - 2+ consecutive no-tool iterations → `break_consecutive` (fallback)
+ * - N+ consecutive no-tool iterations → `break_consecutive` (fallback)
+ *   - N = 3 for sub-agents (gives small models one extra chance)
+ *   - N = 2 for regular agents
  * - Otherwise → `continue` (give model one more chance)
  */
 export function checkNoToolCompletion(input: CompletionCheckInput): CompletionAction {
@@ -31,7 +35,8 @@ export function checkNoToolCompletion(input: CompletionCheckInput): CompletionAc
     return 'break_implicit';
   }
 
-  if (input.consecutiveNoToolIterations >= 2) {
+  const threshold = input.isSubagent ? 3 : 2;
+  if (input.consecutiveNoToolIterations >= threshold) {
     return 'break_consecutive';
   }
 
